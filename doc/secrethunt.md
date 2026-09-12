@@ -68,37 +68,59 @@ Where $P(x_i)$ is the empirical probability of byte value $x_i$ within the windo
 
 ### 3. Classification Engine (`classify_finding`)
 
-Candidate memory blocks are classified by size, byte variance, and entropy level:
+Candidate memory blocks are classified by size, byte variance, structural heuristics, and entropy level:
 
-| Size | Entropy | Classification Label | Likelihood |
+- **Mathematical AES Key Schedule Verification**: Validates 176-byte (AES-128) and 240-byte (AES-256) blocks against the exact AES key expansion recurrence ($w_i = w_{i-4} \oplus \text{SubWord}(\text{RotWord}(w_{i-1})) \oplus \text{Rcon}_i$) to differentiate verified AES schedules from random high-entropy memory.
+- **SHA Constant / Initial Vector Detection**: Checks for standard $H_0$ initial vectors (`0x6A09E667...`) and $K$ round constants (`0x428A2F98...`) to isolate SHA-256 / SHA-1 state contexts.
+- **Thumb-2 Instruction Filtering in Flash**: When analyzing Flash memory on ARM Cortex-M targets, uses `THUMB_OPCODE_DICT` (a comprehensive 16-bit/32-bit opcode pattern dictionary) to detect Thumb-2 instruction sequences and exclude code blocks from secret analysis.
+- **Digest / Key Format Matching**:
+
+| Size | Entropy / Pattern | Classification Label | Likelihood |
 | :--- | :--- | :--- | :--- |
-| **16 bytes** | $\ge 7.0$ | AES-128 Key (Raw) | High |
-| **32 bytes** | $\ge 7.0$ | AES-256 / ECC-P256 Key Candidate | High |
-| **24, 48, 66 bytes** | $\ge 7.0$ | ECC Key Candidate ($N$ bits) | High |
-| **176 bytes** | $\ge 7.0$ | AES-128 Expanded Key Schedule | High |
-| **240 bytes** | $\ge 7.0$ | AES-256 Expanded Key Schedule | High |
+| **Any** | $H_0$ Constants | SHA-256 Initial State / H Vector | High |
+| **Any** | $K_i$ Constants | SHA-256 Round Constants (K Table) | High |
+| **176 bytes** | AES Recurrence Match | Verified AES-128 Expanded Key Schedule | High |
+| **240 bytes** | AES Recurrence Match | Verified AES-256 Expanded Key Schedule | High |
+| **16 bytes** | $\ge 7.0$ | AES-128 Key / MD5 Digest (128 bits) | High |
+| **20 bytes** | $\ge 7.0$ | SHA-1 / HMAC-SHA1 Digest Candidate (160 bits) | High |
+| **28 bytes** | $\ge 7.0$ | SHA-224 Digest Candidate (224 bits) | High |
+| **32 bytes** | $\ge 7.0$ | AES-256 Key / SHA-256 Digest / ECC-P256 Candidate | High |
+| **48 bytes** | $\ge 7.0$ | SHA-384 Digest / ECC-P384 Key Candidate | High |
+| **64 bytes** | $\ge 7.0$ | SHA-512 Digest / HMAC Block Candidate | High |
 | **128, 256, 512 bytes** | $\ge 7.0$ | RSA Key Material ($N$ bits) | Medium |
 | **Any** | $\ge 7.0$ | High-Entropy Secret / Token | Medium |
 | **16 / 32 / 176 / 240 bytes** | $\ge 6.0$ | Medium-Entropy Candidate | Medium / Low |
+| **Thumb-2 Code (Flash)** | Opcode Match | Thumb-2 Instruction Block | None |
+| **Printable ASCII + `\0`** | Any | ASCII String Literal | None |
 | **Uniform bytes** | Any | Uniform Pattern | None |
 
 ---
 
-## Pre-defined Memory Map for ARM Cortex-M
+## Memory Region Configuration
 
-| Region Name | Base Address | Default Size | Description |
-| :--- | :--- | :--- | :--- |
-| `sram` | `0x20000000` | 128 KiB | Primary internal SRAM |
-| `flash` | `0x08000000` | 256 KiB | Internal Flash memory |
-| `backup` | `0x40002800` | 1 KiB | RTC / Battery backup registers |
-| `all` | All above | Scans SRAM, Flash, and Backup sequentially |
+Region base addresses and sizes must be configured explicitly before scanning using `secrethunt set`.
+
+| Region Keyword | Description | Configuration Example |
+| :--- | :--- | :--- |
+| `sram` | SRAM memory range | `secrethunt set sram 0x20000000 0x20000` |
+| `flash` | Flash memory range | `secrethunt set flash 0x08000000 0x40000` |
+| `backup` | RTC / Backup register range | `secrethunt set backup 0x40002800 0x400` |
 
 ---
 
 ## GDB Usage and Subcommands
 
+### `secrethunt set`
+Configure the memory address range for a region keyword (`sram`, `flash`, `backup`).
+
+```text
+(gdb) secrethunt set sram 0x20000000 0x20000
+(gdb) secrethunt set flash 0x18000000 0x20000
+(gdb) secrethunt set backup 0x40002800 0x400
+```
+
 ### `secrethunt scan`
-Scan memory regions for high-entropy byte blocks.
+Scan configured memory region(s) or custom address ranges for high-entropy byte blocks.
 
 ```text
 (gdb) secrethunt scan sram
