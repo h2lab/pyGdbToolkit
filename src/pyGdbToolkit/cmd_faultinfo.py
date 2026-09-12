@@ -6,22 +6,7 @@ from dataclasses import dataclass
 import struct
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import gdb
-else:
-    try:
-        import gdb
-    except ImportError:
-        import unittest.mock as mock
-
-        gdb = mock.MagicMock()
-
-        class _DummyGdbCommand:
-            def __init__(self, name: str, command_class: int) -> None:
-                pass
-
-        gdb.Command = _DummyGdbCommand
-        gdb.COMMAND_USER = 0
+import gdb
 
 from rich import box
 from rich.console import Console
@@ -897,6 +882,3 @@ class FaultInfoCmd(gdb.Command):
                 box=box.SIMPLE_HEAVY,
             )
         )
-
-
-FaultInfoCommand = FaultInfoCmd
