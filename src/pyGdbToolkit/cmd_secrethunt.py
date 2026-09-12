@@ -9,24 +9,10 @@ import math
 from pathlib import Path
 import shlex
 import struct
-from typing import TYPE_CHECKING, Any, Counter
+from typing import Any, Counter
 
-if TYPE_CHECKING:
-    import gdb
-else:
-    try:
-        import gdb
-    except ImportError:
-        import unittest.mock as mock
 
-        gdb = mock.MagicMock()
-
-        class _DummyGdbCommand:
-            def __init__(self, name: str, command_class: int) -> None:
-                pass
-
-        gdb.Command = _DummyGdbCommand
-        gdb.COMMAND_USER = 0
+import gdb
 
 from rich import box
 from rich.console import Console
@@ -114,7 +100,7 @@ def calculate_entropy(data: bytes) -> float:
 
 
 # fmt: off
-# Exception de formatage pour simplifier la lisibilité du fichier (alignement 20 valeurs/ligne)
+# format exception to avoid looooong lines for nothing more that sbox declaration
 _AES_SBOX = (
     0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76, 0xCA, 0x82, 0xC9, 0x7D,  # noqa: E501
     0xFA, 0x59, 0x47, 0xF0, 0xAD, 0xD4, 0xA2, 0xAF, 0x9C, 0xA4, 0x72, 0xC0, 0xB7, 0xFD, 0x93, 0x26, 0x36, 0x3F, 0xF7, 0xCC,  # noqa: E501
