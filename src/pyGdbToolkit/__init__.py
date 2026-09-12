@@ -1,9 +1,9 @@
 """GDB commands provided by pyGdbToolkit."""
 
+from .cmd_faultinfo import FaultInfoCmd, FaultInfoCommand
 from .cmd_lscpu import LscpuCmd
-from .cmd_faultinfo import FaultInfoCommand
 
 LscpuCmd()
-FaultInfoCommand()
+FaultInfoCmd()
 
-__all__ = ["LscpuCmd"]
+__all__ = ["FaultInfoCmd", "FaultInfoCommand", "LscpuCmd"]

@@ -12,15 +12,6 @@ from typing import Callable, Mapping, Protocol, Sequence
 
 import gdb
 
-from .arch.registers_arm import (
-    APSRFlags,
-    ArmRegisterAccessor,
-    ControlRegister,
-    CoreRegistersARM,
-)
-from .arch.registers_avr import AvrRegisterAccessor
-from .arch.registers_ppc import PowerPcRegisterAccessor
-
 
 class RegisterError(RuntimeError):
     """Base exception for register access errors."""
@@ -293,6 +284,14 @@ class ArchitectureRegistry:
     """Registry matching GDB architecture names to specialized RegisterAccessor classes."""
 
     def __init__(self) -> None:
+        # Deferred import: arch modules import BaseRegisterAccessor from this module.
+        from .arch.registers_arm import ArmRegisterAccessor
+        from .arch.registers_avr import AvrRegisterAccessor
+        from .arch.registers_ppc import PowerPcRegisterAccessor
+
+        self._ArmRegisterAccessor = ArmRegisterAccessor
+        self._AvrRegisterAccessor = AvrRegisterAccessor
+        self._PowerPcRegisterAccessor = PowerPcRegisterAccessor
         self._providers: list[tuple[ArchitectureMatcher, RegisterAccessorFactory]] = []
         self._register_defaults()
 
@@ -300,15 +299,15 @@ class ArchitectureRegistry:
         """Register built-in architectures."""
         self.register(
             lambda arch: any(k in arch for k in ("arm", "cortex-m", "thumb")),
-            lambda frame, arch: ArmRegisterAccessor(frame=frame, arch_name=arch),
+            lambda frame, arch: self._ArmRegisterAccessor(frame=frame, arch_name=arch),
         )
         self.register(
             lambda arch: "avr" in arch,
-            lambda frame, arch: AvrRegisterAccessor(frame=frame, arch_name=arch),
+            lambda frame, arch: self._AvrRegisterAccessor(frame=frame, arch_name=arch),
         )
         self.register(
             lambda arch: any(k in arch for k in ("powerpc", "ppc", "mpc")),
-            lambda frame, arch: PowerPcRegisterAccessor(frame=frame, arch_name=arch),
+            lambda frame, arch: self._PowerPcRegisterAccessor(frame=frame, arch_name=arch),
         )
 
     def register(
