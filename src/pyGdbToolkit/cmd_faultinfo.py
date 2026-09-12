@@ -14,7 +14,6 @@ from rich.text import Text
 
 from .cpuid import CPUID_ADDRESS, decode_cpuid
 from .models import CPUID
-from .registers import get_register_accessor
 from .target_memory import TargetMemoryReader, TargetReadError
 
 CONSOLE = Console(force_terminal=True)
@@ -329,9 +328,16 @@ class FaultInfoCmd(gdb.Command):
         if arg.strip():
             raise gdb.GdbError("fault_info does not accept arguments")
 
-        accessor = get_register_accessor()
-        if not any(k in accessor.architecture_name for k in ("arm", "cortex-m", "thumb")):
+        frame = gdb.selected_frame()
+        architecture_name = frame.architecture().name().lower()
+        if not any(k in architecture_name for k in ("arm", "cortex-m", "thumb")):
             raise gdb.GdbError("fault_info only supports ARM Cortex-M targets")
+
+        def read_optional(name: str) -> int | None:
+            try:
+                return int(frame.read_register(name))
+            except (gdb.error, ValueError, TypeError):
+                return None
 
         try:
             reader = TargetMemoryReader()
@@ -344,10 +350,15 @@ class FaultInfoCmd(gdb.Command):
         except (TargetReadError, ValueError):
             cpuid = None
 
-        pc = accessor.pc()
-        lr = accessor.lr()
-        xpsr = accessor.flags()
-        ipsr = accessor.get_exception_number()
+        pc = int(frame.read_register("pc"))
+        lr = read_optional("lr")
+        xpsr = read_optional("xpsr")
+        ipsr_value = read_optional("ipsr")
+        ipsr = (
+            ipsr_value & 0x1FF
+            if ipsr_value is not None
+            else (xpsr & 0x1FF if xpsr is not None else 0)
+        )
 
         # Read SCB registers
         scb_regs = self._read_scb_registers(reader)
@@ -357,9 +368,9 @@ class FaultInfoCmd(gdb.Command):
         if lr is not None and (lr & EXC_RETURN_MASK) == EXC_RETURN_MASK:
             spsel = bool((lr >> 2) & 1)
             sp_name = "PSP" if spsel else "MSP"
-            sp_val = accessor.read_optional("psp" if spsel else "msp")
+            sp_val = read_optional("psp" if spsel else "msp")
             if sp_val is None:
-                sp_val = accessor.sp()
+                sp_val = int(frame.read_register("sp"))
             stacked_frame = _read_stacked_frame(reader, lr, sp_val, sp_name)
 
         self._render_report(
