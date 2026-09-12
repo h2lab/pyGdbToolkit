@@ -49,7 +49,7 @@ dev = [
     "flake8-docstrings",
     "mypy",
     "pytest",
-    "tox",
+    "types-gdb",
 ]
 
 [tool.setuptools_scm]
