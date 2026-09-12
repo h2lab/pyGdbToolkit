@@ -4,8 +4,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import struct
+from typing import TYPE_CHECKING
 
-import gdb
+if TYPE_CHECKING:
+    import gdb
+else:
+    try:
+        import gdb
+    except ImportError:
+        import unittest.mock as mock
+
+        gdb = mock.MagicMock()
+
+        class _DummyGdbCommand:
+            def __init__(self, name: str, command_class: int) -> None:
+                pass
+
+        gdb.Command = _DummyGdbCommand
+        gdb.COMMAND_USER = 0
+
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -500,7 +517,9 @@ class FaultInfoCmd(gdb.Command):
         table.add_column("Value")
 
         if cpuid is not None:
-            table.add_row("Target Core", f"{cpuid.core} ({cpuid.rnp_revision}) - {cpuid.implementer_name}")
+            table.add_row(
+                "Target Core", f"{cpuid.core} ({cpuid.rnp_revision}) - {cpuid.implementer_name}"
+            )
         else:
             table.add_row("Target Core", "Generic Cortex-M")
 
@@ -582,7 +601,11 @@ class FaultInfoCmd(gdb.Command):
 
         if frame.has_fpu and frame.fp_registers is not None:
             for i, val in enumerate(frame.fp_registers):
-                detail = f"s0 (float32) = {frame.s0_float:.7g}" if i == 0 and frame.s0_float is not None else ""
+                detail = (
+                    f"s0 (float32) = {frame.s0_float:.7g}"
+                    if i == 0 and frame.s0_float is not None
+                    else ""
+                )
                 table.add_row(f"s{i}", f"0x{val:08X}", detail)
             if frame.fpscr is not None:
                 table.add_row("fpscr", f"0x{frame.fpscr:08X}", "FPU Status & Control")
@@ -622,19 +645,38 @@ class FaultInfoCmd(gdb.Command):
             for name, desc in _decode_flags(ufsr, UFSR_BITS):
                 cfsr_flags.append(f"[bold red]{name}[/bold red]: {desc} (UsageFault)")
 
-            desc_text = "\n".join(cfsr_flags) if cfsr_flags else "[green]No active error flags[/green]"
+            desc_text = (
+                "\n".join(cfsr_flags) if cfsr_flags else "[green]No active error flags[/green]"
+            )
             table.add_row("CFSR", f"0x{cfsr:08X}", desc_text)
-            table.add_row(" ├─ MMFSR", f"0x{mmfsr:02X}", f"{len(_decode_flags(mmfsr, MMFSR_BITS))} active flag(s)")
-            table.add_row(" ├─ BFSR", f"0x{bfsr:02X}", f"{len(_decode_flags(bfsr, BFSR_BITS))} active flag(s)")
-            table.add_row(" └─ UFSR", f"0x{ufsr:04X}", f"{len(_decode_flags(ufsr, UFSR_BITS))} active flag(s)")
+            table.add_row(
+                " ├─ MMFSR",
+                f"0x{mmfsr:02X}",
+                f"{len(_decode_flags(mmfsr, MMFSR_BITS))} active flag(s)",
+            )
+            table.add_row(
+                " ├─ BFSR", f"0x{bfsr:02X}", f"{len(_decode_flags(bfsr, BFSR_BITS))} active flag(s)"
+            )
+            table.add_row(
+                " └─ UFSR", f"0x{ufsr:04X}", f"{len(_decode_flags(ufsr, UFSR_BITS))} active flag(s)"
+            )
         else:
-            table.add_row("CFSR", "[yellow]Unavailable[/yellow]", "Not present on this target or memory inaccessible")
+            table.add_row(
+                "CFSR",
+                "[yellow]Unavailable[/yellow]",
+                "Not present on this target or memory inaccessible",
+            )
 
         # HFSR
         hfsr = scb.get("HFSR")
         if hfsr is not None:
-            hfsr_flags = [f"[bold yellow]{name}[/bold yellow]: {desc}" for name, desc in _decode_flags(hfsr, HFSR_BITS)]
-            desc_text = "\n".join(hfsr_flags) if hfsr_flags else "[green]No active error flags[/green]"
+            hfsr_flags = [
+                f"[bold yellow]{name}[/bold yellow]: {desc}"
+                for name, desc in _decode_flags(hfsr, HFSR_BITS)
+            ]
+            desc_text = (
+                "\n".join(hfsr_flags) if hfsr_flags else "[green]No active error flags[/green]"
+            )
             table.add_row("HFSR", f"0x{hfsr:08X}", desc_text)
 
         # MMFAR & BFAR
@@ -653,7 +695,9 @@ class FaultInfoCmd(gdb.Command):
         # DFSR
         dfsr = scb.get("DFSR")
         if dfsr is not None:
-            dfsr_flags = [f"[cyan]{name}[/cyan]: {desc}" for name, desc in _decode_flags(dfsr, DFSR_BITS)]
+            dfsr_flags = [
+                f"[cyan]{name}[/cyan]: {desc}" for name, desc in _decode_flags(dfsr, DFSR_BITS)
+            ]
             desc_text = "\n".join(dfsr_flags) if dfsr_flags else "[dim]No debug event[/dim]"
             table.add_row("DFSR", f"0x{dfsr:08X}", desc_text)
 
@@ -669,7 +713,11 @@ class FaultInfoCmd(gdb.Command):
                 enabled.append("[green]UsageFault[/green]")
             if shcsr & (1 << 19):
                 enabled.append("[green]SecureFault[/green]")
-            ena_text = ", ".join(enabled) if enabled else "[bold red]None (direct escalation to HardFault)[/bold red]"
+            ena_text = (
+                ", ".join(enabled)
+                if enabled
+                else "[bold red]None (direct escalation to HardFault)[/bold red]"
+            )
             table.add_row("SHCSR", f"0x{shcsr:08X}", f"Enabled configurable handlers: {ena_text}")
 
         # VTOR
@@ -680,11 +728,18 @@ class FaultInfoCmd(gdb.Command):
         # SFSR / SFAR if Security Extension (ARMv8-M)
         sfsr = scb.get("SFSR")
         if sfsr is not None and sfsr not in (0, 0xFFFFFFFF):
-            sfsr_flags = [f"[bold red]{name}[/bold red]: {desc}" for name, desc in _decode_flags(sfsr, SFSR_BITS)]
+            sfsr_flags = [
+                f"[bold red]{name}[/bold red]: {desc}"
+                for name, desc in _decode_flags(sfsr, SFSR_BITS)
+            ]
             table.add_row("SFSR", f"0x{sfsr:08X}", "\n".join(sfsr_flags))
             sfar = scb.get("SFAR")
             if sfar is not None and (sfsr & (1 << 6)):
-                table.add_row("SFAR", f"0x{sfar:08X}", f"[bold green][VALID][/bold green] Region: {_memory_region(sfar)}")
+                table.add_row(
+                    "SFAR",
+                    f"0x{sfar:08X}",
+                    f"[bold green][VALID][/bold green] Region: {_memory_region(sfar)}",
+                )
 
         CONSOLE.print(table)
 
@@ -717,73 +772,119 @@ class FaultInfoCmd(gdb.Command):
         # HardFault escalation
         if hfsr & (1 << 30):
             if bfsr:
-                items.append("• [bold yellow]HardFault escalation:[/bold yellow] A BusFault was forced to HardFault (source handler disabled in SHCSR).")
+                items.append(
+                    "• [bold yellow]HardFault escalation:[/bold yellow] A BusFault was forced to HardFault (source handler disabled in SHCSR)."
+                )
             elif mmfsr:
-                items.append("• [bold yellow]HardFault escalation:[/bold yellow] A MemManage Fault was forced to HardFault (source handler disabled in SHCSR).")
+                items.append(
+                    "• [bold yellow]HardFault escalation:[/bold yellow] A MemManage Fault was forced to HardFault (source handler disabled in SHCSR)."
+                )
             elif ufsr:
-                items.append("• [bold yellow]HardFault escalation:[/bold yellow] An UsageFault was forced to HardFault (source handler disabled in SHCSR).")
+                items.append(
+                    "• [bold yellow]HardFault escalation:[/bold yellow] An UsageFault was forced to HardFault (source handler disabled in SHCSR)."
+                )
             else:
-                items.append("• [bold yellow]HardFault escalation:[/bold yellow] Forced HardFault without configurable cause bits (handler masked by PRIMASK/FAULTMASK).")
+                items.append(
+                    "• [bold yellow]HardFault escalation:[/bold yellow] Forced HardFault without configurable cause bits (handler masked by PRIMASK/FAULTMASK)."
+                )
 
         # BusFault analysis
         if bfsr & (1 << 1):  # PRECISERR
             if (bfsr & (1 << 7)) and bfar is not None:
                 if bfar < 0x1000:
-                    items.append(f"• [bold red]NULL pointer dereference:[/bold red] Invalid memory access at 0x{bfar:08X} ({_memory_region(bfar)}).")
+                    items.append(
+                        f"• [bold red]NULL pointer dereference:[/bold red] Invalid memory access at 0x{bfar:08X} ({_memory_region(bfar)})."
+                    )
                 elif 0x40000000 <= bfar < 0x60000000:
-                    items.append(f"• [bold red]Peripheral bus error (0x{bfar:08X}):[/bold red] Verify that the peripheral clock (RCC/PCLK) is enabled before any access.")
+                    items.append(
+                        f"• [bold red]Peripheral bus error (0x{bfar:08X}):[/bold red] Verify that the peripheral clock (RCC/PCLK) is enabled before any access."
+                    )
                 else:
-                    items.append(f"• [bold red]Precise BusFault at 0x{bfar:08X}:[/bold red] Invalid memory access in {_memory_region(bfar)} region.")
+                    items.append(
+                        f"• [bold red]Precise BusFault at 0x{bfar:08X}:[/bold red] Invalid memory access in {_memory_region(bfar)} region."
+                    )
         elif bfsr & (1 << 2):  # IMPRECISERR
-            items.append("• [bold red]Imprecise (asynchronous) BusFault:[/bold red] Caused by a write buffer. The stacked PC is downstream of the actual faulting access. To locate the exact access, temporarily disable write buffering (e.g. ACTLR.DISDEFWBUF).")
+            items.append(
+                "• [bold red]Imprecise (asynchronous) BusFault:[/bold red] Caused by a write buffer. The stacked PC is downstream of the actual faulting access. To locate the exact access, temporarily disable write buffering (e.g. ACTLR.DISDEFWBUF)."
+            )
 
         if bfsr & (1 << 0):  # IBUSERR
-            items.append("• [bold red]Instruction Fetch BusFault:[/bold red] Attempted execution from an invalid or inaccessible memory region (corrupted function pointer, overwritten vtable).")
+            items.append(
+                "• [bold red]Instruction Fetch BusFault:[/bold red] Attempted execution from an invalid or inaccessible memory region (corrupted function pointer, overwritten vtable)."
+            )
 
         if bfsr & (1 << 4):  # STKERR
-            items.append("• [bold red]Bus error during Stacking:[/bold red] The stack (MSP/PSP) overflowed or points to invalid memory.")
+            items.append(
+                "• [bold red]Bus error during Stacking:[/bold red] The stack (MSP/PSP) overflowed or points to invalid memory."
+            )
 
         if bfsr & (1 << 3):  # UNSTKERR
-            items.append("• [bold red]Bus error during Unstacking:[/bold red] Corrupted stack upon exception return.")
+            items.append(
+                "• [bold red]Bus error during Unstacking:[/bold red] Corrupted stack upon exception return."
+            )
 
         # MemManage analysis
         if mmfsr & (1 << 1):  # DACCVIOL
             addr_str = f" at 0x{mmfar:08X}" if (mmfsr & (1 << 7)) and mmfar is not None else ""
-            items.append(f"• [bold red]MPU violation on data{addr_str}:[/bold red] Access prohibited by MPU region permissions.")
+            items.append(
+                f"• [bold red]MPU violation on data{addr_str}:[/bold red] Access prohibited by MPU region permissions."
+            )
         if mmfsr & (1 << 0):  # IACCVIOL
-            items.append("• [bold red]MPU violation on instruction:[/bold red] Attempted execution in an MPU region marked eXecute-Never (XN).")
+            items.append(
+                "• [bold red]MPU violation on instruction:[/bold red] Attempted execution in an MPU region marked eXecute-Never (XN)."
+            )
 
         # UsageFault analysis
         if ufsr & (1 << 0):  # UNDEFINSTR
-            items.append("• [bold red]Undefined instruction (UNDEFINSTR):[/bold red] Unknown or corrupted opcode (branching into data/NULL or incorrect instruction alignment).")
+            items.append(
+                "• [bold red]Undefined instruction (UNDEFINSTR):[/bold red] Unknown or corrupted opcode (branching into data/NULL or incorrect instruction alignment)."
+            )
 
         if ufsr & (1 << 1):  # INVSTATE
-            items.append("• [bold red]Invalid Thumb state (INVSTATE):[/bold red] Branch to an even address (bit T=0). On Cortex-M, function pointers must have the least significant bit (LSB) set to 1.")
+            items.append(
+                "• [bold red]Invalid Thumb state (INVSTATE):[/bold red] Branch to an even address (bit T=0). On Cortex-M, function pointers must have the least significant bit (LSB) set to 1."
+            )
 
         if ufsr & (1 << 2):  # INVPC
-            items.append("• [bold red]Invalid EXC_RETURN (INVPC):[/bold red] Illegal exception return value loaded into PC (LR or stack corruption).")
+            items.append(
+                "• [bold red]Invalid EXC_RETURN (INVPC):[/bold red] Illegal exception return value loaded into PC (LR or stack corruption)."
+            )
 
         if ufsr & (1 << 3):  # NOCP
             if cpacr is not None and (cpacr & 0x00F00000) != 0x00F00000:
-                items.append("• [bold red]Disabled FPU coprocessor (NOCP):[/bold red] FPU instruction executed while FPU is disabled. Add [bold cyan]SCB->CPACR |= (0xF << 20);[/bold cyan] during initialization.")
+                items.append(
+                    "• [bold red]Disabled FPU coprocessor (NOCP):[/bold red] FPU instruction executed while FPU is disabled. Add [bold cyan]SCB->CPACR |= (0xF << 20);[/bold cyan] during initialization."
+                )
             else:
-                items.append("• [bold red]Unimplemented coprocessor access (NOCP):[/bold red] Access to a non-existent or unconfigured coprocessor.")
+                items.append(
+                    "• [bold red]Unimplemented coprocessor access (NOCP):[/bold red] Access to a non-existent or unconfigured coprocessor."
+                )
 
         if ufsr & (1 << 4):  # STKOF
-            items.append("• [bold red]Hardware stack overflow (STKOF):[/bold red] Stack pointer exceeded configured limit (MSPLIM/PSPLIM).")
+            items.append(
+                "• [bold red]Hardware stack overflow (STKOF):[/bold red] Stack pointer exceeded configured limit (MSPLIM/PSPLIM)."
+            )
 
         if ufsr & (1 << 8):  # UNALIGNED
-            items.append("• [bold red]Unaligned access (UNALIGNED):[/bold red] Unaligned access trapped by CCR.UNALIGN_TRP.")
+            items.append(
+                "• [bold red]Unaligned access (UNALIGNED):[/bold red] Unaligned access trapped by CCR.UNALIGN_TRP."
+            )
 
         if ufsr & (1 << 9):  # DIVBYZERO
-            items.append("• [bold red]Divide by zero (DIVBYZERO):[/bold red] Integer division by zero trapped by CCR.DIV_0_TRP.")
+            items.append(
+                "• [bold red]Divide by zero (DIVBYZERO):[/bold red] Integer division by zero trapped by CCR.DIV_0_TRP."
+            )
 
         # Vector table fault
         if hfsr & (1 << 1):
-            items.append("• [bold red]Vector Table read error (VECTTBL):[/bold red] Vector table is unreadable. Verify VTOR register configuration and Flash memory.")
+            items.append(
+                "• [bold red]Vector Table read error (VECTTBL):[/bold red] Vector table is unreadable. Verify VTOR register configuration and Flash memory."
+            )
 
         if isinstance(stacked_frame, StackedFrame):
-            items.append(f"• [bold cyan]Crash location:[/bold cyan] Instruction at [bold]0x{stacked_frame.pc:08X}[/bold] ({_symbolicate(stacked_frame.pc)}), called from [bold]0x{stacked_frame.lr:08X}[/bold] ({_symbolicate(stacked_frame.lr)}).")
+            items.append(
+                f"• [bold cyan]Crash location:[/bold cyan] Instruction at [bold]0x{stacked_frame.pc:08X}[/bold] ({_symbolicate(stacked_frame.pc)}), called from [bold]0x{stacked_frame.lr:08X}[/bold] ({_symbolicate(stacked_frame.lr)})."
+            )
 
         if not items:
             items.append("• [green]No obvious error conditions detected in SCB registers.[/green]")
