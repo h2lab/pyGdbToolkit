@@ -42,7 +42,21 @@ Homepage = "https://github.com/h2lab"
 Repository = "https://github.com/h2lab/pyGdbToolkit"
 Issues = "https://github.com/h2lab/pyGdbToolkit/issues"
 
+[project.optional-dependencies]
+dev = [
+    "black",
+    "flake8",
+    "flake8-docstrings",
+    "mypy",
+    "pytest",
+    "types-gdb",
+]
+
 [tool.setuptools_scm]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -50,4 +64,4 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = ["."]
+files = ["src"]
