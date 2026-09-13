@@ -75,29 +75,10 @@ def render_report(report: DeviceReport) -> None:
     table.add_row("Core type", report.cpuid.core)
     table.add_row("Core revision", report.cpuid.rnp_revision)
     table.add_row("Implementer", report.cpuid.implementer_name)
-    # table.add_row(
-    #     "MCU ROM table", _field_text(_rom_table_field(report.discovery.mcu_rom))
-    # )
     table.add_row(
         "MCU ROM JEP106 identity",
         _field_text(_rom_jep106_field(report.discovery.mcu_rom)),
     )
-    # table.add_row(
-    #     "MCU ROM component part",
-    #     _field_text(_rom_part_field(report.discovery.mcu_rom)),
-    # )
-    # table.add_row(
-    #     "MCU ROM components",
-    #     _field_text(_rom_components_field(report.discovery.mcu_rom)),
-    # )
-    # table.add_row(
-    #     "Processor ROM table",
-    #     _field_text(_rom_table_field(report.discovery.processor_rom)),
-    # )
-    # table.add_row(
-    #     "Processor ROM components",
-    #     _field_text(_rom_components_field(report.discovery.processor_rom)),
-    # )
     table.add_row("Vendor", report.vendor)
     table.add_row("Product line", _field_text(report.product_line))
     table.add_row("Part number", _field_text(report.part_number))

@@ -122,7 +122,6 @@ class CoreSightDiscovery:
     """Best-effort MCU and processor ROM-table discovery results."""
 
     mcu_rom: RomTableDiscovery
-    # processor_rom: RomTableDiscovery
 
 
 def decode_component_id(raw: Sequence[int]) -> ComponentID:
@@ -372,7 +371,6 @@ def discover_rom_tables(reader: TargetMemory) -> CoreSightDiscovery:
             break
     return CoreSightDiscovery(
         mcu_rom=rom_table,
-        # processor_rom=_discover_rom_table(reader, PROCESSOR_ROM_TABLE_ADDRESS),
     )
 
 
