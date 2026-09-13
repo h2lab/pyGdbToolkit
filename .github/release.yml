@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
+changelog:
+  categories:
+    - title: Vulnerability fixes
+      labels:
+        - "cve"
+    - title: Bugfixes
+      labels:
+        - bug
+    - title: New commands
+      labels:
+        - new-cmd
+    - title: Tests and quality
+      labels:
+        - test
+        - quality
+    - title: Formal proof and correctness
+      labels:
+        - framac:contract
+        - framac:norte
+    - title: Build system
+      labels:
+        - build
+    - title: CI/CD evolutions and fixes
+      labels:
+        - ci-cd
+    - title: Other Changes
+      labels:
+        - "*"
