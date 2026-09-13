@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+SPDX-PackageName = "pyGdbToolkit"
+SPDX-PackageSupplier = "H2Lab"
+SPDX-PackageDownloadLocation = "https://github.com/h2lab/pyGdbToolkit"
+
+[[annotations]]
+path = "doc/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 H2Lab Development Team"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ".github/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 H2Lab Development Team"
+SPDX-License-Identifier = "Apache-2.0"
