@@ -5,8 +5,9 @@
 
 from .cmd_faultinfo import FaultInfoCmd
 from .cmd_lscpu import LscpuCmd
+from .cmd_svd import SvdCmd
 
 LscpuCmd()
 FaultInfoCmd()
 
-__all__ = ["FaultInfoCmd", "LscpuCmd"]
+__all__ = ["FaultInfoCmd", "LscpuCmd", "SvdCmd"]
