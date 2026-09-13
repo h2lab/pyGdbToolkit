@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .coresight import CoreSightDiscovery
+
 
 @dataclass(frozen=True)
 class CPUID:
@@ -88,9 +90,9 @@ class DeviceReport:
     """CPU and optional vendor device information for the ``lscpu`` report."""
 
     cpuid: CPUID
+    discovery: CoreSightDiscovery
     vendor: str
     product_line: FieldValue
-    idcode: FieldValue
     part_number: FieldValue
     ram: FieldValue
     flash: FieldValue

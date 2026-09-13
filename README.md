@@ -9,10 +9,21 @@ Rich-based GDB commands for inspecting embedded debugging targets.
 
 ## STM32 `lscpu` metadata
 
-`lscpu` identifies STM32 Cortex-M product lines from `DBGMCU_IDCODE` and reads
-only their documented electronic-signature locations.  The local catalog is
-derived from ST's official CMSIS device headers (addresses, fixed SRAM blocks,
-and `FLASH_SIZE` fallback semantics); headers are not vendored:
+`lscpu` reads CPUID, then discovers the memory-mapped MCU CoreSight ROM table
+at `0xE00FE000`. It validates the root Component and Peripheral ID registers,
+uses the full JEP106 bank/code identity and 12-bit component part to select a
+vendor profile, and reads only the selected profile's documented electronic
+signature locations. It also scans the processor ROM table at `0xE00FF000` as
+best-effort diagnostics; this processor topology is never used for vendor
+selection. No Debug Port, MEM-AP, or vendor debug-identification register is
+required or read. In particular, the strict no-DBGMCU policy has no legacy
+register fallback.
+
+An unknown, invalid, or inaccessible MCU ROM root, or an ST part not in the
+MCU-ROM mapping, produces a generic Cortex-M report instead of guessing from
+legacy device identifiers. The local signature catalog is derived from ST's
+official CMSIS device headers (addresses, fixed SRAM blocks, and `FLASH_SIZE`
+fallback semantics); headers are not vendored:
 
 - [`cmsis-device-c0`](https://github.com/STMicroelectronics/cmsis-device-c0),
   [`cmsis-device-f0`](https://github.com/STMicroelectronics/cmsis-device-f0),
@@ -39,8 +50,8 @@ and `FLASH_SIZE` fallback semantics); headers are not vendored:
 - [C5 Device Family Pack](https://github.com/STMicroelectronics/stm32c5xx-dfp)
   and [N6 CMSIS headers](https://github.com/STMicroelectronics/cmsis-device-n6)
 
-The DEV_ID and revision identify a documented product line, not an orderable
-SKU. `lscpu` therefore prints the narrowest supported line plus raw DEV_ID and
-REV_ID, never inventing an exact ordering code. Where ST does not publish a
-family-specific package-code-to-package-name mapping, it prints the raw package
-code and explicitly says that the package type cannot be mapped.
+The MCU-ROM component part identifies a documented product line, not an
+orderable SKU. `lscpu` therefore never invents an exact ordering code. Where ST
+does not publish a family-specific package-code-to-package-name mapping, it
+prints the raw package code and explicitly says that the package type cannot be
+mapped.
