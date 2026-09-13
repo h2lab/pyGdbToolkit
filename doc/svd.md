@@ -28,6 +28,7 @@ flowchart TD
         B -->|"write &lt;dev&gt; &lt;reg&gt; &lt;val&gt;"| F["Memory Write to Target<br/>Verification Readback"]
         B -->|"monitor &lt;dev&gt; &lt;reg&gt;"| G["GDB Watchpoint Injection<br/>Live Bitfield Diff on Trigger"]
         B -->|"dump &lt;dev&gt; &lt;file.json&gt;"| H["Full State Snapshot<br/>JSON Serialization"]
+        B -->|"list"| J["List Loaded Peripheral Names"]
     end
     C --> I[("SVD Session State<br/>(SvdDevice / Dict)")]
     D --> I
@@ -35,6 +36,7 @@ flowchart TD
     I --> F
     I --> G
     I --> H
+    I --> J
 ```
 
 ---
@@ -190,10 +192,26 @@ Captures an instantaneous snapshot of the target state and exports it as a JSON 
 
 ---
 
+### 7. `svd list`
+
+Lists the names of all peripherals defined in the currently loaded SVD device.
+
+```text
+(gdb) svd list
+```
+
+#### Output
+Displays a `Rich` table with, for each peripheral, its name, base address, and description, sorted by base address.
+
+#### Errors
+- Raises an error if no SVD device is currently loaded (run `svd load` or `svd read <file.svd>` first).
+
+---
+
 ## Intelligent Auto-Completion
 
 The `svd` command implements intelligent GDB tab-completion:
-- **Subcommands**: Completes `load`, `read`, `show`, `write`, `monitor`, `dump`, `help`.
+- **Subcommands**: Completes `load`, `read`, `show`, `write`, `monitor`, `dump`, `list`, `help`.
 - **Files**: Completes file paths and directories for `svd read <file.svd>`.
 - **Peripherals / Devices**: Completes peripheral names dynamically from the loaded SVD device.
 - **Registers**: Completes register names based on the selected peripheral for `show`, `write`, and `monitor`.

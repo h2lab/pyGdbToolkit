@@ -518,7 +518,34 @@ def render_help() -> None:
     table.add_row(
         "svd dump <device> <file.json>", "Dump snapshot of device/peripheral state into a JSON file"
     )
+    table.add_row("svd list", "List the names of all peripherals in the loaded SVD device")
     table.add_row("svd help", "Show this command reference")
+    CONSOLE.print(table)
+
+
+def render_peripheral_list(device: SvdDevice) -> None:
+    """Render a table listing the names of all peripherals in a device.
+
+    Parameters
+    ----------
+    device : SvdDevice
+        Loaded SVD device.
+    """
+    table = Table(
+        title=f"Peripherals: {device.name}",
+        box=box.SIMPLE_HEAVY,
+        header_style="bold cyan",
+        show_header=True,
+    )
+    table.add_column("Name", style="bold", no_wrap=True)
+    table.add_column("Base Address", style="magenta", no_wrap=True)
+    table.add_column("Description")
+    for periph in sorted(device.peripherals, key=lambda p: p.base_address):
+        table.add_row(
+            periph.name,
+            f"0x{periph.base_address:08X}",
+            periph.description or "--",
+        )
     CONSOLE.print(table)
 
 
@@ -564,6 +591,8 @@ class SvdCmd(gdb.Command):
             self._invoke_monitor(subargs)
         elif subcmd == "dump":
             self._invoke_dump(subargs)
+        elif subcmd == "list":
+            self._invoke_list(subargs)
         else:
             raise gdb.GdbError(f"Unknown svd subcommand '{subcmd}'. Run 'svd help' for usage.")
 
@@ -582,7 +611,7 @@ class SvdCmd(gdb.Command):
         list[str]
             Matching completion candidates.
         """
-        subcommands = ["load", "read", "show", "write", "monitor", "dump", "help"]
+        subcommands = ["load", "read", "show", "write", "monitor", "dump", "list", "help"]
         tokens = text.split()
 
         # Completing the first word / subcommand
@@ -783,6 +812,29 @@ class SvdCmd(gdb.Command):
             raise gdb.GdbError(
                 "Too many arguments. Usage: svd show <device_name> [<register_name>]"
             )
+
+    def _invoke_list(self, args: list[str]) -> None:
+        """Handle 'svd list' subcommand.
+
+        Parameters
+        ----------
+        args : list[str]
+            Subcommand arguments (none expected).
+
+        Raises
+        ------
+        gdb.GdbError
+            If no SVD device is currently loaded.
+        """
+        if args:
+            raise gdb.GdbError("Usage: svd list")
+
+        if SESSION.device is None:
+            raise gdb.GdbError(
+                "No SVD definition currently loaded. Run 'svd load' or 'svd read <file.svd>' first."
+            )
+
+        render_peripheral_list(SESSION.device)
 
     def _invoke_write(self, args: list[str]) -> None:
         """Handle 'svd write <device_name> <register_name> <value_hex>' subcommand.
