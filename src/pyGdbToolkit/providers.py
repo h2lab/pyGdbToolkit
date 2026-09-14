@@ -680,15 +680,12 @@ def _read_flash_size(reader: TargetMemory, layout: SignatureLayout) -> FieldValu
     try:
         register_value = reader.read_uint16(layout.flash_size_address)
     except TargetReadError as error:
-        return FieldValue.unavailable(
-            f"could not read documented flash-size register ({error})"
-        )
+        return FieldValue.unavailable(f"could not read documented flash-size register ({error})")
     if register_value in layout.flash_size_default_values:
         if layout.flash_size_default_kib is not None:
             return FieldValue.known(f"{layout.flash_size_default_kib} KiB")
         return FieldValue.unavailable(
-            f"flash-size register reports 0x{register_value:X}; "
-            "no product-line default is known"
+            f"flash-size register reports 0x{register_value:X}; no product-line default is known"
         )
     raw_size = register_value & layout.flash_size_mask
     if raw_size in (0, layout.flash_size_mask):
@@ -716,9 +713,7 @@ def _read_package(reader: TargetMemory, layout: SignatureLayout) -> FieldValue:
     try:
         package_code = reader.read_uint16(layout.package_address)
     except TargetReadError as error:
-        return FieldValue.unavailable(
-            f"could not read documented package register ({error})"
-        )
+        return FieldValue.unavailable(f"could not read documented package register ({error})")
     for code, name in layout.package_codes:
         if package_code == code:
             return FieldValue.known(name)
@@ -734,14 +729,10 @@ def _read_serial_number(reader: TargetMemory, layout: SignatureLayout) -> FieldV
             "no trusted 96-bit UID signature is catalogued for this product line"
         )
     try:
-        words = tuple(
-            reader.read_uint32(layout.uid_address + offset) for offset in range(0, 12, 4)
-        )
+        words = tuple(reader.read_uint32(layout.uid_address + offset) for offset in range(0, 12, 4))
     except TargetReadError as error:
         return FieldValue.unavailable(f"could not read documented 96-bit UID ({error})")
-    return FieldValue.known(
-        f"0x{words[0]:08X}{words[1]:08X}{words[2]:08X} (96-bit UID)"
-    )
+    return FieldValue.known(f"0x{words[0]:08X}{words[1]:08X}{words[2]:08X} (96-bit UID)")
 
 
 def _generic_report(cpuid: CPUID, discovery: CoreSightDiscovery) -> DeviceReport:

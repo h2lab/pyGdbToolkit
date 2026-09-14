@@ -9,9 +9,7 @@ from .models import CPUID
 
 CPUID_ADDRESS = 0xE000ED00
 
-_IMPLEMENTERS = (
-    (0x41, "Arm"),
-)
+_IMPLEMENTERS = ((0x41, "Arm"),)
 
 _CORTEX_M_PARTS = (
     (0xC20, "Cortex-M0"),

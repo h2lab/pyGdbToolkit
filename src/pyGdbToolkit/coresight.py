@@ -369,7 +369,7 @@ def discover_rom_tables(reader: TargetMemory) -> CoreSightDiscovery:
     """
     rom_table = None
     for base_address in [MCU_ROM_TABLE_ADDRESS, PROCESSOR_ROM_TABLE_ADDRESS]:
-        rom_table=_discover_rom_table(reader, base_address, require_jep106=True)
+        rom_table = _discover_rom_table(reader, base_address, require_jep106=True)
         if not rom_table.unavailable_reason:
             break
     return CoreSightDiscovery(

@@ -125,9 +125,7 @@ def _rom_table_field(discovery: RomTableDiscovery) -> FieldValue:
         assert discovery.unavailable_reason is not None
         return FieldValue.unavailable(discovery.unavailable_reason)
     component_count = len(discovery.table.components)
-    return FieldValue.known(
-        f"0x{discovery.base:08X} ({component_count} discovered component(s))"
-    )
+    return FieldValue.known(f"0x{discovery.base:08X} ({component_count} discovered component(s))")
 
 
 def _rom_jep106_field(discovery: RomTableDiscovery) -> FieldValue:
