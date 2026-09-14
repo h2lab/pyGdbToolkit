@@ -367,7 +367,7 @@ def discover_rom_tables(reader: TargetMemory) -> CoreSightDiscovery:
     CoreSightDiscovery
         Available tables or explicit unavailability reasons for both roots.
     """
-    rom_table = None
+    rom_table: RomTableDiscovery
     for base_address in [MCU_ROM_TABLE_ADDRESS, PROCESSOR_ROM_TABLE_ADDRESS]:
         rom_table = _discover_rom_table(reader, base_address, require_jep106=True)
         if not rom_table.unavailable_reason:
@@ -416,7 +416,7 @@ def _resolve_rom_entry(table_base: int, index: int, raw: int) -> tuple[int, bool
     """Validate and resolve one nonzero format-1 ROM-table entry."""
     if not 0 <= raw <= 0xFFFFFFFF:
         raise RomTableError(f"ROM-table entry {index} is not an unsigned 32-bit value")
-    is_present = raw & 0x01
+    is_present = bool(raw & 0x01)
     if not raw & 0x02:
         raise RomTableError(f"ROM-table entry {index} does not use format 1")
 
