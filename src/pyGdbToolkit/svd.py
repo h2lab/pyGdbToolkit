@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """CMSIS-SVD download, parsing, and dictionary mapping primitives.
 
 This module provides facilities to:
@@ -17,9 +20,9 @@ import os
 from pathlib import Path
 import re
 from typing import Any
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
+
+import requests
 
 from .cpuid import CPUID_ADDRESS, decode_cpuid
 from .models import CPUID, DeviceReport
@@ -587,18 +590,18 @@ def download_file(url: str, destination: Path, timeout: float = 15.0) -> Path:
     """
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        req = urllib.request.Request(
+        response = requests.get(
             url,
             headers={
                 "User-Agent": "pyGdbToolkit-SvdFetcher/1.0",
                 "Accept": "application/xml,text/xml,*/*",
             },
+            timeout=timeout,
         )
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            content = response.read()
-            destination.write_bytes(content)
+        response.raise_for_status()
+        destination.write_bytes(response.content)
         return destination
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
+    except (requests.RequestException, OSError) as error:
         raise SvdDownloadError(f"Failed to download {url}: {error}") from error
 
 

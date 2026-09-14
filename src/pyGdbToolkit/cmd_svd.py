@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """The ``svd`` GDB command for CMSIS-SVD inspection, manipulation, and monitoring."""
 
 from __future__ import annotations
@@ -7,7 +10,6 @@ import glob
 import json
 import os
 from pathlib import Path
-import shlex
 from typing import Any
 
 import gdb
@@ -553,10 +555,10 @@ class SvdCmd(gdb.Command):
     """Inspect, manipulate, and monitor hardware registers using CMSIS-SVD definitions."""
 
     def __init__(self) -> None:
-        super().__init__("svd", gdb.COMMAND_USER, gdb.COMPLETE_NONE)
+        super().__init__("svd", gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     def invoke(self, arg: str, from_tty: bool) -> None:
-        """Execute the svd command.
+        """Show the svd command reference.
 
         Parameters
         ----------
@@ -570,37 +572,17 @@ class SvdCmd(gdb.Command):
         gdb.GdbError
             If arguments or operations fail.
         """
+        del arg
         del from_tty
-        tokens = shlex.split(arg) if arg.strip() else []
-        if not tokens or tokens[0].lower() in ("help", "-h", "--help"):
-            render_help()
-            return
+        render_help()
 
-        subcmd = tokens[0].lower()
-        subargs = tokens[1:]
-
-        if subcmd == "load":
-            self._invoke_load(subargs)
-        elif subcmd == "read":
-            self._invoke_read(subargs)
-        elif subcmd == "show":
-            self._invoke_show(subargs)
-        elif subcmd == "write":
-            self._invoke_write(subargs)
-        elif subcmd == "monitor":
-            self._invoke_monitor(subargs)
-        elif subcmd == "dump":
-            self._invoke_dump(subargs)
-        elif subcmd == "list":
-            self._invoke_list(subargs)
-        else:
-            raise gdb.GdbError(f"Unknown svd subcommand '{subcmd}'. Run 'svd help' for usage.")
-
-    def complete(self, text: str, word: str) -> list[str]:
-        """Provide intelligent GDB auto-completion for SVD subcommands, files, devices, and registers.
+    def complete_args(self, subcmd: str, text: str, word: str) -> list[str]:
+        """Provide intelligent GDB auto-completion for SVD command arguments.
 
         Parameters
         ----------
+        subcmd : str
+            Subcommand name being completed.
         text : str
             The full argument text typed so far.
         word : str
@@ -611,20 +593,15 @@ class SvdCmd(gdb.Command):
         list[str]
             Matching completion candidates.
         """
-        subcommands = ["load", "read", "show", "write", "monitor", "dump", "list", "help"]
-        tokens = text.split()
-
-        # Completing the first word / subcommand
-        if not tokens or (len(tokens) == 1 and not text.endswith(" ")):
-            return [c for c in subcommands if c.startswith(word.lower())]
-
-        subcmd = tokens[0].lower()
+        command_prefix = f"svd {subcmd}"
+        arg_text = text
+        if arg_text.startswith(command_prefix):
+            arg_text = arg_text[len(command_prefix) :].lstrip()
+        tokens = arg_text.split()
 
         # Auto-completion for file path on 'svd read <file.svd>'
         if subcmd == "read":
-            if (len(tokens) == 1 and text.endswith(" ")) or (
-                len(tokens) == 2 and not text.endswith(" ")
-            ):
+            if not tokens or (len(tokens) == 1 and not arg_text.endswith(" ")):
                 pattern = f"{word}*"
                 expanded = os.path.expanduser(pattern)
                 matches = glob.glob(expanded)
@@ -643,9 +620,7 @@ class SvdCmd(gdb.Command):
                 return []
 
             # Completing device / peripheral name
-            if (len(tokens) == 1 and text.endswith(" ")) or (
-                len(tokens) == 2 and not text.endswith(" ")
-            ):
+            if not tokens or (len(tokens) == 1 and not arg_text.endswith(" ")):
                 periph_names = [p.name for p in SESSION.device.peripherals]
                 if subcmd == "dump":
                     periph_names.append("all")
@@ -654,10 +629,10 @@ class SvdCmd(gdb.Command):
 
             # Completing register name
             if subcmd in ("show", "write", "monitor"):
-                if (len(tokens) == 2 and text.endswith(" ")) or (
-                    len(tokens) == 3 and not text.endswith(" ")
+                if (len(tokens) == 1 and arg_text.endswith(" ")) or (
+                    len(tokens) == 2 and not arg_text.endswith(" ")
                 ):
-                    periph_name = tokens[1]
+                    periph_name = tokens[0]
                     periph = SESSION.device.get_peripheral(periph_name)
                     if periph is not None:
                         reg_names = [r.name for r in periph.registers]
@@ -1108,5 +1083,115 @@ class SvdCmd(gdb.Command):
         CONSOLE.print(table)
 
 
-# Instantiate the GDB command
-SvdCmd()
+class _SvdSubcommand(gdb.Command):
+    """Base class for concrete ``svd`` subcommands registered under the prefix command."""
+
+    def __init__(self, parent: SvdCmd, name: str) -> None:
+        self.parent = parent
+        self.name = name
+        super().__init__(f"svd {name}", gdb.COMMAND_USER)
+
+    def _argv(self, arg: str) -> list[str]:
+        """Split command arguments using GDB's own CLI lexer."""
+        return list(gdb.string_to_argv(arg)) if arg.strip() else []
+
+    def complete(self, text: str, word: str) -> list[str]:
+        """Complete arguments for the concrete subcommand."""
+        return self.parent.complete_args(self.name, text, word)
+
+
+class SvdLoadCmd(_SvdSubcommand):
+    """Auto-detect target CPUID/SoC, fetch and load matching SVD definition."""
+
+    def __init__(self, parent: SvdCmd) -> None:
+        super().__init__(parent, "load")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Execute ``svd load``."""
+        del from_tty
+        self.parent._invoke_load(self._argv(arg))
+
+
+class SvdReadCmd(_SvdSubcommand):
+    """Load an explicit SVD XML file from local filesystem."""
+
+    def __init__(self, parent: SvdCmd) -> None:
+        super().__init__(parent, "read")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Execute ``svd read``."""
+        del from_tty
+        self.parent._invoke_read(self._argv(arg))
+
+
+class SvdShowCmd(_SvdSubcommand):
+    """Display peripheral or register state from the loaded SVD device."""
+
+    def __init__(self, parent: SvdCmd) -> None:
+        super().__init__(parent, "show")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Execute ``svd show``."""
+        del from_tty
+        self.parent._invoke_show(self._argv(arg))
+
+
+class SvdWriteCmd(_SvdSubcommand):
+    """Write a numeric value into a peripheral register."""
+
+    def __init__(self, parent: SvdCmd) -> None:
+        super().__init__(parent, "write")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Execute ``svd write``."""
+        del from_tty
+        self.parent._invoke_write(self._argv(arg))
+
+
+class SvdMonitorCmd(_SvdSubcommand):
+    """Set a watchpoint on a register and report bitfield differences."""
+
+    def __init__(self, parent: SvdCmd) -> None:
+        super().__init__(parent, "monitor")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Execute ``svd monitor``."""
+        del from_tty
+        self.parent._invoke_monitor(self._argv(arg))
+
+
+class SvdDumpCmd(_SvdSubcommand):
+    """Dump a snapshot of device or peripheral state into a JSON file."""
+
+    def __init__(self, parent: SvdCmd) -> None:
+        super().__init__(parent, "dump")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Execute ``svd dump``."""
+        del from_tty
+        self.parent._invoke_dump(self._argv(arg))
+
+
+class SvdListCmd(_SvdSubcommand):
+    """List the names of all peripherals in the loaded SVD device."""
+
+    def __init__(self, parent: SvdCmd) -> None:
+        super().__init__(parent, "list")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Execute ``svd list``."""
+        del from_tty
+        self.parent._invoke_list(self._argv(arg))
+
+
+class SvdHelpCmd(_SvdSubcommand):
+    """Show the SVD command reference."""
+
+    def __init__(self, parent: SvdCmd) -> None:
+        super().__init__(parent, "help")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Execute ``svd help``."""
+        del arg
+        del from_tty
+        render_help()
