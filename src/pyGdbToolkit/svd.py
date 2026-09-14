@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 
 import requests
 
+from .coresight import discover_rom_tables
 from .cpuid import CPUID_ADDRESS, decode_cpuid
 from .models import CPUID, DeviceReport
 from .providers import DEFAULT_PROVIDER_REGISTRY
@@ -382,7 +383,8 @@ def detect_target_device(reader: TargetMemory | None = None) -> DeviceReport:
         raise SvdError(f"Cannot read target CPUID register: {error}") from error
 
     cpuid = decode_cpuid(raw_cpuid)
-    return DEFAULT_PROVIDER_REGISTRY.inspect(reader, cpuid)
+    discovery = discover_rom_tables(reader)
+    return DEFAULT_PROVIDER_REGISTRY.inspect(reader, cpuid, discovery)
 
 
 def resolve_svd_vendor(vendor_name: str) -> str:
@@ -1153,7 +1155,8 @@ def get_svd_for_target(
             raise SvdError(f"Cannot read target CPUID register: {error}") from error
         cpuid = decode_cpuid(raw_cpuid)
 
-    report = DEFAULT_PROVIDER_REGISTRY.inspect(reader, cpuid)
+    discovery = discover_rom_tables(reader)
+    report = DEFAULT_PROVIDER_REGISTRY.inspect(reader, cpuid, discovery)
     svd_path, _ = resolve_and_fetch_svd(report, cache_dir=cache_dir, force_download=force_download)
     return parse_svd_file(svd_path)
 

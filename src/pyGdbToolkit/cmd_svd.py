@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from .coresight import discover_rom_tables
 from .cpuid import CPUID_ADDRESS, decode_cpuid
 from .providers import DEFAULT_PROVIDER_REGISTRY
 from .svd import (
@@ -660,7 +661,8 @@ class SvdCmd(gdb.Command):
             reader = TargetMemoryReader()
             raw_cpuid = reader.read_uint32(CPUID_ADDRESS)
             cpuid = decode_cpuid(raw_cpuid)
-            report = DEFAULT_PROVIDER_REGISTRY.inspect(reader, cpuid)
+            discovery = discover_rom_tables(reader)
+            report = DEFAULT_PROVIDER_REGISTRY.inspect(reader, cpuid, discovery)
         except TargetReadError as err:
             raise gdb.GdbError(f"Cannot read target memory: {err}") from err
 
