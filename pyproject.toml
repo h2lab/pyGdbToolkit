@@ -18,6 +18,7 @@ authors = [
 ]
 license = {file = "LICENSES/Apache-2.0.txt"}
 dependencies = [
+    "requests>=2.32",
     "rich>=13.6",
 ]
 classifiers = [
