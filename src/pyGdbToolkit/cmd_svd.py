@@ -49,6 +49,11 @@ class SvdSessionState:
 SESSION = SvdSessionState()
 
 
+def is_svd_loaded() -> bool:
+    """Return whether an SVD file is loaded in the current GDB session."""
+    return SESSION.device is not None and SESSION.svd_path is not None
+
+
 def _get_c_type_for_size(size_bits: int) -> str:
     """Return the canonical C integer type name matching a register bit width.
 
@@ -558,6 +563,10 @@ class SvdCmd(gdb.Command):
     def __init__(self) -> None:
         super().__init__("svd", gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
+    def is_svd_loaded(self) -> bool:
+        """Return whether an SVD file is loaded in the current GDB session."""
+        return is_svd_loaded()
+
     def invoke(self, arg: str, from_tty: bool) -> None:
         """Show the svd command reference.
 
@@ -567,11 +576,6 @@ class SvdCmd(gdb.Command):
             The argument string supplied by the user.
         from_tty : bool
             Whether GDB invoked the command interactively from its terminal.
-
-        Raises
-        ------
-        gdb.GdbError
-            If arguments or operations fail.
         """
         del arg
         del from_tty
