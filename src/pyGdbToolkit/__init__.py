@@ -5,6 +5,8 @@
 
 from .cmd_faultinfo import FaultInfoCmd
 from .cmd_lscpu import LscpuCmd
+from . import cmd_secscan
+from .cmd_secscan import SecscanCmd
 from . import cmd_svd
 from .cmd_svd import SvdCmd
 
@@ -20,4 +22,16 @@ cmd_svd.SvdDumpCmd(_SVD_COMMAND)
 cmd_svd.SvdListCmd(_SVD_COMMAND)
 cmd_svd.SvdHelpCmd(_SVD_COMMAND)
 
-__all__ = ["FaultInfoCmd", "LscpuCmd", "SvdCmd", "cmd_svd"]
+_SECSCAN_COMMAND = SecscanCmd()
+cmd_secscan.SecscanAuditCmd(_SECSCAN_COMMAND)
+cmd_secscan.SecscanReportCmd(_SECSCAN_COMMAND)
+cmd_secscan.SecscanHelpCmd(_SECSCAN_COMMAND)
+
+__all__ = [
+    "FaultInfoCmd",
+    "LscpuCmd",
+    "SecscanCmd",
+    "SvdCmd",
+    "cmd_secscan",
+    "cmd_svd",
+]
