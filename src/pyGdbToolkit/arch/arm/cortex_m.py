@@ -10,6 +10,7 @@ from enum import IntEnum, StrEnum
 
 from ...target_memory import TargetMemory, TargetReadError
 from ..base import Architecture, ProbeResult, RegisterValue, SystemRegisterSet, TargetDescription
+from .mpu import MpuDescription, PMSA_V7_MPU, PMSA_V8_MPU, PMSA_V8_PXN_MPU
 from .target import ArmProfile, ArmTargetDescription
 
 SCB_BASE_ADDRESS = 0xE000ED00
@@ -110,6 +111,7 @@ class CortexMCoreDescription:
     architecture_version: CortexMArchitecture
     features: frozenset[CortexMFeature]
     scb_registers: tuple[ScbRegister, ...]
+    mpu: MpuDescription | None
 
 
 @dataclass(frozen=True)
@@ -213,6 +215,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         CortexMArchitecture.ARMV6_M,
         frozenset(),
         _BASELINE_SCB,
+        None,
     ),
     CortexMPart.M1: CortexMCoreDescription(
         CortexMPart.M1,
@@ -220,6 +223,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         CortexMArchitecture.ARMV6_M,
         frozenset(),
         _BASELINE_SCB,
+        None,
     ),
     CortexMPart.M0_PLUS: CortexMCoreDescription(
         CortexMPart.M0_PLUS,
@@ -227,6 +231,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         CortexMArchitecture.ARMV6_M,
         frozenset(),
         _BASELINE_WITH_VTOR_SCB,
+        None,
     ),
     CortexMPart.M3: CortexMCoreDescription(
         CortexMPart.M3,
@@ -234,6 +239,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         CortexMArchitecture.ARMV7_M,
         frozenset({CortexMFeature.CONFIGURABLE_FAULTS}),
         _MAINLINE_SCB,
+        PMSA_V7_MPU,
     ),
     CortexMPart.M4: CortexMCoreDescription(
         CortexMPart.M4,
@@ -241,6 +247,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         CortexMArchitecture.ARMV7E_M,
         frozenset({CortexMFeature.CONFIGURABLE_FAULTS, CortexMFeature.DSP_EXTENSION}),
         _MAINLINE_SCB,
+        PMSA_V7_MPU,
     ),
     CortexMPart.M7: CortexMCoreDescription(
         CortexMPart.M7,
@@ -255,6 +262,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
             }
         ),
         _MAINLINE_WITH_CACHE_SCB,
+        PMSA_V7_MPU,
     ),
     CortexMPart.M23: CortexMCoreDescription(
         CortexMPart.M23,
@@ -262,6 +270,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         CortexMArchitecture.ARMV8_M_BASELINE,
         frozenset({CortexMFeature.SECURITY_EXTENSION}),
         _BASELINE_WITH_VTOR_SCB,
+        PMSA_V8_MPU,
     ),
     CortexMPart.M33: CortexMCoreDescription(
         CortexMPart.M33,
@@ -269,6 +278,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         CortexMArchitecture.ARMV8_M_MAINLINE,
         frozenset({CortexMFeature.CONFIGURABLE_FAULTS, CortexMFeature.SECURITY_EXTENSION}),
         _V8_MAINLINE_SCB,
+        PMSA_V8_MPU,
     ),
     CortexMPart.M35P: CortexMCoreDescription(
         CortexMPart.M35P,
@@ -276,6 +286,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         CortexMArchitecture.ARMV8_M_MAINLINE,
         frozenset({CortexMFeature.CONFIGURABLE_FAULTS, CortexMFeature.SECURITY_EXTENSION}),
         _V8_MAINLINE_SCB,
+        PMSA_V8_MPU,
     ),
     CortexMPart.M52: CortexMCoreDescription(
         CortexMPart.M52,
@@ -290,6 +301,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
             }
         ),
         _V8_1_MAINLINE_SCB,
+        PMSA_V8_PXN_MPU,
     ),
     CortexMPart.M55: CortexMCoreDescription(
         CortexMPart.M55,
@@ -304,6 +316,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
             }
         ),
         _V8_1_MAINLINE_SCB,
+        PMSA_V8_PXN_MPU,
     ),
     CortexMPart.M85: CortexMCoreDescription(
         CortexMPart.M85,
@@ -318,6 +331,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
             }
         ),
         _V8_1_MAINLINE_SCB,
+        PMSA_V8_PXN_MPU,
     ),
 }
 
