@@ -108,26 +108,6 @@ def _field_text(field: FieldValue) -> Text:
     return Text.assemble(("Unavailable: ", "yellow"), display.removeprefix("Unavailable: "))
 
 
-def _rom_table_field(discovery: RomTableDiscovery) -> FieldValue:
-    """Format one ROM-table discovery result for the report.
-
-    Parameters
-    ----------
-    discovery
-        The best-effort scan result for one fixed ROM-table root.
-
-    Returns
-    -------
-    FieldValue
-        The table base and number of reachable components, or its failure reason.
-    """
-    if discovery.table is None:
-        assert discovery.unavailable_reason is not None
-        return FieldValue.unavailable(discovery.unavailable_reason)
-    component_count = len(discovery.table.components)
-    return FieldValue.known(f"0x{discovery.base:08X} ({component_count} discovered component(s))")
-
-
 def _rom_jep106_field(discovery: RomTableDiscovery) -> FieldValue:
     """Format a table root's validated JEP106 identity when it is available."""
     if discovery.table is None:
@@ -137,29 +117,3 @@ def _rom_jep106_field(discovery: RomTableDiscovery) -> FieldValue:
     if identity is None:
         return FieldValue.unavailable("ROM-table root does not advertise a JEDEC manufacturer")
     return FieldValue.known(identity.display())
-
-
-def _rom_part_field(discovery: RomTableDiscovery) -> FieldValue:
-    """Format a table root's 12-bit component part number when it is available."""
-    if discovery.table is None:
-        assert discovery.unavailable_reason is not None
-        return FieldValue.unavailable(discovery.unavailable_reason)
-    return FieldValue.known(f"0x{discovery.table.identity.peripheral_id.part_number:03X}")
-
-
-def _rom_components_field(discovery: RomTableDiscovery) -> FieldValue:
-    """Format validated component identities as compact diagnostic information."""
-    if discovery.table is None:
-        assert discovery.unavailable_reason is not None
-        return FieldValue.unavailable(discovery.unavailable_reason)
-    if not discovery.table.components:
-        return FieldValue.known("none")
-    components = ", ".join(
-        (
-            f"0x{component.base:08X} "
-            f"(class 0x{component.component_id.component_class:X}, "
-            f"part 0x{component.peripheral_id.part_number:03X})"
-        )
-        for component in discovery.table.components
-    )
-    return FieldValue.known(components)
