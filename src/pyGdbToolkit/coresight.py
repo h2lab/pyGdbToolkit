@@ -122,7 +122,7 @@ class RomTableDiscovery:
 
 @dataclass(frozen=True)
 class CoreSightDiscovery:
-    """Best-effort MCU and processor ROM-table discovery results."""
+    """Best-effort discovery result for the target's primary ROM table."""
 
     mcu_rom: RomTableDiscovery
 
@@ -308,10 +308,10 @@ def walk_rom_table(
                 return
             if len(entries) >= max_entries:
                 raise RomTableError(f"ROM table at 0x{base:08X} exceeded {max_entries} entries")
-
-            component_base, is_present = _resolve_rom_entry(base, index, raw)
-            if not is_present:
+            if not raw & 0x01:
                 continue
+
+            component_base = _resolve_rom_entry(base, index, raw)
             if component_base in visited_components:
                 raise RomTableError(
                     f"ROM table at 0x{base:08X} repeats component 0x{component_base:08X}"
@@ -352,10 +352,12 @@ def walk_rom_table(
 
 
 def discover_rom_tables(reader: TargetMemory) -> CoreSightDiscovery:
-    """Best-effort scan the MCU root and processor CoreSight ROM tables.
+    """Discover the target ROM table from its ordered CoreSight root addresses.
 
-    The MCU root is scanned independently from the processor ROM table so a
-    diagnostic failure in either table never prevents reporting CPUID data.
+    The MCU ROM-table root is attempted first at ``0xE00FE000``. When it is
+    inaccessible or invalid, the standard processor-ROM root at ``0xE00FF000``
+    is attempted. A valid first root is traversed normally, including all
+    nested ROM tables it references.
 
     Parameters
     ----------
@@ -365,16 +367,14 @@ def discover_rom_tables(reader: TargetMemory) -> CoreSightDiscovery:
     Returns
     -------
     CoreSightDiscovery
-        Available tables or explicit unavailability reasons for both roots.
+        The first valid table discovery result or the final failure reason.
     """
     rom_table: RomTableDiscovery
-    for base_address in [MCU_ROM_TABLE_ADDRESS, PROCESSOR_ROM_TABLE_ADDRESS]:
+    for base_address in (MCU_ROM_TABLE_ADDRESS, PROCESSOR_ROM_TABLE_ADDRESS):
         rom_table = _discover_rom_table(reader, base_address, require_jep106=True)
-        if not rom_table.unavailable_reason:
+        if rom_table.is_available:
             break
-    return CoreSightDiscovery(
-        mcu_rom=rom_table,
-    )
+    return CoreSightDiscovery(mcu_rom=rom_table)
 
 
 def _discover_rom_table(
@@ -412,11 +412,10 @@ def _validate_component_base(base: int) -> None:
         raise ComponentIdentityError("component base must be 4-KiB aligned")
 
 
-def _resolve_rom_entry(table_base: int, index: int, raw: int) -> tuple[int, bool]:
+def _resolve_rom_entry(table_base: int, index: int, raw: int) -> int:
     """Validate and resolve one nonzero format-1 ROM-table entry."""
     if not 0 <= raw <= 0xFFFFFFFF:
         raise RomTableError(f"ROM-table entry {index} is not an unsigned 32-bit value")
-    is_present = bool(raw & 0x01)
     if not raw & 0x02:
         raise RomTableError(f"ROM-table entry {index} does not use format 1")
 
@@ -425,4 +424,4 @@ def _resolve_rom_entry(table_base: int, index: int, raw: int) -> tuple[int, bool
     component_base = table_base + offset
     if not 0 <= component_base <= 0xFFFFF000:
         raise RomTableError(f"ROM-table entry {index} resolves outside 32-bit address space")
-    return component_base, is_present
+    return component_base

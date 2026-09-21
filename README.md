@@ -308,14 +308,14 @@ The [`doc/`](doc/) directory contains deeper technical documentation:
 ## STM32 `lscpu` metadata
 
 `lscpu` reads CPUID, then discovers the memory-mapped MCU CoreSight ROM table
-at `0xE00FE000`. It validates the root Component and Peripheral ID registers,
-uses the full JEP106 bank/code identity and 12-bit component part to select a
-vendor profile, and reads only the selected profile's documented electronic
-signature locations. It also scans the processor ROM table at `0xE00FF000` as
-best-effort diagnostics; this processor topology is never used for vendor
-selection. No Debug Port, MEM-AP, or vendor debug-identification register is
-required or read. In particular, the strict no-DBGMCU policy has no legacy
-register fallback.
+at `0xE00FE000`; if no valid table is found there, it tries `0xE00FF000`. A
+valid first table is traversed through its nested entries rather than probing a
+second independent root. The selected table's Component and Peripheral ID
+registers provide the JEP106 bank/code identity and 12-bit component part used
+to select a vendor profile. `lscpu` then reads only the selected profile's
+documented electronic-signature locations. No Debug Port, MEM-AP, or vendor
+debug-identification register is required or read. In particular, the strict
+no-DBGMCU policy has no legacy register fallback.
 
 An unknown, invalid, or inaccessible MCU ROM root, or an ST part not in the
 MCU-ROM mapping, produces a generic Cortex-M report instead of guessing from

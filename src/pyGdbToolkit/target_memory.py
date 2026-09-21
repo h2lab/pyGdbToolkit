@@ -26,6 +26,14 @@ class TargetMemory(Protocol):
         ...
 
 
+class WritableTargetMemory(TargetMemory, Protocol):
+    """Target-memory operations that can also write 32-bit register values."""
+
+    def write_uint32(self, address: int, value: int) -> None:
+        """Write a little-endian unsigned 32-bit integer."""
+        ...
+
+
 class TargetReadError(RuntimeError):
     """An error enriched with the target-memory range that could not be read."""
 
@@ -45,6 +53,27 @@ class TargetReadError(RuntimeError):
         self.size = size
         self.reason = reason
         super().__init__(f"could not read {size} byte(s) at 0x{address:08X}: {reason}")
+
+
+class TargetWriteError(RuntimeError):
+    """An error enriched with the target-memory range that could not be written."""
+
+    def __init__(self, address: int, size: int, reason: str) -> None:
+        """Initialize an error for one failed target-memory write.
+
+        Parameters
+        ----------
+        address
+            First target address that was requested.
+        size
+            Number of bytes requested.
+        reason
+            The underlying target-access failure.
+        """
+        self.address = address
+        self.size = size
+        self.reason = reason
+        super().__init__(f"could not write {size} byte(s) at 0x{address:08X}: {reason}")
 
 
 class TargetMemoryReader:
@@ -131,3 +160,30 @@ class TargetMemoryReader:
             The decoded value.
         """
         return int.from_bytes(self.read_bytes(address, 4), byteorder="little")
+
+    def write_uint32(self, address: int, value: int) -> None:
+        """Write an unsigned 32-bit value to target memory in little-endian order.
+
+        Parameters
+        ----------
+        address
+            Target address to write.
+        value
+            Unsigned 32-bit value to write.
+
+        Raises
+        ------
+        TargetWriteError
+            If GDB rejects the write.
+        ValueError
+            If the target address or value is invalid.
+        """
+        if address < 0:
+            raise ValueError("target address must not be negative")
+        if not 0 <= value <= 0xFFFFFFFF:
+            raise ValueError("target-memory write value must be an unsigned 32-bit value")
+
+        try:
+            self._inferior.write_memory(address, value.to_bytes(4, byteorder="little"))
+        except (gdb.error, gdb.MemoryError) as error:
+            raise TargetWriteError(address, 4, str(error)) from error
