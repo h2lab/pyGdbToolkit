@@ -12,6 +12,7 @@ from .mpu import (
     MpuRegionResult,
     dump_mpu_regions,
 )
+from .sau import SauAttribution, SauDescription, SauDump, SauRegion, SauStatus, dump_sau_regions
 from .target import ArmProfile, ArmTargetDescription
 
 __all__ = [
@@ -24,6 +25,12 @@ __all__ = [
     "MpuDump",
     "MpuRegion",
     "MpuRegionResult",
+    "SauAttribution",
+    "SauDescription",
+    "SauDump",
+    "SauRegion",
+    "SauStatus",
     "dump_mpu_regions",
+    "dump_sau_regions",
     "inspect_cortex_m",
 ]

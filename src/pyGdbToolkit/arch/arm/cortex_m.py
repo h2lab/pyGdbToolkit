@@ -11,6 +11,7 @@ from enum import IntEnum, StrEnum
 from ...target_memory import TargetMemory, TargetReadError
 from ..base import Architecture, ProbeResult, RegisterValue, SystemRegisterSet, TargetDescription
 from .mpu import MpuDescription, PMSA_V7_MPU, PMSA_V8_MPU, PMSA_V8_PXN_MPU
+from .sau import ARMV8_M_SAU, SauDescription
 from .target import ArmProfile, ArmTargetDescription
 
 SCB_BASE_ADDRESS = 0xE000ED00
@@ -112,6 +113,7 @@ class CortexMCoreDescription:
     features: frozenset[CortexMFeature]
     scb_registers: tuple[ScbRegister, ...]
     mpu: MpuDescription | None
+    sau: SauDescription | None = None
 
 
 @dataclass(frozen=True)
@@ -271,6 +273,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         frozenset({CortexMFeature.SECURITY_EXTENSION}),
         _BASELINE_WITH_VTOR_SCB,
         PMSA_V8_MPU,
+        ARMV8_M_SAU,
     ),
     CortexMPart.M33: CortexMCoreDescription(
         CortexMPart.M33,
@@ -279,6 +282,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         frozenset({CortexMFeature.CONFIGURABLE_FAULTS, CortexMFeature.SECURITY_EXTENSION}),
         _V8_MAINLINE_SCB,
         PMSA_V8_MPU,
+        ARMV8_M_SAU,
     ),
     CortexMPart.M35P: CortexMCoreDescription(
         CortexMPart.M35P,
@@ -287,6 +291,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         frozenset({CortexMFeature.CONFIGURABLE_FAULTS, CortexMFeature.SECURITY_EXTENSION}),
         _V8_MAINLINE_SCB,
         PMSA_V8_MPU,
+        ARMV8_M_SAU,
     ),
     CortexMPart.M52: CortexMCoreDescription(
         CortexMPart.M52,
@@ -302,6 +307,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         ),
         _V8_1_MAINLINE_SCB,
         PMSA_V8_PXN_MPU,
+        ARMV8_M_SAU,
     ),
     CortexMPart.M55: CortexMCoreDescription(
         CortexMPart.M55,
@@ -317,6 +323,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         ),
         _V8_1_MAINLINE_SCB,
         PMSA_V8_PXN_MPU,
+        ARMV8_M_SAU,
     ),
     CortexMPart.M85: CortexMCoreDescription(
         CortexMPart.M85,
@@ -332,6 +339,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         ),
         _V8_1_MAINLINE_SCB,
         PMSA_V8_PXN_MPU,
+        ARMV8_M_SAU,
     ),
 }
 
