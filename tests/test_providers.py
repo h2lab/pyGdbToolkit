@@ -1,5 +1,8 @@
 """Tests for ROM-keyed vendor providers and STM32 signature readers."""
 
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,5 +1,8 @@
 """Tests for the public ``lscpu`` GDB command and Rich renderer."""
 
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from io import StringIO

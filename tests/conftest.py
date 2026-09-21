@@ -1,5 +1,8 @@
 """Install a deterministic GDB module before package commands are imported."""
 
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import sys
