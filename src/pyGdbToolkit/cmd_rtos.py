@@ -23,6 +23,7 @@ class RtosCmd(gdb.Command):
         self.selected_rtos: ModuleType | None = None
         self.project_path: Path | None = None
         self.task_list: object | None = None
+        self.scheduler_trace: SchedulerTrace | None = None
         super().__init__("rtos", gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
     def invoke(self, arg: str, from_tty: bool) -> None:
@@ -34,6 +35,7 @@ class RtosCmd(gdb.Command):
         table.add_row("rtos list", "List supported RTOS implementations")
         table.add_row("rtos load-project --from <path>", "Load project symbols and task metadata")
         table.add_row("rtos show", "Show the kernel and task memory layout and metadata")
+        table.add_row("rtos showsched <num>", "Trace the next num scheduler elections")
         CONSOLE.print(table)
 
     def _invoke_select(self, args: list[str]) -> None:
@@ -43,6 +45,8 @@ class RtosCmd(gdb.Command):
         if name not in SUPPORTED_RTOS:
             raise gdb.GdbError(f"Unsupported RTOS: {name} (supported: {', '.join(SUPPORTED_RTOS)})")
         self.selected_rtos = SUPPORTED_RTOS[name]
+        if self.scheduler_trace is not None:
+            self.scheduler_trace.delete()
         self.project_path = None
         self.task_list = None
         CONSOLE.print(Text.assemble("Selected RTOS: ", (name, "bold green")))
@@ -65,6 +69,8 @@ class RtosCmd(gdb.Command):
             raise gdb.GdbError("Usage: rtos load-project --from <path>")
         if self.selected_rtos is None:
             raise gdb.GdbError("Select an RTOS first with rtos select <name>")
+        if self.scheduler_trace is not None:
+            self.scheduler_trace.delete()
         self.project_path = None
         self.task_list = None
         project_path = Path(args[1]).expanduser().resolve()
@@ -98,6 +104,68 @@ class RtosCmd(gdb.Command):
             CONSOLE.print(self.selected_rtos.show_project(self.project_path, self.task_list))
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             raise gdb.GdbError(f"Cannot show RTOS project: {error}") from error
+
+    def _invoke_showsched(self, args: list[str]) -> None:
+        if len(args) != 1 or not args[0].isdecimal() or int(args[0]) < 1:
+            raise gdb.GdbError("Usage: rtos showsched <num> (num must be positive)")
+        if self.selected_rtos is None or self.task_list is None:
+            raise gdb.GdbError("Select an RTOS and load a project before rtos showsched")
+        if self.scheduler_trace is not None:
+            self.scheduler_trace.delete()
+        self.scheduler_trace = SchedulerTrace(self, int(args[0]))
+        CONSOLE.print(
+            f"Tracing {args[0]} scheduler elections. Continue the target to collect them."
+        )
+
+
+class SchedulerTrace(gdb.Breakpoint):
+    """Trace elections at sched_elect entry, sampling the elected handle on return."""
+
+    def __init__(self, parent: RtosCmd, limit: int) -> None:
+        self.parent = parent
+        self.limit = limit
+        self.elections: list[str] = []
+        super().__init__("sched_elect", internal=True)
+
+    def delete(self) -> None:
+        if self.is_valid():
+            super().delete()
+        if self.parent.scheduler_trace is self:
+            self.parent.scheduler_trace = None
+
+    def stop(self) -> bool:
+        try:
+            _ElectionReturn(self)
+        except gdb.error as error:
+            gdb.post_event(self.delete)
+            CONSOLE.print(f"[red]Cannot trace scheduler return: {error}[/red]")
+            return True
+        return False
+
+
+class _ElectionReturn(gdb.FinishBreakpoint):
+    """Capture the elected task after sched_elect updates scheduler state."""
+
+    def __init__(self, trace: SchedulerTrace) -> None:
+        self.trace = trace
+        super().__init__(gdb.newest_frame(), internal=True)
+
+    def stop(self) -> bool:
+        trace = self.trace
+        try:
+            value = self.return_value
+            handle = int(value if value is not None else gdb.parse_and_eval("$r0"))
+            task = trace.parent.selected_rtos.elected_task(trace.parent.task_list, handle)
+        except (gdb.error, ValueError) as error:
+            gdb.post_event(trace.delete)
+            CONSOLE.print(f"[red]Cannot read elected task: {error}[/red]")
+            return True
+        trace.elections.append(task)
+        if len(trace.elections) < trace.limit:
+            return False
+        gdb.post_event(trace.delete)
+        CONSOLE.print(trace.parent.selected_rtos.scheduling_chart(trace.elections))
+        return True
 
 
 class _RtosSubcommand(gdb.Command):
@@ -154,3 +222,14 @@ class RtosShowCmd(_RtosSubcommand):
     def invoke(self, arg: str, from_tty: bool) -> None:
         del from_tty
         self.parent._invoke_show(self._argv(arg))
+
+
+class RtosShowschedCmd(_RtosSubcommand):
+    """Trace and chart the next scheduler elections."""
+
+    def __init__(self, parent: RtosCmd) -> None:
+        super().__init__(parent, "showsched")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        del from_tty
+        self.parent._invoke_showsched(self._argv(arg))

@@ -154,6 +154,52 @@ def project_elfs(project_path: Path) -> list[Path]:
     return elfs
 
 
+def elected_task(task_list: TaskList, handle: int) -> str:
+    """Resolve a live scheduler handle through the kernel task table."""
+    task_type = gdb.lookup_type("task_t")
+    handle_field = next(field for field in task_type.fields() if field.name == "handle")
+    if handle_field.bitpos % 8:
+        raise ValueError("Unaligned task handle in task_t")
+    table = int(gdb.parse_and_eval("&task_table"))
+    inferior = gdb.selected_inferior()
+    for index in range(len(task_list.slots) + 1):
+        entry = table + index * task_type.sizeof
+        stored = int.from_bytes(
+            inferior.read_memory(entry + handle_field.bitpos // 8, handle_field.type.sizeof),
+            "little",
+        )
+        if stored != handle:
+            continue
+        task = gdb.Value(entry).cast(task_type.pointer()).dereference()
+        label = int(task["metadata"].dereference()["label"])
+        if label == 0xCAFE:
+            return "idle"
+        for slot in task_list.slots:
+            if slot.task_name is not None and slot.metadata["label"] == label:
+                return slot.task_name
+        return f"unknown (label 0x{label:X})"
+    return f"unknown (handle 0x{handle:X})"
+
+
+def scheduling_chart(elections: list[str]) -> Group:
+    """Render chronological election windows without exceeding terminal width."""
+    charts = []
+    for start in range(0, len(elections), 8):
+        window = elections[start : start + 8]
+        chart = Table(
+            title=f"Task scheduling: elections {start + 1}-{start + len(window)}",
+            box=box.SIMPLE_HEAVY,
+            header_style="bold cyan",
+        )
+        chart.add_column("Task", style="bold", no_wrap=True)
+        for index in range(start, start + len(window)):
+            chart.add_column(str(index + 1), justify="center", no_wrap=True)
+        for task in dict.fromkeys(elections):
+            chart.add_row(task, *("●" if elected == task else "·" for elected in window))
+        charts.append(chart)
+    return Group(*charts)
+
+
 def show_project(project_path: Path, task_list: TaskList) -> Group:
     """Render the kernel, task mappings and decoded build-time metadata."""
     layout_path = project_path / "output" / "build" / "camelot_private" / "layout.json"
