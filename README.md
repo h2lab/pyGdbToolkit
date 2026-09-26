@@ -218,6 +218,131 @@ Here is a typical example output:
 
 Use `svd help` for the complete command syntax.
 
+### `rtos`
+
+Selects an RTOS and inspects its project and tasks from GDB. **Camelot is the
+only supported RTOS today**; the `rtos select <name>` command and per-RTOS
+modules are designed so additional RTOS implementations can be added later.
+
+```gdb
+(gdb) rtos list
+(gdb) rtos select camelot
+(gdb) rtos load-project --from /path/to/camelot/project
+(gdb) rtos show
+(gdb) rtos show task calculator-app
+(gdb) rtos showsched 8
+(gdb) continue
+```
+
+- `rtos list` lists supported RTOS names and marks the current selection.
+- `rtos load-project --from <path>` reads the Camelot `project.toml` and loads
+  symbols from the built kernel and application ELFs. The project must already
+  be built; dummy ELFs are ignored.
+- `rtos show` displays the kernel and task memory layout and build-time task
+  metadata, including the idle task's mapping.
+- `rtos show task <taskname>` reads a stopped target's live task state, pending
+  events, and stack usage. GDB resolves symbols in the task backtrace when
+  available; a suspended task's saved PC/LR do not provide a complete unwind.
+  Loaded SVD data can supply names for pending interrupts.
+- `rtos showsched <num>` observes the next `<num>` calls to `sched_elect()` and
+  displays a Rich scheduling chart when the requested elections have occurred.
+  Continue the target after installing the trace.
+
+
+
+```
+(gdb) rtos showsched 8
+Tracing 8 scheduler elections. Continue the target to collect them.
+(gdb) c
+Continuing.
+          Task scheduling: elections 1-8
+
+  Task             1   2   3   4   5   6   7   8
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  calculator-app   ●   ●   ·   ·   ·   ·   ·   ·
+  idle             ·   ·   ●   ●   ●   ●   ●   ●
+```
+
+```
+(gdb) rtos show
+                  Kernel
+
+  Region   Address range           Access
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  text     0x08000000-0x0800A248   R-X
+  ram      0x20000000-0x20001848   RW-
+
+.task_list: 0x08000270-0x080008B0 (8 slots, 200 bytes each)
+                Task: idle
+
+  Region   Address range           Access
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  text     0x0800C000-0x0800C500   R-X
+  ram      0x20004000-0x20004200   RW-
+
+No task metadata in .task_list
+           Task: calculator-app
+
+  Region   Address range           Access
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  text     0x0800D000-0x0800F880   R-X
+  ram      0x20008000-0x20008560   RW-
+
+                    Metadata: calculator-app (slot 0 at 0x08000270)
+
+  Field               Value
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  magic               0xDEADCAFE
+  version             1
+  label               0xC001F002
+  priority            2
+  quantum             2
+  capabilities        0x3
+  flags               0x1
+  [...]
+```
+
+```
+(gdb) rtos show task calculator-app
+           Task: calculator-app
+
+  Region   Address range           Access
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  text     0x0800D000-0x0800F880   R-X
+  ram      0x20008000-0x20008560   RW-
+
+           Kernel context
+
+  Field      Value
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  State      JOB_STATE_WAITFOREVENT
+  Handle     0x0005B883
+  Saved SP   0x200084C4
+
+               Stack
+
+  Measure   Value
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Bounds    0x20008424-0x2000854C
+  SP        0x200084C4 (saved)
+  Usage     136/296 bytes (45.9%)
+
+     Pending events
+
+  Type   Source   Value
+ ━━━━━━━━━━━━━━━━━━━━━━━
+  None
+
+                                         Backtrace
+
+  Frame           Location
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  saved pc        0x0800ED84  __sys_wait_for_event + 8
+  saved prev_lr   0x0800D0AF  main + 130
+  saved lr        0xFFFFFFBC
+  Note            Full unwinding of an inactive task requires its register context in GDB
+```
+
 ### `secscan`
 
 Audits the security configuration of a Cortex-M-based SoC and produces a
@@ -302,6 +427,7 @@ The [`doc/`](doc/) directory contains deeper technical documentation:
 
 - [`fault_info`](doc/fault_info.md)
 - [`lscpu`](doc/lscpu.md)
+- [`rtos` commands](doc/rtos.md) and [Camelot support](doc/rtos-camelot.md)
 - [`secscan`](secscan.md)
 - [`svd`](doc/svd.md)
 
