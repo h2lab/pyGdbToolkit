@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Camelot RTOS project symbol locations."""
 
 from dataclasses import dataclass
@@ -5,6 +8,8 @@ import json
 from pathlib import Path
 import struct
 import tomllib
+from typing import Literal
+import xml.etree.ElementTree as ET
 
 import gdb
 from rich import box
@@ -17,6 +22,8 @@ NAME = "camelot"
 
 @dataclass(frozen=True)
 class TaskSlot:
+    """One task metadata slot and its resolved application name."""
+
     index: int
     address: int
     task_name: str | None
@@ -27,6 +34,8 @@ class TaskSlot:
 
 @dataclass(frozen=True)
 class TaskList:
+    """Location and decoded slots of the kernel's task metadata section."""
+
     address: int
     size: int
     entry_size: int
@@ -80,7 +89,7 @@ def load_task_list(project_path: Path, kernel_elf: Path) -> TaskList:
     fields = {field.name: field for field in task_type.fields()}
     if not {"s_text", "s_svcexchange"} <= fields.keys():
         raise ValueError("task_meta_t is missing task memory addresses")
-    byte_order = "little" if kernel_elf.read_bytes()[5] == 1 else "big"
+    byte_order: Literal["little", "big"] = "little" if kernel_elf.read_bytes()[5] == 1 else "big"
 
     with (project_path / "output/build/camelot_private/layout.json").open() as layout_file:
         regions = json.load(layout_file)["regions"]
@@ -96,6 +105,8 @@ def load_task_list(project_path: Path, kernel_elf: Path) -> TaskList:
     }
 
     def field_bytes(entry: bytes, field: gdb.Field) -> bytes:
+        if field.bitpos is None or field.type is None or field.name is None:
+            raise ValueError("Incomplete task_meta_t field in debug symbols")
         if field.bitpos % 8:
             raise ValueError(f"Unaligned task_meta_t field: {field.name}")
         offset = field.bitpos // 8
@@ -116,10 +127,15 @@ def load_task_list(project_path: Path, kernel_elf: Path) -> TaskList:
         if name is not None:
             for field in task_type.fields():
                 raw = field_bytes(entry, field)
+                if field.name is None or field.type is None:
+                    raise ValueError("Incomplete task_meta_t field in debug symbols")
                 if field.name in ("task_hmac", "metadata_hmac"):
                     metadata[field.name] = raw.hex()
                 elif field.type.code == gdb.TYPE_CODE_ARRAY:
-                    item_size = field.type.target().sizeof
+                    item_type = field.type.target()
+                    if item_type is None:
+                        raise ValueError(f"Unknown element type for {field.name}")
+                    item_size = item_type.sizeof
                     metadata[field.name] = tuple(
                         int.from_bytes(raw[offset : offset + item_size], byte_order)
                         for offset in range(0, len(raw), item_size)
@@ -158,6 +174,8 @@ def elected_task(task_list: TaskList, handle: int) -> str:
     """Resolve a live scheduler handle through the kernel task table."""
     task_type = gdb.lookup_type("task_t")
     handle_field = next(field for field in task_type.fields() if field.name == "handle")
+    if handle_field.bitpos is None or handle_field.type is None:
+        raise ValueError("Incomplete task handle in debug symbols")
     if handle_field.bitpos % 8:
         raise ValueError("Unaligned task handle in task_t")
     table = int(gdb.parse_and_eval("&task_table"))
@@ -170,7 +188,10 @@ def elected_task(task_list: TaskList, handle: int) -> str:
         )
         if stored != handle:
             continue
-        task = gdb.Value(entry).cast(task_type.pointer()).dereference()
+        task_address = gdb.Value(entry)
+        if task_address is None:
+            raise ValueError("Cannot resolve task table address")
+        task = task_address.cast(task_type.pointer()).dereference()
         label = int(task["metadata"].dereference()["label"])
         if label == 0xCAFE:
             return "idle"
@@ -198,6 +219,212 @@ def scheduling_chart(elections: list[str]) -> Group:
             chart.add_row(task, *("●" if elected == task else "·" for elected in window))
         charts.append(chart)
     return Group(*charts)
+
+
+def _interrupt_names() -> dict[int, str]:
+    """Resolve IRQ numbers from the SVD currently loaded by the svd command."""
+    from ..cmd_svd import SESSION
+    from ..svd import _parse_int
+
+    if SESSION.svd_path is None:
+        return {}
+    root = ET.parse(SESSION.svd_path).getroot()
+    names: dict[int, str] = {}
+    for peripheral in root.iter():
+        if peripheral.tag.rsplit("}", 1)[-1] != "peripheral":
+            continue
+        for interrupt in peripheral:
+            if interrupt.tag.rsplit("}", 1)[-1] != "interrupt":
+                continue
+            children = {child.tag.rsplit("}", 1)[-1]: child.text for child in interrupt}
+            name = children.get("name")
+            value = children.get("value")
+            if name and value:
+                names.setdefault(_parse_int(value), name)
+    return names
+
+
+def _task_symbol(address: int, text_start: int, text_end: int) -> str | None:
+    """Resolve a Thumb address only within the selected task's text range."""
+    code_address = address & ~1
+    if not text_start <= code_address < text_end:
+        return None
+    try:
+        symbol = gdb.execute(f"info symbol 0x{code_address:X}", to_string=True).strip()
+    except gdb.error:
+        return None
+    if symbol.startswith("No symbol matches"):
+        return None
+    return symbol.split(" in section ", 1)[0]
+
+
+def show_task(project_path: Path, task_list: TaskList, task_name: str) -> Group:
+    """Inspect a named task's live kernel context on a stopped target."""
+    layout_path = project_path / "output/build/camelot_private/layout.json"
+    with layout_path.open(encoding="utf-8") as layout_file:
+        regions = [r for r in json.load(layout_file)["regions"] if r["name"] == task_name]
+    if not regions:
+        raise ValueError(f"Unknown task: {task_name}")
+    slot = next((s for s in task_list.slots if s.task_name == task_name), None)
+    task_type = gdb.lookup_type("task_t")
+    table_address = int(gdb.parse_and_eval("&task_table"))
+    source_names: dict[int, str] = {}
+    selected = None
+    for index in range(len(task_list.slots) + 1):
+        task_address = gdb.Value(table_address + index * task_type.sizeof)
+        if task_address is None:
+            raise ValueError("Cannot resolve task table address")
+        task = task_address.cast(task_type.pointer()).dereference()
+        metadata_address = int(task["metadata"])
+        if not metadata_address:
+            continue
+        label = int(task["metadata"].dereference()["label"])
+        source_name = next(
+            (
+                candidate.task_name
+                for candidate in task_list.slots
+                if candidate.task_name is not None and candidate.metadata.get("label") == label
+            ),
+            "idle" if label == 0xCAFE else f"label 0x{label:X}",
+        )
+        source_names[index] = source_name
+        if (slot is not None and metadata_address == slot.address) or (
+            task_name == "idle" and label == 0xCAFE
+        ):
+            selected = task
+    if selected is None:
+        raise ValueError(f"Task {task_name} is not initialized in task_table")
+
+    def table(title: str, columns: tuple[str, ...]) -> Table:
+        result = Table(title=title, box=box.SIMPLE_HEAVY, header_style="bold cyan")
+        for column in columns:
+            result.add_column(column)
+        return result
+
+    mapping = table(f"Task: {task_name}", ("Region", "Address range", "Access"))
+    ram_start = ram_end = 0
+    text_start = text_end = 0
+    for region in regions:
+        start = int(region["start_address"], 0)
+        end = start + int(region["size"], 0)
+        if region["type"] == "ram":
+            ram_start, ram_end = start, end
+        if region["type"] == "text":
+            text_start, text_end = start, end
+        permission = int(region["permission"])
+        access = "".join(
+            flag if permission & bit else "-" for bit, flag in ((1, "R"), (2, "W"), (4, "X"))
+        )
+        mapping.add_row(region["type"], f"0x{start:08X}-0x{end:08X}", access)
+
+    state_number = int(selected["state"])
+    state = next(
+        (
+            field.name
+            for field in gdb.lookup_type("job_state_t").fields()
+            if field.enumval == state_number
+        ),
+        f"unknown ({state_number})",
+    )
+    context = table("Kernel context", ("Field", "Value"))
+    context.add_row("State", state)
+    handle_address = selected["handle"].address
+    if handle_address is None:
+        raise ValueError("Cannot resolve task handle address")
+    context.add_row(
+        "Handle",
+        f"0x{int(handle_address.cast(gdb.lookup_type('uint32_t').pointer()).dereference()):08X}",
+    )
+    saved_sp = int(selected["sp"])
+    context.add_row("Saved SP", f"0x{saved_sp:08X}")
+
+    events = table("Pending events", ("Type", "Source", "Value"))
+    for field_name in ("ipcs", "sigs"):
+        for index in range(
+            selected[field_name].type.sizeof // selected[field_name].type.target().sizeof
+        ):
+            value = int(selected[field_name][index])
+            if value:
+                events.add_row(
+                    "IPC" if field_name == "ipcs" else "Signal",
+                    source_names.get(index, f"task #{index}"),
+                    str(value),
+                )
+    irq_names = _interrupt_names()
+    fields = {field.name for field in task_type.fields()}
+
+    def queued(field: str, head: str, bottom: str) -> list[gdb.Value]:
+        values = selected[field]
+        length = values.type.sizeof // values.type.target().sizeof
+        cursor, stop = int(selected[bottom]), int(selected[head])
+        if cursor >= length or stop >= length:
+            raise ValueError(f"Invalid {field} queue indices")
+        items = []
+        while cursor != stop:
+            items.append(values[cursor])
+            cursor = (cursor + 1) % length
+        return items
+
+    for event in queued("ints", "ints_head", "ints_bottom"):
+        number = int(event)
+        events.add_row("IRQ", str(number), irq_names.get(number, "unresolved"))
+    if {"dmas", "dmas_head", "dmas_bottom"} <= fields:
+        for event in queued("dmas", "dmas_head", "dmas_bottom"):
+            events.add_row("DMA", f"0x{int(event['handle']):X}", str(event["event"]))
+    if not events.rows:
+        events.add_row("None", "", "")
+
+    stack = table("Stack", ("Measure", "Value"))
+    metadata = selected["metadata"].dereference()
+    stack_size = int(metadata["stack_size"])
+    config_paths = list(
+        (project_path / "output/build/kernel/subprojects").glob("kconfig-*/generated_kconfig.json")
+    )
+    if len(config_paths) != 1:
+        raise ValueError("Expected one generated kernel Kconfig file")
+    config_path = config_paths[0]
+    with config_path.open(encoding="utf-8") as config_file:
+        config = json.load(config_file)
+    svc_size = int(config["CONFIG_SVC_EXCHANGE_AREA_LEN"])
+    stack_bottom = (
+        ram_start
+        + svc_size
+        + sum(
+            (int(metadata[field]) + 3) & ~3
+            for field in ("got_size", "data_size", "bss_size", "heap_size")
+        )
+    )
+    stack_top = stack_bottom + ((stack_size + 3) & ~3)
+    pc = int(gdb.selected_frame().pc())
+    current = text_start <= pc < text_end
+    stack_pointer = int(gdb.parse_and_eval("$psp")) if current else saved_sp
+    if not ram_start or stack_top > ram_end or not stack_bottom <= stack_pointer <= stack_top:
+        stack.add_row("Usage", "Unavailable (saved SP outside stack bounds)")
+    else:
+        used = stack_top - stack_pointer
+        stack.add_row("Bounds", f"0x{stack_bottom:08X}-0x{stack_top:08X}")
+        stack.add_row("SP", f"0x{stack_pointer:08X} ({'live PSP' if current else 'saved'})")
+        stack.add_row("Usage", f"{used}/{stack_size} bytes ({used / stack_size:.1%})")
+
+    frames = table("Backtrace", ("Frame", "Location"))
+    # GDB can unwind the running task only when it is stopped in its own code.
+    if current:
+        for line in gdb.execute("bt", to_string=True).splitlines():
+            frames.add_row("GDB", line)
+    elif stack_bottom <= saved_sp < stack_top and task_name != "idle":
+        frame = selected["sp"].dereference()
+        for field in ("pc", "prev_lr", "lr"):
+            address = int(frame[field])
+            symbol = _task_symbol(address, text_start, text_end)
+            frames.add_row(
+                f"saved {field}", f"0x{address:08X}  {symbol}" if symbol else f"0x{address:08X}"
+            )
+        frames.add_row(
+            "Note", "Full unwinding of an inactive task requires its register context in GDB"
+        )
+    else:
+        frames.add_row("Note", "No saved frame available for this task")
+    return Group(mapping, context, stack, events, frames)
 
 
 def show_project(project_path: Path, task_list: TaskList) -> Group:
@@ -239,7 +466,7 @@ def show_project(project_path: Path, task_list: TaskList) -> Group:
         if slot.task_name is not None:
             slots_by_name.setdefault(slot.task_name, []).append(slot)
 
-    output = [mapping_table("Kernel", owners.pop("kernel"))]
+    output: list[Table | Text] = [mapping_table("Kernel", owners.pop("kernel"))]
     output.append(
         Text(
             f".task_list: 0x{task_list.address:08X}-0x{task_list.address + task_list.size:08X} "
