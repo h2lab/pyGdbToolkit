@@ -427,6 +427,7 @@ The [`doc/`](doc/) directory contains deeper technical documentation:
 
 - [`fault_info`](doc/fault_info.md)
 - [`lscpu`](doc/lscpu.md)
+- [`rtos` commands](doc/rtos.md) and [Camelot support](doc/rtos-camelot.md)
 - [`secscan`](secscan.md)
 - [`svd`](doc/svd.md)
 
