@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from .target_memory import TargetMemory, TargetReadError
+from ...target_memory import TargetMemory, TargetReadError
 
 MCU_ROM_TABLE_ADDRESS = 0xE00FE000
 PROCESSOR_ROM_TABLE_ADDRESS = 0xE00FF000

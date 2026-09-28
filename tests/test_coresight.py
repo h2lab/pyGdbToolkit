@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyGdbToolkit.coresight import (
+from pyGdbToolkit.arch.arm.coresight import (
     MCU_ROM_TABLE_ADDRESS,
     PROCESSOR_ROM_TABLE_ADDRESS,
     ROM_TABLE_COMPONENT_CLASS,

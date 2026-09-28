@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyGdbToolkit.cpuid import decode_cpuid
+from pyGdbToolkit.arch.arm.cortex_m import decode_cpuid
 
 
 def test_decodes_cortex_m4_and_rnp_revision() -> None:
@@ -15,8 +15,8 @@ def test_decodes_cortex_m4_and_rnp_revision() -> None:
     cpuid = decode_cpuid(0x413FC247)
 
     assert cpuid.implementer_name == "Arm"
-    assert cpuid.architecture == 0xF
-    assert cpuid.core == "Cortex-M4"
+    assert cpuid.cpuid_architecture == 0xF
+    assert cpuid.core_name == "Cortex-M4"
     assert cpuid.rnp_revision == "r3p7"
 
 
@@ -25,7 +25,7 @@ def test_unknown_part_and_implementer_are_retained() -> None:
     cpuid = decode_cpuid(0x991F1234)
 
     assert cpuid.implementer_name == "Unknown (0x99)"
-    assert cpuid.core == "Unknown Cortex-M part 0x123"
+    assert cpuid.core_name == "Unknown Cortex-M part 0x123"
 
 
 @pytest.mark.parametrize(
@@ -39,7 +39,7 @@ def test_decodes_newer_cortex_m_parts(part_number: int, name: str) -> None:
     """Newer Cortex-M CPUID part numbers resolve to their correct core names."""
     cpuid = decode_cpuid(0x410F0000 | (part_number << 4))
 
-    assert cpuid.core == name
+    assert cpuid.core_name == name
 
 
 @pytest.mark.parametrize("value", (-1, 0x1_0000_0000))

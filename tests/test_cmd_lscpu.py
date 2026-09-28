@@ -11,7 +11,7 @@ import pytest
 from rich.console import Console
 
 from pyGdbToolkit import cmd_lscpu
-from pyGdbToolkit.coresight import MCU_ROM_TABLE_ADDRESS
+from pyGdbToolkit.arch.arm.coresight import MCU_ROM_TABLE_ADDRESS
 
 _CIDR_OFFSETS = (0xFF0, 0xFF4, 0xFF8, 0xFFC)
 _PIDR_OFFSETS = (0xFE0, 0xFE4, 0xFE8, 0xFEC, 0xFD0)

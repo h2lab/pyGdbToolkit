@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyGdbToolkit.target_memory import TargetMemoryReader, TargetReadError
+from pyGdbToolkit.target_memory import TargetMemoryReader, TargetReadError, TargetWriteError
 
 
 class FakeInferior:
@@ -23,6 +23,12 @@ class FakeInferior:
         if self.failure is not None:
             raise self.failure
         return self.memory.get(address, b"")[:size]
+
+    def write_memory(self, address: int, data: bytes) -> None:
+        """Store a target write or simulate an inaccessible target."""
+        if self.failure is not None:
+            raise self.failure
+        self.memory[address] = data
 
 
 def test_reads_little_endian_values_from_selected_inferior(fake_gdb: object) -> None:
@@ -77,3 +83,27 @@ def test_wraps_missing_selected_inferior(fake_gdb: object) -> None:
 
     with pytest.raises(TargetReadError, match="could not select inferior"):
         TargetMemoryReader()
+
+
+def test_writes_little_endian_uint32_to_selected_inferior(fake_gdb: object) -> None:
+    """The reader writes unsigned 32-bit values in target byte order."""
+    del fake_gdb
+    import gdb
+
+    inferior = FakeInferior({})
+    gdb._inferior = inferior  # type: ignore[attr-defined]
+
+    TargetMemoryReader().write_uint32(0x2000, 0x12345678)
+
+    assert inferior.memory[0x2000] == b"\x78\x56\x34\x12"
+
+
+def test_wraps_target_write_failures_with_access_context(fake_gdb: object) -> None:
+    """A target write error includes the requested address and size."""
+    del fake_gdb
+    import gdb
+
+    reader = TargetMemoryReader(FakeInferior({}, gdb.MemoryError("memory fault")))
+
+    with pytest.raises(TargetWriteError, match=r"4 byte\(s\) at 0x00002000: memory fault"):
+        reader.write_uint32(0x2000, 0)

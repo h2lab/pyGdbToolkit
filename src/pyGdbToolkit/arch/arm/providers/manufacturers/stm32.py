@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vendor device providers and the STM32 electronic-signature catalog.
+"""STM32 device provider and electronic-signature catalog.
 
 The STM32 catalog is deliberately local and declarative.  Its addresses,
 fixed SRAM totals, and factory flash fallbacks are derived from the official
@@ -12,27 +12,14 @@ not vendored here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
-from .coresight import CoreSightDiscovery, Jep106Identity
-from .models import CPUID, DeviceReport, FieldValue
-from .target_memory import TargetMemory, TargetReadError
+from ...coresight import CoreSightDiscovery, Jep106Identity
+from ...cortex_m import CortexMTargetDescription
+from ...models import DeviceReport, FieldValue
+from .....target_memory import TargetMemory, TargetReadError
 
 _FLASH_DEFAULT_16 = (0x0000, 0xFFFF)
 _FLASH_DEFAULT_L4 = (0xFFFF,)
-
-
-class DeviceProvider(Protocol):
-    """A vendor-specific device recognizer."""
-
-    def inspect(
-        self,
-        reader: TargetMemory,
-        cpuid: CPUID,
-        discovery: CoreSightDiscovery,
-    ) -> DeviceReport | None:
-        """Return a report if the provider recognizes the target."""
-        ...
 
 
 @dataclass(frozen=True)
@@ -545,7 +532,7 @@ class Stm32Provider:
     def inspect(
         self,
         reader: TargetMemory,
-        cpuid: CPUID,
+        target: CortexMTargetDescription,
         discovery: CoreSightDiscovery,
     ) -> DeviceReport | None:
         """Recognize an STM32 target from its validated MCU-ROM identity.
@@ -554,8 +541,8 @@ class Stm32Provider:
         ----------
         reader
             Typed reader for target memory.
-        cpuid
-            The previously decoded standard Arm CPUID register.
+        target
+            The previously decoded Cortex-M target description.
         discovery
             Best-effort discovery results containing the MCU-ROM root identity.
 
@@ -578,21 +565,21 @@ class Stm32Provider:
             and peripheral_id.part_number in profile.mcu_rom_part_numbers
         )
         if len(matches) == 1:
-            return self._profile_report(reader, cpuid, discovery, matches[0])
+            return self._profile_report(reader, target, discovery, matches[0])
         if len(matches) > 1:
-            return self._ambiguous_report(cpuid, discovery, matches)
+            return self._ambiguous_report(target, discovery, matches)
         return None
 
     def _profile_report(
         self,
         reader: TargetMemory,
-        cpuid: CPUID,
+        target: CortexMTargetDescription,
         discovery: CoreSightDiscovery,
         profile: Stm32Profile,
     ) -> DeviceReport:
         """Build a report after exactly one documented STM32 profile matched."""
         return DeviceReport(
-            cpuid=cpuid,
+            target=target,
             discovery=discovery,
             vendor="STMicroelectronics",
             product_line=FieldValue.known(profile.product_line),
@@ -607,7 +594,7 @@ class Stm32Provider:
 
     def _ambiguous_report(
         self,
-        cpuid: CPUID,
+        target: CortexMTargetDescription,
         discovery: CoreSightDiscovery,
         matches: tuple[Stm32Profile, ...],
     ) -> DeviceReport:
@@ -615,7 +602,7 @@ class Stm32Provider:
         candidates = ", ".join(profile.product_line for profile in matches)
         reason = "MCU-ROM identity is shared by multiple documented STM32 product lines"
         return DeviceReport(
-            cpuid=cpuid,
+            target=target,
             discovery=discovery,
             vendor="STMicroelectronics",
             product_line=FieldValue.known(f"Ambiguous: {candidates}"),
@@ -625,48 +612,6 @@ class Stm32Provider:
             package=FieldValue.unavailable(reason),
             serial_number=FieldValue.unavailable(reason),
         )
-
-
-class ProviderRegistry:
-    """Apply device providers in a defined order with a generic fallback."""
-
-    def __init__(self, providers: tuple[DeviceProvider, ...]) -> None:
-        """Create a registry.
-
-        Parameters
-        ----------
-        providers
-            Providers evaluated in tuple order.
-        """
-        self._providers = providers
-
-    def inspect(
-        self,
-        reader: TargetMemory,
-        cpuid: CPUID,
-        discovery: CoreSightDiscovery,
-    ) -> DeviceReport:
-        """Return the first provider report or the generic Cortex-M report.
-
-        Parameters
-        ----------
-        reader
-            Typed reader for target memory.
-        cpuid
-            The decoded standard Arm CPUID register.
-        discovery
-            Best-effort MCU and processor ROM-table discovery results.
-
-        Returns
-        -------
-        DeviceReport
-            A vendor report or an explicit generic fallback.
-        """
-        for provider in self._providers:
-            report = provider.inspect(reader, cpuid, discovery)
-            if report is not None:
-                return report
-        return _generic_report(cpuid, discovery)
 
 
 def _read_flash_size(reader: TargetMemory, layout: SignatureLayout) -> FieldValue:
@@ -733,33 +678,3 @@ def _read_serial_number(reader: TargetMemory, layout: SignatureLayout) -> FieldV
     except TargetReadError as error:
         return FieldValue.unavailable(f"could not read documented 96-bit UID ({error})")
     return FieldValue.known(f"0x{words[0]:08X}{words[1]:08X}{words[2]:08X} (96-bit UID)")
-
-
-def _generic_report(cpuid: CPUID, discovery: CoreSightDiscovery) -> DeviceReport:
-    """Return a useful report when no registered vendor device matched."""
-    if discovery.mcu_rom.table is None:
-        assert discovery.mcu_rom.unavailable_reason is not None
-        reason = f"MCU-ROM identity unavailable: {discovery.mcu_rom.unavailable_reason}"
-    else:
-        peripheral_id = discovery.mcu_rom.table.identity.peripheral_id
-        if peripheral_id.jep106 is None:
-            reason = "MCU-ROM root does not advertise a JEDEC manufacturer identity"
-        else:
-            reason = (
-                "no registered vendor profile matches MCU-ROM "
-                f"{peripheral_id.jep106.display()}, part 0x{peripheral_id.part_number:03X}"
-            )
-    return DeviceReport(
-        cpuid=cpuid,
-        discovery=discovery,
-        vendor="Generic Cortex-M",
-        product_line=FieldValue.unavailable(reason),
-        part_number=FieldValue.unavailable(reason),
-        ram=FieldValue.unavailable(reason),
-        flash=FieldValue.unavailable(reason),
-        package=FieldValue.unavailable(reason),
-        serial_number=FieldValue.unavailable(reason),
-    )
-
-
-DEFAULT_PROVIDER_REGISTRY = ProviderRegistry((Stm32Provider(),))

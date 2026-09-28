@@ -9,18 +9,17 @@ from dataclasses import dataclass
 
 import pytest
 
-from pyGdbToolkit.coresight import (
+from pyGdbToolkit.arch.arm.coresight import (
     MCU_ROM_TABLE_ADDRESS,
     CoreSightDiscovery,
     discover_rom_tables,
 )
-from pyGdbToolkit.cpuid import decode_cpuid
-from pyGdbToolkit.models import CPUID, DeviceReport, FieldValue
-from pyGdbToolkit.providers import (
-    DEFAULT_PROVIDER_REGISTRY,
+from pyGdbToolkit.arch.arm.cortex_m import CortexMTargetDescription, decode_cpuid
+from pyGdbToolkit.arch.arm.models import DeviceReport, FieldValue
+from pyGdbToolkit.arch.arm.providers import DEFAULT_PROVIDER_REGISTRY, ProviderRegistry
+from pyGdbToolkit.arch.arm.providers.manufacturers.stm32 import (
     ST_JEP106_IDENTITY,
     STM32_PROFILES,
-    ProviderRegistry,
     SignatureLayout,
     Stm32Profile,
     Stm32Provider,
@@ -279,7 +278,7 @@ class FixedProvider:
     def inspect(
         self,
         reader: TargetMemory,
-        cpuid: CPUID,
+        cpuid: CortexMTargetDescription,
         discovery: CoreSightDiscovery,
     ) -> DeviceReport | None:
         """Return the configured report."""
@@ -294,7 +293,7 @@ def test_provider_registry_respects_provider_order() -> None:
     discovery = discover_rom_tables(memory)
     unavailable = FieldValue.unavailable("not selected")
     expected = DeviceReport(
-        cpuid=CPUID_M4,
+        target=CPUID_M4,
         discovery=discovery,
         vendor="First",
         product_line=unavailable,

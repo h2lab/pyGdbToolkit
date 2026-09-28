@@ -19,9 +19,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .coresight import discover_rom_tables
-from .cpuid import CPUID_ADDRESS, decode_cpuid
-from .providers import DEFAULT_PROVIDER_REGISTRY
+from .arch.arm.coresight import discover_rom_tables
+from .arch.arm.cortex_m import CPUID_ADDRESS, decode_cpuid
+from .arch.arm.providers import DEFAULT_PROVIDER_REGISTRY
 from .svd import (
     SvdDevice,
     SvdError,

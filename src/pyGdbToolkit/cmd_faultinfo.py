@@ -16,8 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .cpuid import CPUID_ADDRESS, decode_cpuid
-from .models import CPUID
+from .arch.arm.cortex_m import CPUID_ADDRESS, CortexMTargetDescription, decode_cpuid
 from .target_memory import TargetMemoryReader, TargetReadError
 
 CONSOLE = Console(force_terminal=True)
@@ -348,7 +347,7 @@ class FaultInfoCmd(gdb.Command):
         except TargetReadError as error:
             raise gdb.GdbError(str(error)) from error
 
-        cpuid: CPUID | None = None
+        cpuid: CortexMTargetDescription | None = None
         try:
             cpuid = decode_cpuid(reader.read_uint32(CPUID_ADDRESS))
         except (TargetReadError, ValueError):
@@ -423,7 +422,7 @@ class FaultInfoCmd(gdb.Command):
 
     def _render_report(
         self,
-        cpuid: CPUID | None,
+        cpuid: CortexMTargetDescription | None,
         ipsr: int,
         pc: int | None,
         lr: int | None,
@@ -473,7 +472,7 @@ class FaultInfoCmd(gdb.Command):
 
     def _render_overview(
         self,
-        cpuid: CPUID | None,
+        cpuid: CortexMTargetDescription | None,
         ipsr: int,
         pc: int | None,
         lr: int | None,
@@ -505,7 +504,8 @@ class FaultInfoCmd(gdb.Command):
 
         if cpuid is not None:
             table.add_row(
-                "Target Core", f"{cpuid.core} ({cpuid.rnp_revision}) - {cpuid.implementer_name}"
+                "Target Core",
+                f"{cpuid.core_name} ({cpuid.rnp_revision}) - {cpuid.implementer_name}",
             )
         else:
             table.add_row("Target Core", "Generic Cortex-M")

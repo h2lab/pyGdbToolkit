@@ -133,6 +133,13 @@ class CortexMTargetDescription(ArmTargetDescription):
         """Return the standard Arm rNp revision notation."""
         return f"r{self.variant}p{self.patch}"
 
+    @property
+    def implementer_name(self) -> str:
+        """Return the output-compatible CPUID implementer display name."""
+        if self.implementer == ARM_IMPLEMENTER:
+            return "Arm"
+        return f"Unknown (0x{self.implementer:02X})"
+
 
 _BASELINE_SCB = (
     ScbRegister.CPUID,

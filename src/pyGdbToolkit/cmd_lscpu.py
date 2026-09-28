@@ -11,10 +11,10 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from .cpuid import CPUID_ADDRESS, decode_cpuid
-from .coresight import RomTableDiscovery, discover_rom_tables
-from .models import DeviceReport, FieldValue
-from .providers import DEFAULT_PROVIDER_REGISTRY
+from .arch.arm.coresight import RomTableDiscovery, discover_rom_tables
+from .arch.arm.cortex_m import CPUID_ADDRESS, decode_cpuid
+from .arch.arm.models import DeviceReport, FieldValue
+from .arch.arm.providers import DEFAULT_PROVIDER_REGISTRY
 from .target_memory import TargetMemoryReader, TargetReadError
 
 CONSOLE = Console(force_terminal=True)
@@ -72,9 +72,9 @@ def render_report(report: DeviceReport) -> None:
     )
     table.add_column("Property", style="bold", no_wrap=True)
     table.add_column("Value")
-    table.add_row("Core type", report.cpuid.core)
-    table.add_row("Core revision", report.cpuid.rnp_revision)
-    table.add_row("Implementer", report.cpuid.implementer_name)
+    table.add_row("Core type", report.target.core_name)
+    table.add_row("Core revision", report.target.rnp_revision)
+    table.add_row("Implementer", report.target.implementer_name)
     table.add_row(
         "MCU ROM JEP106 identity",
         _field_text(_rom_jep106_field(report.discovery.mcu_rom)),

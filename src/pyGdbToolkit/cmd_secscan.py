@@ -20,10 +20,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .coresight import discover_rom_tables
-from .cpuid import CPUID_ADDRESS, decode_cpuid
-from .models import CPUID
-from .providers import DEFAULT_PROVIDER_REGISTRY
+from .arch.arm.coresight import discover_rom_tables
+from .arch.arm.cortex_m import CPUID_ADDRESS, CortexMTargetDescription, decode_cpuid
+from .arch.arm.providers import DEFAULT_PROVIDER_REGISTRY
 from .target_memory import TargetMemoryReader, TargetReadError
 
 CONSOLE = Console(force_terminal=True)
@@ -246,14 +245,14 @@ class _FindingCollector:
         self.findings.append(SecscanFinding(category, severity, title, detail))
 
 
-def _is_armv8m(cpuid: CPUID) -> bool:
+def _is_armv8m(cpuid: CortexMTargetDescription) -> bool:
     """Return whether the decoded core implements the ARMv8-M architecture."""
-    return cpuid.core in _V8M_CORES
+    return cpuid.core_name in _V8M_CORES
 
 
-def _has_configurable_faults(cpuid: CPUID) -> bool:
+def _has_configurable_faults(cpuid: CortexMTargetDescription) -> bool:
     """Return whether the core implements MemManage/BusFault/UsageFault handlers."""
-    return cpuid.core not in _BASELINE_CORES
+    return cpuid.core_name not in _BASELINE_CORES
 
 
 def _read_register_any(frame: gdb.Frame, names: tuple[str, ...]) -> int | None:
@@ -337,7 +336,7 @@ def _overlaps(a: MpuRegionInfo, b: MpuRegionInfo) -> bool:
 def _audit_mpu(
     reader: TargetMemoryReader,
     frame: gdb.Frame,
-    cpuid: CPUID,
+    cpuid: CortexMTargetDescription,
     collector: _FindingCollector,
 ) -> None:
     """Audit MPU presence, region validity, W^X, and stack/RAM/Flash protections."""
@@ -492,7 +491,7 @@ def _audit_mpu(
 
 
 def _audit_cmsis_core(
-    reader: TargetMemoryReader, cpuid: CPUID, collector: _FindingCollector
+    reader: TargetMemoryReader, cpuid: CortexMTargetDescription, collector: _FindingCollector
 ) -> None:
     """Audit generic CMSIS core security configuration (SHCSR, CCR, DHCSR)."""
     category = "CMSIS Core Security"
@@ -527,7 +526,7 @@ def _audit_cmsis_core(
             category,
             "INFO",
             "No configurable fault handlers on this core",
-            f"{cpuid.core} only implements HardFault.",
+            f"{cpuid.core_name} only implements HardFault.",
         )
 
     ccr = reader.read_uint32(SCB_CCR)
@@ -664,7 +663,11 @@ def _audit_trustzone(reader: TargetMemoryReader, collector: _FindingCollector) -
             )
 
 
-def _audit_vtor(reader: TargetMemoryReader, cpuid: CPUID, collector: _FindingCollector) -> None:
+def _audit_vtor(
+    reader: TargetMemoryReader,
+    cpuid: CortexMTargetDescription,
+    collector: _FindingCollector,
+) -> None:
     """Audit the vector table via VTOR and check critical fault handlers exist."""
     category = "Fault Handlers (VTOR)"
     vtor = reader.read_uint32(SCB_VTOR)
@@ -711,7 +714,11 @@ def _audit_vtor(reader: TargetMemoryReader, cpuid: CPUID, collector: _FindingCol
             )
 
 
-def _audit_stack_limits(frame: gdb.Frame, cpuid: CPUID, collector: _FindingCollector) -> None:
+def _audit_stack_limits(
+    frame: gdb.Frame,
+    cpuid: CortexMTargetDescription,
+    collector: _FindingCollector,
+) -> None:
     """Audit the ARMv8-M MSPLIM/PSPLIM stack-limit registers."""
     if not _is_armv8m(cpuid):
         return
@@ -757,7 +764,11 @@ def _audit_stack_limits(frame: gdb.Frame, cpuid: CPUID, collector: _FindingColle
             )
 
 
-def _audit_pacbti(frame: gdb.Frame, cpuid: CPUID, collector: _FindingCollector) -> None:
+def _audit_pacbti(
+    frame: gdb.Frame,
+    cpuid: CortexMTargetDescription,
+    collector: _FindingCollector,
+) -> None:
     """Audit ARMv8.1-M Pointer Authentication (PAC) and Branch Target Identification (BTI).
 
     PAC/BTI have no runtime enable bit: BTI landing pads are always active when the
@@ -766,7 +777,7 @@ def _audit_pacbti(frame: gdb.Frame, cpuid: CPUID, collector: _FindingCollector) 
     therefore best-effort: it only reports what can be observed through the optional
     PAC key registers exposed by GDB's target description.
     """
-    if cpuid.core not in _V81M_CORES:
+    if cpuid.core_name not in _V81M_CORES:
         return
 
     category = "PACBTI (ARMv8.1-M)"
@@ -777,7 +788,7 @@ def _audit_pacbti(frame: gdb.Frame, cpuid: CPUID, collector: _FindingCollector) 
             category,
             "INFO",
             "PAC/BTI status cannot be determined",
-            f"{cpuid.core} may implement the optional Armv8.1-M PACBTI extension, but GDB "
+            f"{cpuid.core_name} may implement the optional Armv8.1-M PACBTI extension, but GDB "
             "does not expose the PAC_KEY_P_* registers for this target; the extension may "
             "not be implemented, or the security state/target description hides it.",
         )
@@ -905,7 +916,7 @@ def run_audit() -> SecscanReport:
         device_report.product_line.display() if device_report.product_line.is_available else None
     )
     return SecscanReport(
-        core=cpuid.core,
+        core=cpuid.core_name,
         vendor=device_report.vendor,
         device_name=device_name,
         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
