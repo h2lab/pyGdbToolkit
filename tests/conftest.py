@@ -50,6 +50,7 @@ _gdb.error = FakeGdbError
 _gdb.MemoryError = FakeGdbError
 _gdb.Inferior = object
 _gdb._inferior = None
+_gdb._frame = None
 
 
 def _selected_inferior() -> Any:
@@ -60,6 +61,16 @@ def _selected_inferior() -> Any:
 
 
 _gdb.selected_inferior = _selected_inferior
+
+
+def _selected_frame() -> Any:
+    """Return the selected fake frame."""
+    if _gdb._frame is None:
+        raise FakeGdbError("no frame selected")
+    return _gdb._frame
+
+
+_gdb.selected_frame = _selected_frame
 _gdb.string_to_argv = split
 sys.modules["gdb"] = _gdb
 
@@ -68,9 +79,11 @@ sys.modules["gdb"] = _gdb
 def reset_fake_gdb() -> Iterator[None]:
     """Reset mock GDB state between tests."""
     _gdb._inferior = None
+    _gdb._frame = None
     FakeCommand.registrations.clear()
     yield
     _gdb._inferior = None
+    _gdb._frame = None
 
 
 @pytest.fixture

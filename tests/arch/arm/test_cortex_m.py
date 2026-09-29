@@ -111,8 +111,8 @@ def test_known_part_reads_its_scb_once_and_keeps_per_register_failures() -> None
     assert bfar.unavailable_reason == ("could not read 4 byte(s) at 0xE000ED38: access denied")
 
 
-def test_cortex_m23_avoids_mainline_fault_registers() -> None:
-    """The baseline Cortex-M23 map excludes mainline configurable-fault registers."""
+def test_cortex_m23_keeps_secure_fault_registers_without_mainline_fault_registers() -> None:
+    """The baseline Cortex-M23 maps Security Extension faults, not mainline fault registers."""
     target = decode_cpuid(_cpuid(CortexMPart.M23))
     assert target.core is not None
     values = {
@@ -124,6 +124,10 @@ def test_cortex_m23_avoids_mainline_fault_registers() -> None:
     scb = read_scb(reader, target, cpuid_value=target.raw_cpuid)
 
     assert scb.get("CFSR") is None
+    sfsr = scb.get("SFSR")
+    sfar = scb.get("SFAR")
+    assert sfsr is not None and sfsr.address == 0xE000EDE4
+    assert sfar is not None and sfar.address == 0xE000EDE8
     assert SCB_BASE_ADDRESS + 0x308 not in reader.calls
     assert SCB_BASE_ADDRESS + ScbRegister.CFSR not in reader.calls
 

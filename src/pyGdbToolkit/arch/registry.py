@@ -31,8 +31,13 @@ class ArchitectureRegistry:
         ProbeResult
             The first detected target or an explicit unsupported result.
         """
+        access_error: ProbeResult | None = None
         for probe in self._probes:
             result = probe.probe(reader)
             if result.is_available:
                 return result
+            if result.access_error and access_error is None:
+                access_error = result
+        if access_error is not None:
+            return access_error
         return ProbeResult.unavailable("no registered architecture probe recognized the target")

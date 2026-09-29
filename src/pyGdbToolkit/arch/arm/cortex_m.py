@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum
+from enum import IntEnum, StrEnum, unique
 
 from ...target_memory import TargetMemory, TargetReadError
 from ..base import Architecture, ProbeResult, RegisterValue, SystemRegisterSet, TargetDescription
@@ -19,6 +19,7 @@ CPUID_ADDRESS = SCB_BASE_ADDRESS
 ARM_IMPLEMENTER = 0x41
 
 
+@unique
 class CortexMPart(IntEnum):
     """Architected Cortex-M CPUID part numbers."""
 
@@ -36,6 +37,7 @@ class CortexMPart(IntEnum):
     M52 = 0xD32
 
 
+@unique
 class CortexMArchitecture(StrEnum):
     """Cortex-M architecture versions represented by the core catalog."""
 
@@ -47,6 +49,7 @@ class CortexMArchitecture(StrEnum):
     ARMV8_1_M_MAINLINE = "Armv8.1-M Mainline"
 
 
+@unique
 class CortexMFeature(StrEnum):
     """Architectural feature categories used to describe Cortex-M cores."""
 
@@ -58,6 +61,7 @@ class CortexMFeature(StrEnum):
     RAS_FAULT_STATUS = "ras-fault-status"
 
 
+@unique
 class ScbRegister(IntEnum):
     """System Control Block register offsets from ``SCB_BASE_ADDRESS``."""
 
@@ -152,6 +156,10 @@ _BASELINE_SCB = (
     ScbRegister.SHCSR,
 )
 _BASELINE_WITH_VTOR_SCB = _BASELINE_SCB[:2] + (ScbRegister.VTOR,) + _BASELINE_SCB[2:]
+_BASELINE_SECURITY_SCB = _BASELINE_WITH_VTOR_SCB + (
+    ScbRegister.SFSR,
+    ScbRegister.SFAR,
+)
 _MAINLINE_SCB = (
     ScbRegister.CPUID,
     ScbRegister.ICSR,
@@ -278,7 +286,7 @@ CORTEX_M_CORES: dict[CortexMPart, CortexMCoreDescription] = {
         "Cortex-M23",
         CortexMArchitecture.ARMV8_M_BASELINE,
         frozenset({CortexMFeature.SECURITY_EXTENSION}),
-        _BASELINE_WITH_VTOR_SCB,
+        _BASELINE_SECURITY_SCB,
         PMSA_V8_MPU,
         ARMV8_M_SAU,
     ),
@@ -466,7 +474,9 @@ class CortexMProbe:
         try:
             target = decode_cpuid(reader.read_uint32(CPUID_ADDRESS))
         except TargetReadError as error:
-            return ProbeResult.unavailable(f"could not read Cortex-M CPUID: {error}")
+            return ProbeResult.unavailable(
+                f"could not read Cortex-M CPUID: {error}", access_error=True
+            )
         if target.implementer != ARM_IMPLEMENTER or target.cpuid_architecture not in (0xC, 0xF):
             return ProbeResult.unavailable("CPUID does not identify an Arm Cortex-M architecture")
         if target.core is None:

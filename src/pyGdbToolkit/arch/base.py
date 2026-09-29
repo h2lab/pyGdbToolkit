@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, unique
 from typing import Protocol
 
 from ..target_memory import TargetMemory
 
 
+@unique
 class Architecture(StrEnum):
     """Architectures supported by the target-description registry."""
 
@@ -99,11 +100,14 @@ class ProbeResult:
 
     target: TargetDescription | None = None
     unavailable_reason: str | None = None
+    access_error: bool = False
 
     def __post_init__(self) -> None:
         """Validate that a probe result has exactly one state."""
         if (self.target is None) == (self.unavailable_reason is None):
             raise ValueError("a probe result must contain a target or an unavailable reason")
+        if self.target is not None and self.access_error:
+            raise ValueError("a successful probe result cannot contain an access error")
 
     @classmethod
     def detected(cls, target: TargetDescription) -> ProbeResult:
@@ -111,9 +115,9 @@ class ProbeResult:
         return cls(target=target)
 
     @classmethod
-    def unavailable(cls, reason: str) -> ProbeResult:
+    def unavailable(cls, reason: str, *, access_error: bool = False) -> ProbeResult:
         """Create an unsuccessful probe result."""
-        return cls(unavailable_reason=reason)
+        return cls(unavailable_reason=reason, access_error=access_error)
 
     @property
     def is_available(self) -> bool:

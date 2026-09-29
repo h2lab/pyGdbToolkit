@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import gdb
 
@@ -26,6 +26,7 @@ class TargetMemory(Protocol):
         ...
 
 
+@runtime_checkable
 class WritableTargetMemory(TargetMemory, Protocol):
     """Target-memory operations that can also write 32-bit register values."""
 

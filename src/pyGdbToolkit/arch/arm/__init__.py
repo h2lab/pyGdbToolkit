@@ -10,7 +10,9 @@ from .cortex_m import (
     CortexMTargetDescription,
     decode_cpuid,
     inspect_cortex_m,
+    read_scb,
 )
+from .fault import CortexMFaultCollector, StackedFrame, read_stacked_frame
 from .models import DeviceReport, FieldValue
 from .mpu import (
     MpuArchitecture,
@@ -20,7 +22,16 @@ from .mpu import (
     MpuRegionResult,
     dump_mpu_regions,
 )
-from .sau import SauAttribution, SauDescription, SauDump, SauRegion, SauStatus, dump_sau_regions
+from .sau import (
+    SauAttribution,
+    SauDescription,
+    SauDump,
+    SauRegion,
+    SauStatus,
+    dump_sau_regions,
+    read_sau_status,
+)
+from .security import CortexMSecurityAuditor, CortexMRegisterReader, GdbCortexMRegisterReader
 from .target import ArmProfile, ArmTargetDescription
 from .providers import DEFAULT_PROVIDER_REGISTRY, DeviceProvider, ProviderRegistry
 
@@ -30,11 +41,15 @@ __all__ = [
     "CPUID_ADDRESS",
     "CoreSightDiscovery",
     "CortexMProbe",
+    "CortexMFaultCollector",
+    "CortexMRegisterReader",
+    "CortexMSecurityAuditor",
     "CortexMTargetDescription",
     "DEFAULT_PROVIDER_REGISTRY",
     "DeviceProvider",
     "DeviceReport",
     "FieldValue",
+    "GdbCortexMRegisterReader",
     "MpuArchitecture",
     "MpuDescription",
     "MpuDump",
@@ -47,9 +62,13 @@ __all__ = [
     "SauDump",
     "SauRegion",
     "SauStatus",
+    "StackedFrame",
     "decode_cpuid",
     "discover_rom_tables",
     "dump_mpu_regions",
     "dump_sau_regions",
     "inspect_cortex_m",
+    "read_sau_status",
+    "read_scb",
+    "read_stacked_frame",
 ]

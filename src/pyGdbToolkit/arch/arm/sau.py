@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum
+from enum import IntEnum, StrEnum, unique
 from typing import TYPE_CHECKING
 
 from ...target_memory import TargetMemory, TargetReadError, TargetWriteError, WritableTargetMemory
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 SAU_BASE_ADDRESS = 0xE000EDD0
 
 
+@unique
 class SauRegister(IntEnum):
     """SAU register offsets from ``SAU_BASE_ADDRESS``."""
 
@@ -29,6 +30,7 @@ class SauRegister(IntEnum):
     RLAR = 0x010
 
 
+@unique
 class SauDefaultSecurity(StrEnum):
     """Security attribution outside enabled SAU regions."""
 
@@ -36,6 +38,7 @@ class SauDefaultSecurity(StrEnum):
     NON_SECURE = "non-secure"
 
 
+@unique
 class SauAttribution(StrEnum):
     """Security attribution selected by one enabled SAU region."""
 
@@ -168,9 +171,25 @@ def read_sau_status(reader: TargetMemory, target: CortexMTargetDescription) -> S
     )
 
 
-def dump_sau_regions(reader: WritableTargetMemory, target: CortexMTargetDescription) -> SauDump:
-    """Read and decode SAU regions, restoring the target's original selector."""
-    status = read_sau_status(reader, target)
+def dump_sau_regions(
+    reader: WritableTargetMemory,
+    target: CortexMTargetDescription,
+    status: SauStatus | None = None,
+) -> SauDump:
+    """Read and decode SAU regions, restoring the target's original selector.
+
+    Parameters
+    ----------
+    reader
+        Target-memory reader and writer used for SAU registers.
+    target
+        Known Cortex-M target description returned by :func:`decode_cpuid`.
+    status
+        Optional previously captured status. Reusing it avoids rereading the
+        mutable SAU control registers before selecting regions.
+    """
+    if status is None:
+        status = read_sau_status(reader, target)
     if not status.is_available or status.region_count == 0:
         return SauDump(status, ())
 

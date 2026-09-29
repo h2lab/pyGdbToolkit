@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""Portable architecture detection and system-register inspection APIs."""
+"""Portable architecture detection, inspection, and diagnostic APIs."""
 
 from .arm.probe import DEFAULT_ARM_PROBES
+from .arm.fault import CortexMFaultCollector
+from .arm.security import CortexMSecurityAuditor
 from .base import (
     Architecture,
     ArchitectureProbe,
@@ -12,15 +14,64 @@ from .base import (
     SystemRegisterSet,
     TargetDescription,
 )
+from .diagnostics import (
+    ArchitectureDiagnosticRuntime,
+    DiagnosticField,
+    DiagnosticFinding,
+    DiagnosticContent,
+    DiagnosticPanel,
+    DiagnosticReport,
+    DiagnosticRegisterReader,
+    DiagnosticResult,
+    DiagnosticRuntimeAccess,
+    DiagnosticRuntime,
+    DiagnosticSection,
+    DiagnosticService,
+    DiagnosticServiceName,
+    DiagnosticServiceRegistry,
+    DiagnosticSeverity,
+    DiagnosticSymbolResolver,
+    DiagnosticTable,
+    DiagnosticTableRow,
+    DiagnosticValue,
+)
 from .registry import ArchitectureRegistry
 
 DEFAULT_ARCHITECTURE_REGISTRY = ArchitectureRegistry(DEFAULT_ARM_PROBES)
+DEFAULT_DIAGNOSTIC_SERVICE_REGISTRY = DiagnosticServiceRegistry(
+    (CortexMSecurityAuditor(), CortexMFaultCollector())
+)
+DEFAULT_DIAGNOSTIC_RUNTIME: DiagnosticRuntime = ArchitectureDiagnosticRuntime(
+    DEFAULT_ARCHITECTURE_REGISTRY,
+    DEFAULT_DIAGNOSTIC_SERVICE_REGISTRY,
+)
 
 __all__ = [
     "Architecture",
+    "ArchitectureDiagnosticRuntime",
     "ArchitectureProbe",
     "ArchitectureRegistry",
     "DEFAULT_ARCHITECTURE_REGISTRY",
+    "DEFAULT_DIAGNOSTIC_RUNTIME",
+    "DEFAULT_DIAGNOSTIC_SERVICE_REGISTRY",
+    "DiagnosticField",
+    "DiagnosticFinding",
+    "DiagnosticContent",
+    "DiagnosticPanel",
+    "DiagnosticReport",
+    "DiagnosticRegisterReader",
+    "DiagnosticResult",
+    "DiagnosticRuntimeAccess",
+    "DiagnosticRuntime",
+    "DiagnosticSection",
+    "DiagnosticService",
+    "DiagnosticServiceName",
+    "DiagnosticServiceRegistry",
+    "DiagnosticSeverity",
+    "DiagnosticSymbolResolver",
+    "DiagnosticTable",
+    "DiagnosticTableRow",
+    "DiagnosticValue",
     "ProbeResult",
     "RegisterValue",
     "SystemRegisterSet",

@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, unique
 
 from ..base import Architecture, TargetDescription
 
 
+@unique
 class ArmProfile(StrEnum):
     """Architectural execution profiles implemented by Arm cores."""
 

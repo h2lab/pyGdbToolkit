@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum
+from enum import IntEnum, StrEnum, unique
 from typing import TYPE_CHECKING
 
 from ...target_memory import TargetReadError, TargetWriteError, WritableTargetMemory
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 MPU_BASE_ADDRESS = 0xE000ED90
 
 
+@unique
 class MpuArchitecture(StrEnum):
     """Protected Memory System Architecture versions supported by this module."""
 
@@ -26,6 +27,7 @@ class MpuArchitecture(StrEnum):
     PMSA_V8 = "PMSAv8"
 
 
+@unique
 class MpuCommonRegister(IntEnum):
     """MPU register offsets shared by PMSAv7 and PMSAv8."""
 
@@ -35,12 +37,14 @@ class MpuCommonRegister(IntEnum):
     RBAR = 0x00C
 
 
+@unique
 class MpuV7Register(IntEnum):
     """PMSAv7-specific MPU register offsets."""
 
     RASR = 0x010
 
 
+@unique
 class MpuV8Register(IntEnum):
     """PMSAv8-specific MPU register offsets."""
 
@@ -55,6 +59,7 @@ class MpuV8Register(IntEnum):
     MAIR1 = 0x034
 
 
+@unique
 class MpuAccessPermission(StrEnum):
     """Normalized MPU access permissions."""
 
@@ -67,6 +72,7 @@ class MpuAccessPermission(StrEnum):
     RESERVED = "reserved"
 
 
+@unique
 class MpuMemoryType(StrEnum):
     """Memory types represented by PMSA MPU attributes."""
 
