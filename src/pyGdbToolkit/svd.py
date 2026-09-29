@@ -24,10 +24,10 @@ import xml.etree.ElementTree as ET
 
 import requests
 
-from .coresight import discover_rom_tables
-from .cpuid import CPUID_ADDRESS, decode_cpuid
-from .models import CPUID, DeviceReport
-from .providers import DEFAULT_PROVIDER_REGISTRY
+from .arch.arm.coresight import discover_rom_tables
+from .arch.arm.cortex_m import CPUID_ADDRESS, CortexMTargetDescription, decode_cpuid
+from .arch.arm.models import DeviceReport
+from .arch.arm.providers import DEFAULT_PROVIDER_REGISTRY
 from .target_memory import TargetMemory, TargetMemoryReader, TargetReadError
 
 CMSIS_SVD_DATA_RAW_URL = "https://raw.githubusercontent.com/cmsis-svd/cmsis-svd-data/main/data"
@@ -1118,7 +1118,7 @@ def load_svd_dict_by_name(
 
 def get_svd_for_target(
     reader: TargetMemory | None = None,
-    cpuid: CPUID | None = None,
+    cpuid: CortexMTargetDescription | None = None,
     cache_dir: Path | None = None,
     force_download: bool = False,
 ) -> SvdDevice:
@@ -1128,7 +1128,7 @@ def get_svd_for_target(
     ----------
     reader : TargetMemory | None
         Typed reader for target memory. When None, TargetMemoryReader is used.
-    cpuid : CPUID | None
+    cpuid : CortexMTargetDescription | None
         Optional pre-decoded CPUID. When None, it is read from target memory.
     cache_dir : Path | None
         Optional custom cache directory.
@@ -1163,7 +1163,7 @@ def get_svd_for_target(
 
 def load_svd_dict_for_target(
     reader: TargetMemory | None = None,
-    cpuid: CPUID | None = None,
+    cpuid: CortexMTargetDescription | None = None,
     cache_dir: Path | None = None,
     force_download: bool = False,
 ) -> dict[str, Any]:
@@ -1173,7 +1173,7 @@ def load_svd_dict_for_target(
     ----------
     reader : TargetMemory | None
         Typed reader for target memory. When None, TargetMemoryReader is used.
-    cpuid : CPUID | None
+    cpuid : CortexMTargetDescription | None
         Optional pre-decoded CPUID.
     cache_dir : Path | None
         Optional custom cache directory.

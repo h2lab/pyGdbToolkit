@@ -1,32 +1,14 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""Immutable models used by CPU decoders and target providers."""
+"""Arm target-report models shared by device providers and renderers."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from .coresight import CoreSightDiscovery
-
-
-@dataclass(frozen=True)
-class CPUID:
-    """Fields decoded from the Arm CPUID register."""
-
-    raw: int
-    implementer: int
-    implementer_name: str
-    variant: int
-    architecture: int
-    part_number: int
-    revision: int
-    core: str
-
-    @property
-    def rnp_revision(self) -> str:
-        """Return the standard Arm rNp CPU-revision notation."""
-        return f"r{self.variant}p{self.revision}"
+from .cortex_m import CortexMTargetDescription
 
 
 @dataclass(frozen=True)
@@ -43,34 +25,12 @@ class FieldValue:
 
     @classmethod
     def known(cls, value: str) -> FieldValue:
-        """Create a known report field.
-
-        Parameters
-        ----------
-        value
-            The text to display.
-
-        Returns
-        -------
-        FieldValue
-            A field containing ``value``.
-        """
+        """Create a known report field."""
         return cls(value=value)
 
     @classmethod
     def unavailable(cls, reason: str) -> FieldValue:
-        """Create an unavailable report field.
-
-        Parameters
-        ----------
-        reason
-            The reason no trustworthy value is available.
-
-        Returns
-        -------
-        FieldValue
-            A field with an explicit unavailable-state reason.
-        """
+        """Create a field with an explicit unavailable-state reason."""
         return cls(unavailable_reason=reason)
 
     @property
@@ -87,9 +47,9 @@ class FieldValue:
 
 @dataclass(frozen=True)
 class DeviceReport:
-    """CPU and optional vendor device information for the ``lscpu`` report."""
+    """Arm CPU and optional vendor device information for ``lscpu``."""
 
-    cpuid: CPUID
+    target: CortexMTargetDescription
     discovery: CoreSightDiscovery
     vendor: str
     product_line: FieldValue
