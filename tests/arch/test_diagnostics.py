@@ -23,7 +23,7 @@ from pyGdbToolkit.arch import (
     ProbeResult,
     TargetDescription,
 )
-from pyGdbToolkit.arch.arm import CortexMSecurityAuditor
+from pyGdbToolkit.arch.arm.security import CortexMSecurityAuditor
 from pyGdbToolkit.arch.base import SystemRegisterSet
 from pyGdbToolkit.target_memory import TargetMemory, TargetReadError
 

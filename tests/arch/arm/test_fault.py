@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 import pytest
 
 from pyGdbToolkit.arch import DiagnosticRuntimeAccess, DiagnosticServiceName
-from pyGdbToolkit.arch.arm import CortexMFaultCollector, decode_cpuid, read_stacked_frame
-from pyGdbToolkit.arch.arm.cortex_m import CortexMPart
+from pyGdbToolkit.arch.arm.cortex_m import CortexMPart, decode_cpuid
+from pyGdbToolkit.arch.arm.fault import CortexMFaultCollector, read_stacked_frame
 from pyGdbToolkit.target_memory import TargetReadError
 
 

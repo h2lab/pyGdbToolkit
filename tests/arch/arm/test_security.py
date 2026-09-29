@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from pyGdbToolkit.arch.arm import CortexMSecurityAuditor, decode_cpuid
+from pyGdbToolkit.arch.arm.cortex_m import decode_cpuid
 from pyGdbToolkit.arch.arm.models import DeviceReport, FieldValue
+from pyGdbToolkit.arch.arm.security import CortexMSecurityAuditor
 from pyGdbToolkit.target_memory import TargetReadError
 
 

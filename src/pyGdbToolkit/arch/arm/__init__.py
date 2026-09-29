@@ -1,74 +1,17 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""Arm target-description, CoreSight, and device-provider support."""
+"""Curated Arm target-description and probe integration surface.
 
-from .coresight import CoreSightDiscovery, RomTableDiscovery, discover_rom_tables
-from .cortex_m import (
-    CPUID_ADDRESS,
-    CortexMProbe,
-    CortexMTargetDescription,
-    decode_cpuid,
-    inspect_cortex_m,
-    read_scb,
-)
-from .fault import CortexMFaultCollector, StackedFrame, read_stacked_frame
-from .models import DeviceReport, FieldValue
-from .mpu import (
-    MpuArchitecture,
-    MpuDescription,
-    MpuDump,
-    MpuRegion,
-    MpuRegionResult,
-    dump_mpu_regions,
-)
-from .sau import (
-    SauAttribution,
-    SauDescription,
-    SauDump,
-    SauRegion,
-    SauStatus,
-    dump_sau_regions,
-    read_sau_status,
-)
-from .security import CortexMSecurityAuditor, CortexMRegisterReader, GdbCortexMRegisterReader
+Import Arm implementation APIs from their defining submodules, such as
+``arch.arm.cortex_m`` or ``arch.arm.mpu``.
+"""
+
 from .target import ArmProfile, ArmTargetDescription
-from .providers import DEFAULT_PROVIDER_REGISTRY, DeviceProvider, ProviderRegistry
+from .cortex_m import CortexMProbe
 
 __all__ = [
     "ArmProfile",
     "ArmTargetDescription",
-    "CPUID_ADDRESS",
-    "CoreSightDiscovery",
     "CortexMProbe",
-    "CortexMFaultCollector",
-    "CortexMRegisterReader",
-    "CortexMSecurityAuditor",
-    "CortexMTargetDescription",
-    "DEFAULT_PROVIDER_REGISTRY",
-    "DeviceProvider",
-    "DeviceReport",
-    "FieldValue",
-    "GdbCortexMRegisterReader",
-    "MpuArchitecture",
-    "MpuDescription",
-    "MpuDump",
-    "MpuRegion",
-    "MpuRegionResult",
-    "ProviderRegistry",
-    "RomTableDiscovery",
-    "SauAttribution",
-    "SauDescription",
-    "SauDump",
-    "SauRegion",
-    "SauStatus",
-    "StackedFrame",
-    "decode_cpuid",
-    "discover_rom_tables",
-    "dump_mpu_regions",
-    "dump_sau_regions",
-    "inspect_cortex_m",
-    "read_sau_status",
-    "read_scb",
-    "read_stacked_frame",
 ]
