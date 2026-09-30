@@ -137,6 +137,71 @@ def test_known_ocds_use_passive_listener_readiness() -> None:
     assert _ocd_listener_message("vendor-ocd", 43123) is None
 
 
+def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path: Path) -> None:
+    """The target dashboard gets state and Access Port data from structured sources."""
+
+    class TargetMiSession(FakeMiSession):
+        async def execute(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("mi", command, timeout))
+            return MiResult(
+                "done",
+                'done,threads=[{id="1",state="stopped"}],current-thread-id="1"',
+                (),
+            )
+
+        async def console(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("console", command, timeout))
+            return MiResult("done", "done", ("Core 0 (Cortex-M33) is selected\n",))
+
+    server = object.__new__(PyGdbServer)
+    server.logs = LogStore(tmp_path)
+    server.mi = TargetMiSession()  # type: ignore[assignment]
+    server.logs.append("ocd", "stderr", "AHB5-AP#0 IDR = 0x14770015")
+
+    status = asyncio.run(server.target_status())
+
+    assert status == {
+        "state": "stopped",
+        "thread_id": "1",
+        "core": "0",
+        "access_port": "AHB5-AP#0",
+        "access_ports": ["AHB5-AP#0"],
+    }
+
+
+def test_svd_peripherals_returns_structured_device_metadata(tmp_path: Path) -> None:
+    """The SVD tree endpoint returns a JSON payload independent of Rich tables."""
+
+    class SvdMiSession(FakeMiSession):
+        async def console(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("console", command, timeout))
+            data = {
+                "device": "TestDevice",
+                "peripherals": [
+                    {
+                        "name": "GPIOA",
+                        "description": "GPIO port A",
+                        "base_address": 0x48000000,
+                        "registers": [],
+                    }
+                ],
+            }
+            return MiResult(
+                "done",
+                "done",
+                ("PYGDBSERVER_SVD_JSON:" + json.dumps(data),),
+            )
+
+    server = object.__new__(PyGdbServer)
+    server.mi = SvdMiSession()  # type: ignore[assignment]
+
+    result = asyncio.run(server.svd_peripherals())
+
+    assert result["loaded"] is True
+    assert result["device"] == "TestDevice"
+    assert result["peripherals"][0]["name"] == "GPIOA"
+
+
 @pytest.mark.skipif(shutil.which("gdb-multiarch") is None, reason="gdb-multiarch is unavailable")
 def test_real_gdb_mi_handshake_and_command(tmp_path: Path) -> None:
     """The MI reader recognizes GDB's prompt and routes a tokenized command."""
