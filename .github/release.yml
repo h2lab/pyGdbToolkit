@@ -14,18 +14,17 @@ changelog:
         - new-cmd
     - title: Tests and quality
       labels:
-        - test
+        - tests
         - quality
-    - title: Formal proof and correctness
-      labels:
-        - framac:contract
-        - framac:norte
     - title: Build system
       labels:
         - build
     - title: CI/CD evolutions and fixes
       labels:
         - ci-cd
+    - title: Enhancements and backends improvements
+      labels:
+        - enhancements
     - title: Other Changes
       labels:
         - "*"
