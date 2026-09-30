@@ -27,6 +27,14 @@ The toolkit reads target memory through GDB, so it works with the GDB target
 connection already used by the debugging session. It does not require a
 separate probe protocol or vendor IDE.
 
+## Remote server
+
+The separate `pyGdbServer` executable supervises the OCD and GDB processes,
+loads this toolkit, and exposes the debug session through JSON-RPC 2.0 over
+WebSocket. It supports toolkit commands, arbitrary GDB commands, OCD `monitor`
+commands, raw MI commands, and persistent/live process logs. See
+[`doc/pygdbserver.md`](doc/pygdbserver.md) for configuration and protocol details.
+
 ## Requirements
 
 - GDB with embedded Python support

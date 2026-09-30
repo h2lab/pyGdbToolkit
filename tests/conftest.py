@@ -38,6 +38,10 @@ class FakeBreakpoint:
         del kwargs
 
 
+class FakeFinishBreakpoint(FakeBreakpoint):
+    """Minimal finish breakpoint base class used by RTOS tracing."""
+
+
 _gdb = types.ModuleType("gdb")
 _gdb.COMMAND_USER = 0
 _gdb.COMPLETE_NONE = 0
@@ -45,6 +49,7 @@ _gdb.BP_WATCHPOINT = 0
 _gdb.WP_WRITE = 0
 _gdb.Command = FakeCommand
 _gdb.Breakpoint = FakeBreakpoint
+_gdb.FinishBreakpoint = FakeFinishBreakpoint
 _gdb.GdbError = FakeGdbError
 _gdb.error = FakeGdbError
 _gdb.MemoryError = FakeGdbError
