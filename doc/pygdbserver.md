@@ -177,3 +177,11 @@ Enter `help` in the dashboard prompt for the client commands, the available
 pyGdbToolkit commands and subcommands, and links to the GDB and configured OCD
 manuals. GDB CLI commands use `gdb <command>`; commands for the selected OCD use
 `monitor <command>`.
+
+`rtos load-project --from <path>` is executed by GDB on the **server**. The path
+is therefore resolved in the server's filesystem, not the client's. For a
+remote client, the project must be available to the server at that path, for
+example through a shared mount. This is intentional: pyGdbToolkit keeps the
+native GDB command usable unchanged in classic sessions that do not use
+pyGdbServer, rather than adding client-specific path translation or implicit
+project transfer.

@@ -372,6 +372,13 @@ def _help_text(ocd_executable: str) -> list[Text]:
         Text("  svd dump P|all FILE  Export a peripheral or device snapshot as JSON."),
         Text("  rtos list / select NAME  List or select a supported RTOS (Camelot)."),
         Text("  rtos load-project --from DIR  Load RTOS symbols and task metadata."),
+        Text("    DIR is resolved on the GDB server, not on this client."),
+        Text(
+            "    For remote use, that path must also exist on the server (or be identically mounted)."
+        ),
+        Text(
+            "    This is intentional: the same native command works in classic GDB without pyGdbServer."
+        ),
         Text("  rtos show              Show the RTOS project layout."),
         Text("  rtos show task NAME    Inspect a task's live context."),
         Text("  rtos showsched N       Trace the next N scheduler elections."),
