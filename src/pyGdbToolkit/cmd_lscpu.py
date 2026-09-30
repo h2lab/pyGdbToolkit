@@ -11,11 +11,10 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from .arch.arm.coresight import RomTableDiscovery, discover_rom_tables
-from .arch.arm.cortex_m import CPUID_ADDRESS, decode_cpuid
+from .arch.arm.coresight import RomTableDiscovery
 from .arch.arm.models import DeviceReport, FieldValue
-from .arch.arm.providers import DEFAULT_PROVIDER_REGISTRY
-from .target_memory import TargetMemoryReader, TargetReadError
+from .arch.arm.session_state import device_report
+from .target_memory import TargetReadError
 
 CONSOLE = Console(force_terminal=True)
 
@@ -47,13 +46,11 @@ class LscpuCmd(gdb.Command):
             raise gdb.GdbError("lscpu does not accept arguments")
 
         try:
-            reader = TargetMemoryReader()
-            cpuid = decode_cpuid(reader.read_uint32(CPUID_ADDRESS))
+            report = device_report()
         except TargetReadError as error:
             raise gdb.GdbError(str(error)) from error
 
-        discovery = discover_rom_tables(reader)
-        render_report(DEFAULT_PROVIDER_REGISTRY.inspect(reader, cpuid, discovery))
+        render_report(report)
 
 
 def render_report(report: DeviceReport) -> None:

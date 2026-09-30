@@ -12,28 +12,27 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .arch import (
-    DEFAULT_DIAGNOSTIC_RUNTIME,
     DiagnosticPanel,
     DiagnosticReport,
-    DiagnosticRuntime,
     DiagnosticServiceName,
     DiagnosticTable,
 )
 from .diagnostic_runtime import gdb_diagnostic_access
-from .target_memory import TargetMemoryReader, TargetReadError
+from .session import SESSION, ToolkitSession
+from .target_memory import TargetReadError
 
 CONSOLE = Console(force_terminal=True)
 
 
 def run_fault_analysis(
-    runtime: DiagnosticRuntime = DEFAULT_DIAGNOSTIC_RUNTIME,
+    session: ToolkitSession = SESSION,
 ) -> DiagnosticReport:
     """Run the registered fault-analysis service against the selected target.
 
     Parameters
     ----------
-    runtime
-        Portable diagnostic runtime used to identify and collect the target report.
+    session : ToolkitSession
+        Unified session providing target access and the portable diagnostic runtime.
 
     Returns
     -------
@@ -46,14 +45,12 @@ def run_fault_analysis(
         If target access fails or no service supports the selected target.
     """
     try:
-        reader = TargetMemoryReader()
+        result = session.diagnose(
+            DiagnosticServiceName.FAULT_ANALYSIS,
+            gdb_diagnostic_access(),
+        )
     except TargetReadError as error:
         raise gdb.GdbError(str(error)) from error
-    result = runtime.diagnose(
-        reader,
-        DiagnosticServiceName.FAULT_ANALYSIS,
-        gdb_diagnostic_access(),
-    )
     if result.report is not None:
         return result.report
     if result.access_error:
