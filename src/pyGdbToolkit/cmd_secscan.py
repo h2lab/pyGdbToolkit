@@ -20,14 +20,13 @@ from rich.table import Table
 from rich.text import Text
 
 from .arch import (
-    DEFAULT_DIAGNOSTIC_RUNTIME,
     DiagnosticReport,
-    DiagnosticRuntime,
     DiagnosticServiceName,
     DiagnosticSeverity,
 )
 from .diagnostic_runtime import gdb_diagnostic_access
-from .target_memory import TargetMemoryReader, TargetReadError
+from .session import SESSION, ToolkitSession
+from .target_memory import TargetReadError
 
 CONSOLE = Console(force_terminal=True)
 
@@ -110,14 +109,15 @@ _SEVERITY_NAMES = {
 }
 
 
-def run_audit(runtime: DiagnosticRuntime = DEFAULT_DIAGNOSTIC_RUNTIME) -> SecscanReport:
+def run_audit(session: ToolkitSession = SESSION) -> SecscanReport:
     """Run the registered security-audit service against the selected target.
 
     Parameters
     ----------
-    runtime
-        Portable architecture diagnostic runtime.  Dependency injection keeps
-        command tests independent of a live GDB target.
+    session : ToolkitSession
+        Unified session providing target access and the portable diagnostic
+        runtime.  Dependency injection keeps command tests independent of a
+        live GDB target.
 
     Returns
     -------
@@ -130,14 +130,12 @@ def run_audit(runtime: DiagnosticRuntime = DEFAULT_DIAGNOSTIC_RUNTIME) -> Secsca
         If no registered architecture can perform the requested audit.
     """
     try:
-        reader = TargetMemoryReader()
+        result = session.diagnose(
+            DiagnosticServiceName.SECURITY_AUDIT,
+            gdb_diagnostic_access(),
+        )
     except TargetReadError as error:
         raise gdb.GdbError(str(error)) from error
-    result = runtime.diagnose(
-        reader,
-        DiagnosticServiceName.SECURITY_AUDIT,
-        gdb_diagnostic_access(),
-    )
     if result.report is None:
         if result.access_error:
             raise gdb.GdbError(result.unavailable_reason or "target unavailable")

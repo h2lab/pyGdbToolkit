@@ -19,9 +19,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .arch.arm.coresight import discover_rom_tables
-from .arch.arm.cortex_m import CPUID_ADDRESS, decode_cpuid
-from .arch.arm.providers import DEFAULT_PROVIDER_REGISTRY
+from .arch.arm.session_state import device_report
+from .session import SESSION as TOOLKIT_SESSION
+from .session import SessionSlice
 from .svd import (
     SvdDevice,
     SvdError,
@@ -31,13 +31,13 @@ from .svd import (
     parse_svd_file,
     resolve_and_fetch_svd,
 )
-from .target_memory import TargetMemoryReader, TargetReadError
+from .target_memory import TargetMemory, TargetReadError
 
 CONSOLE = Console(force_terminal=True)
 
 
 @dataclass
-class SvdSessionState:
+class SvdSessionState(SessionSlice):
     """Encapsulate the active SVD device model and dictionary in the GDB session."""
 
     device: SvdDevice | None = None
@@ -45,8 +45,17 @@ class SvdSessionState:
     svd_path: Path | None = None
     watchpoints: list[SvdWatchpoint] = field(default_factory=list)
 
+    def reset(self) -> None:
+        """Drop the loaded SVD model and delete the registered register watchpoints."""
+        for watchpoint in self.watchpoints:
+            watchpoint.delete()
+        self.watchpoints.clear()
+        self.device = None
+        self.svd_dict = None
+        self.svd_path = None
 
-SESSION = SvdSessionState()
+
+SESSION = TOOLKIT_SESSION.state(SvdSessionState)
 
 
 def is_svd_loaded() -> bool:
@@ -99,12 +108,12 @@ def _parse_numeric_value(val_str: str) -> int:
     return int(val_str, 10)
 
 
-def _read_register_value(reader: TargetMemoryReader, base_address: int, reg: SvdRegister) -> int:
+def _read_register_value(reader: TargetMemory, base_address: int, reg: SvdRegister) -> int:
     """Read a register value from target memory.
 
     Parameters
     ----------
-    reader : TargetMemoryReader
+    reader : TargetMemory
         Target memory reader.
     base_address : int
         Base physical address of the peripheral.
@@ -170,7 +179,7 @@ class SvdWatchpoint(gdb.Breakpoint):
         """
         new_val = self.last_value
         try:
-            reader = TargetMemoryReader()
+            reader = TOOLKIT_SESSION.memory
             size_bytes = max(1, (self.register.size + 7) // 8)
             raw_bytes = reader.read_bytes(self.address, size_bytes)
             new_val = int.from_bytes(raw_bytes, byteorder="little")
@@ -347,14 +356,14 @@ def render_file_load_success(device: SvdDevice, file_path: Path) -> None:
     CONSOLE.print(table)
 
 
-def render_peripheral_state(peripheral: SvdPeripheral, reader: TargetMemoryReader) -> None:
+def render_peripheral_state(peripheral: SvdPeripheral, reader: TargetMemory) -> None:
     """Render the canonical status of all registers in a peripheral.
 
     Parameters
     ----------
     peripheral : SvdPeripheral
         Target peripheral model.
-    reader : TargetMemoryReader
+    reader : TargetMemory
         Memory reader instance.
     """
     title_text = f"Peripheral: {peripheral.name} @ 0x{peripheral.base_address:08X}" + (
@@ -662,11 +671,7 @@ class SvdCmd(gdb.Command):
             raise gdb.GdbError("'svd load' takes no arguments.")
 
         try:
-            reader = TargetMemoryReader()
-            raw_cpuid = reader.read_uint32(CPUID_ADDRESS)
-            cpuid = decode_cpuid(raw_cpuid)
-            discovery = discover_rom_tables(reader)
-            report = DEFAULT_PROVIDER_REGISTRY.inspect(reader, cpuid, discovery)
+            report = device_report()
         except TargetReadError as err:
             raise gdb.GdbError(f"Cannot read target memory: {err}") from err
 
@@ -769,7 +774,7 @@ class SvdCmd(gdb.Command):
             )
 
         try:
-            reader = TargetMemoryReader()
+            reader = TOOLKIT_SESSION.memory
         except TargetReadError as err:
             raise gdb.GdbError(f"Cannot access target memory: {err}") from err
 
@@ -863,7 +868,7 @@ class SvdCmd(gdb.Command):
             )
 
         try:
-            reader = TargetMemoryReader()
+            reader = TOOLKIT_SESSION.memory
             old_val = _read_register_value(reader, periph.base_address, reg)
         except TargetReadError:
             old_val = None
@@ -933,7 +938,7 @@ class SvdCmd(gdb.Command):
 
         reg_addr = periph.base_address + reg.address_offset
         try:
-            reader = TargetMemoryReader()
+            reader = TOOLKIT_SESSION.memory
             initial_val = _read_register_value(reader, periph.base_address, reg)
         except TargetReadError:
             initial_val = 0
@@ -996,7 +1001,7 @@ class SvdCmd(gdb.Command):
         out_path = Path(out_file_str).expanduser().resolve()
 
         try:
-            reader = TargetMemoryReader()
+            reader = TOOLKIT_SESSION.memory
         except TargetReadError as err:
             raise gdb.GdbError(f"Cannot access target memory: {err}") from err
 

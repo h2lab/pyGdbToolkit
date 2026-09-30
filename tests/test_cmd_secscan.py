@@ -22,6 +22,7 @@ from pyGdbToolkit.arch import (
     TargetDescription,
 )
 from pyGdbToolkit.cmd_secscan import SecscanFinding, SecscanReport, generate_html_report, run_audit
+from pyGdbToolkit.session import ToolkitSession
 from pyGdbToolkit.target_memory import TargetMemory
 
 
@@ -74,7 +75,7 @@ def test_run_audit_adapts_portable_report_without_architecture_branches(fake_gdb
     fake_gdb._inferior = object()
     runtime = _runtime()
 
-    report = run_audit(runtime)
+    report = run_audit(ToolkitSession(diagnostic_runtime=runtime))
 
     assert runtime.services == [DiagnosticServiceName.SECURITY_AUDIT]
     assert report.core == "RV32IM"
@@ -90,13 +91,13 @@ def test_run_audit_preserves_unsupported_target_error(fake_gdb: object) -> None:
     runtime = Runtime(DiagnosticResult.unavailable("not registered"), [])
 
     with pytest.raises(fake_gdb.GdbError, match="secscan only supports ARM Cortex-M targets"):
-        run_audit(runtime)
+        run_audit(ToolkitSession(diagnostic_runtime=runtime))
 
 
 def test_run_audit_preserves_target_reader_construction_error(fake_gdb: object) -> None:
     """Reader construction failures retain their detailed target-access error."""
     with pytest.raises(fake_gdb.GdbError, match="could not select inferior: no inferior selected"):
-        run_audit(_runtime())
+        run_audit(ToolkitSession(diagnostic_runtime=_runtime()))
 
 
 def test_run_audit_preserves_probe_access_error(fake_gdb: object) -> None:
@@ -110,7 +111,7 @@ def test_run_audit_preserves_probe_access_error(fake_gdb: object) -> None:
     )
 
     with pytest.raises(fake_gdb.GdbError, match="could not read Cortex-M CPUID: access denied"):
-        run_audit(runtime)
+        run_audit(ToolkitSession(diagnostic_runtime=runtime))
 
 
 def test_portable_adapter_preserves_json_schema_and_html_escaping() -> None:

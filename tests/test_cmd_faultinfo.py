@@ -21,6 +21,7 @@ from pyGdbToolkit.arch import (
     TargetDescription,
 )
 from pyGdbToolkit.cmd_faultinfo import FaultInfoCmd, render_report, run_fault_analysis
+from pyGdbToolkit.session import ToolkitSession
 from pyGdbToolkit.target_memory import TargetMemory
 
 
@@ -69,7 +70,7 @@ def test_run_fault_analysis_dispatches_generic_service_and_creates_neutral_adapt
     fake_gdb._inferior = object()
     runtime = Runtime(DiagnosticResult.completed(_report()), [])
 
-    report = run_fault_analysis(runtime)
+    report = run_fault_analysis(ToolkitSession(diagnostic_runtime=runtime))
 
     assert report.target.core_name == "RV32IM"
     assert runtime.services == [DiagnosticServiceName.FAULT_ANALYSIS]
@@ -96,9 +97,9 @@ def test_run_fault_analysis_preserves_unsupported_and_access_errors(fake_gdb: ob
     access_error = Runtime(DiagnosticResult.unavailable("CPUID access denied", access_error=True), [])
 
     with pytest.raises(fake_gdb.GdbError, match="fault_info only supports ARM Cortex-M targets"):
-        run_fault_analysis(unsupported)
+        run_fault_analysis(ToolkitSession(diagnostic_runtime=unsupported))
     with pytest.raises(fake_gdb.GdbError, match="CPUID access denied"):
-        run_fault_analysis(access_error)
+        run_fault_analysis(ToolkitSession(diagnostic_runtime=access_error))
 
 
 def test_run_fault_analysis_preserves_no_inferior_error(fake_gdb: object) -> None:
@@ -106,7 +107,7 @@ def test_run_fault_analysis_preserves_no_inferior_error(fake_gdb: object) -> Non
     runtime = Runtime(DiagnosticResult.completed(_report()), [])
 
     with pytest.raises(fake_gdb.GdbError, match="could not select inferior: no inferior selected"):
-        run_fault_analysis(runtime)
+        run_fault_analysis(ToolkitSession(diagnostic_runtime=runtime))
 
 
 def test_command_preserves_argument_error(fake_gdb: object) -> None:

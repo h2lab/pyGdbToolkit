@@ -11,6 +11,9 @@ from . import cmd_secscan
 from .cmd_secscan import SecscanCmd
 from . import cmd_svd
 from .cmd_svd import SvdCmd
+from .session import SESSION, SessionSlice, ToolkitSession, install_event_hooks
+
+install_event_hooks()
 
 LscpuCmd()
 FaultInfoCmd()
@@ -37,12 +40,16 @@ cmd_secscan.SecscanReportCmd(_SECSCAN_COMMAND)
 cmd_secscan.SecscanHelpCmd(_SECSCAN_COMMAND)
 
 __all__ = [
+    "SESSION",
     "FaultInfoCmd",
     "LscpuCmd",
     "RtosCmd",
     "SecscanCmd",
+    "SessionSlice",
     "SvdCmd",
+    "ToolkitSession",
     "cmd_rtos",
     "cmd_secscan",
     "cmd_svd",
+    "install_event_hooks",
 ]

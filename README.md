@@ -429,6 +429,7 @@ The [`doc/`](doc/) directory contains deeper technical documentation:
 - [`lscpu`](doc/lscpu.md)
 - [`rtos` commands](doc/rtos.md) and [Camelot support](doc/rtos-camelot.md)
 - [`secscan`](secscan.md)
+- [unified session](doc/session.md)
 - [`svd`](doc/svd.md)
 
 ## STM32 `lscpu` metadata
