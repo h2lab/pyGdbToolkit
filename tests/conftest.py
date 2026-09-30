@@ -77,13 +77,17 @@ sys.modules["gdb"] = _gdb
 
 @pytest.fixture(autouse=True)
 def reset_fake_gdb() -> Iterator[None]:
-    """Reset mock GDB state between tests."""
+    """Reset mock GDB state and the unified toolkit session between tests."""
+    from pyGdbToolkit.session import SESSION
+
     _gdb._inferior = None
     _gdb._frame = None
     FakeCommand.registrations.clear()
+    SESSION.reset()
     yield
     _gdb._inferior = None
     _gdb._frame = None
+    SESSION.reset()
 
 
 @pytest.fixture
