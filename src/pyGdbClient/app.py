@@ -11,10 +11,12 @@ from typing import Any
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.events import Resize
+from textual.events import Key, Resize
 from textual.widgets import Footer, Header, Input, RichLog, Static, Tree
 
 from .rpc import JsonRpcClient, RpcError
+
+_COMMAND_HISTORY_LIMIT = 40
 
 
 class PyGdbClientApp(App[None]):
@@ -104,6 +106,9 @@ class PyGdbClientApp(App[None]):
         self._connected = False
         self._ocd_executable = "unknown"
         self._target_refresh_lock = asyncio.Lock()
+        self._command_history: list[str] = []
+        self._history_position: int | None = None
+        self._history_draft = ""
 
     def compose(self) -> ComposeResult:
         """Build the log, output, target, tree, and command-input regions."""
@@ -140,6 +145,16 @@ class PyGdbClientApp(App[None]):
             self.add_class("compact")
         else:
             self.remove_class("compact")
+
+    def on_key(self, event: Key) -> None:
+        """Use Up/Down for command history while the CLI input is focused."""
+        if event.key not in {"up", "down"}:
+            return
+        command_input = self.query_one("#command", Input)
+        if self.focused is not command_input:
+            return
+        event.stop()
+        self._navigate_command_history(command_input, -1 if event.key == "up" else 1)
 
     async def _connect_and_initialize(self) -> None:
         try:
@@ -201,15 +216,49 @@ class PyGdbClientApp(App[None]):
         event.input.value = ""
         if not command:
             return
+        self._remember_command(command)
+        self._history_position = None
+        self._history_draft = ""
         normalized = " ".join(command.lower().split())
         if normalized == "help":
             self.show_help()
+        elif normalized == "history":
+            self.show_command_history()
         elif normalized == "quit":
             self.run_worker(self.quit_client(), group="shutdown")
         elif normalized == "quit --all":
             self.run_worker(self.quit_client(stop_server=True), group="shutdown")
         else:
             self.run_worker(self.execute_command(command), group="commands")
+
+    def _remember_command(self, command: str) -> None:
+        self._command_history.append(command)
+        del self._command_history[:-_COMMAND_HISTORY_LIMIT]
+
+    def _navigate_command_history(self, command_input: Input, direction: int) -> None:
+        if not self._command_history:
+            return
+        if self._history_position is None:
+            if direction > 0:
+                return
+            self._history_draft = command_input.value
+            self._history_position = len(self._command_history)
+        next_position = max(0, min(len(self._command_history), self._history_position + direction))
+        self._history_position = next_position
+        command_input.value = (
+            self._history_draft
+            if next_position == len(self._command_history)
+            else self._command_history[next_position]
+        )
+        command_input.cursor_position = len(command_input.value)
+
+    def show_command_history(self) -> None:
+        """List the retained commands in submission order in the output panel."""
+        self._append_output(
+            f"Command history ({len(self._command_history)} / {_COMMAND_HISTORY_LIMIT})"
+        )
+        for index, command in enumerate(self._command_history, start=1):
+            self._append_output(f"{index:>2}  {command}")
 
     def show_help(self) -> None:
         """Display client, toolkit, GDB, and selected OCD command guidance."""
@@ -355,6 +404,7 @@ def _help_text(ocd_executable: str) -> list[Text]:
     return [
         Text("CLIENT COMMANDS", style="bold cyan"),
         Text("  help          Show this command reference."),
+        Text("  history       List the last 40 commands; use Up/Down to browse them."),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
         Text("  Ctrl+Q        Same as quit."),

@@ -7,7 +7,7 @@ import asyncio
 import json
 from typing import Any
 
-from textual.widgets import Tree
+from textual.widgets import Input, Tree
 from websockets.asyncio.server import ServerConnection, serve
 
 from pyGdbClient.app import PyGdbClientApp, _help_text
@@ -140,6 +140,68 @@ def test_async_gdb_console_notification_is_shown_in_command_output() -> None:
     assert "scheduler trace result" in rendered_output
 
 
+def test_command_history_up_down_and_local_listing() -> None:
+    """Up/Down browse submitted commands and history does not reach GDB."""
+
+    async def exercise() -> tuple[list[str], str, str]:
+        remote_commands: list[str] = []
+
+        async def handler(websocket: ServerConnection) -> None:
+            async for payload in websocket:
+                request = json.loads(payload)
+                if request["method"] == "command.execute":
+                    remote_commands.append(request["params"]["command"])
+                await _respond(websocket, request)
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            app = PyGdbClientApp(f"ws://127.0.0.1:{port}")
+            async with app.run_test(size=(150, 48)) as pilot:
+                await pilot.pause(0.5)
+                command_input = app.query_one("#command", Input)
+                for command in ("gdb first", "gdb second"):
+                    command_input.value = command
+                    await pilot.press("enter")
+                    await pilot.pause(0.1)
+
+                command_input.value = "draft"
+                await pilot.press("up")
+                assert command_input.value == "gdb second"
+                await pilot.press("up")
+                assert command_input.value == "gdb first"
+                await pilot.press("down")
+                assert command_input.value == "gdb second"
+                await pilot.press("down")
+                assert command_input.value == "draft"
+
+                command_input.value = "history"
+                await pilot.press("enter")
+                await pilot.pause(0.1)
+                rendered = "\n".join(str(line) for line in app.query_one("#command-output").lines)
+                return remote_commands, rendered, command_input.value
+
+    remote_commands, rendered, input_value = asyncio.run(exercise())
+
+    assert "gdb first" in remote_commands
+    assert "gdb second" in remote_commands
+    assert "history" not in remote_commands
+    assert "Command history (3 / 40)" in rendered
+    assert "gdb first" in rendered
+    assert "gdb second" in rendered
+    assert input_value == ""
+
+
+def test_command_history_keeps_only_the_latest_40_entries() -> None:
+    """Old submitted commands are discarded when the history reaches its limit."""
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    for index in range(45):
+        app._remember_command(f"command-{index}")
+
+    assert len(app._command_history) == 40
+    assert app._command_history[0] == "command-5"
+    assert app._command_history[-1] == "command-44"
+
+
 def test_textual_dashboard_populates_tree_and_shows_expanded_peripheral() -> None:
     """Opening a peripheral node sends its SVD show command through the client."""
 
@@ -213,6 +275,7 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
 
     for expected in (
         "help",
+        "history",
         "quit --all",
         "lscpu",
         "fault_info",

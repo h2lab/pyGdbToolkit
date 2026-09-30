@@ -184,6 +184,10 @@ pyGdbToolkit commands and subcommands, and links to the GDB and configured OCD
 manuals. GDB CLI commands use `gdb <command>`; commands for the selected OCD use
 `monitor <command>`.
 
+The command prompt retains the last 40 submitted commands. Use `Up` and `Down`
+to browse them; enter `history` to list the retained commands in the output
+panel. This history is local to the client session.
+
 `rtos load-project --from <path>` is executed by GDB on the **server**. The path
 is therefore resolved in the server's filesystem, not the client's. For a
 remote client, the project must be available to the server at that path, for
