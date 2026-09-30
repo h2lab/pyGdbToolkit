@@ -1,0 +1,20 @@
+{
+    "gdb-path": "gdb-multiarch",
+    "gdb-args": [],
+    "ocd-path": "pyocd",
+    "ocd-args": [
+        "gdbserver",
+        "--port", "{gdb_port}",
+        "--target", "stm32u5a5zjtxq",
+        "-u", "004300483232510239353236"
+    ],
+    "listen-address": "localhost:1234",
+    "gdb-init": [
+        "set arch arm",
+        "monitor reset halt",
+        "set mem inaccessible-by-default off",
+        "svd load"
+    ],
+    "log-directory": ".pygdbserver-logs",
+    "startup-timeout": 15
+}

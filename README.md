@@ -35,6 +35,15 @@ WebSocket. It supports toolkit commands, arbitrary GDB commands, OCD `monitor`
 commands, raw MI commands, and persistent/live process logs. See
 [`doc/pygdbserver.md`](doc/pygdbserver.md) for configuration and protocol details.
 
+`pyGdbClient` connects to that API and provides a Rich/Textual terminal
+dashboard with live process logs, a GDB command prompt, target state, and an
+interactive SVD peripheral tree:
+
+```console
+pyGdbClient
+pyGdbClient ws://debug-host:1234
+```
+
 ## Requirements
 
 - GDB with embedded Python support
