@@ -5,6 +5,8 @@
 
 from .cmd_faultinfo import FaultInfoCmd
 from .cmd_lscpu import LscpuCmd
+from . import cmd_rtos
+from .cmd_rtos import RtosCmd
 from . import cmd_secscan
 from .cmd_secscan import SecscanCmd
 from . import cmd_svd
@@ -12,6 +14,13 @@ from .cmd_svd import SvdCmd
 
 LscpuCmd()
 FaultInfoCmd()
+_RTOS_COMMAND = RtosCmd()
+cmd_rtos.RtosSelectCmd(_RTOS_COMMAND)
+cmd_rtos.RtosListCmd(_RTOS_COMMAND)
+cmd_rtos.RtosLoadProjectCmd(_RTOS_COMMAND)
+cmd_rtos.RtosShowCmd(_RTOS_COMMAND)
+cmd_rtos.RtosShowTaskCmd(_RTOS_COMMAND)
+cmd_rtos.RtosShowschedCmd(_RTOS_COMMAND)
 _SVD_COMMAND = SvdCmd()
 cmd_svd.SvdLoadCmd(_SVD_COMMAND)
 cmd_svd.SvdReadCmd(_SVD_COMMAND)
@@ -30,8 +39,10 @@ cmd_secscan.SecscanHelpCmd(_SECSCAN_COMMAND)
 __all__ = [
     "FaultInfoCmd",
     "LscpuCmd",
+    "RtosCmd",
     "SecscanCmd",
     "SvdCmd",
+    "cmd_rtos",
     "cmd_secscan",
     "cmd_svd",
 ]
