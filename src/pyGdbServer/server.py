@@ -119,6 +119,9 @@ class PyGdbServer:
                     subscribed = True
                 if response is not None:
                     await websocket.send(json.dumps(response))
+                if _is_shutdown_request(message, response):
+                    self._shutdown.set()
+                    break
         finally:
             if subscribed:
                 self.logs.unsubscribe(publish_log)
@@ -203,7 +206,6 @@ class PyGdbServer:
         if method == "logs.subscribe":
             return {"subscribed": True}, True
         if method == "server.shutdown":
-            self._shutdown.set()
             return {"stopping": True}, False
         raise RpcMethodNotFound(f"Method not found: {method}")
 
@@ -268,6 +270,7 @@ class PyGdbServer:
             "ready": self.api_port != 0,
             "api": {"host": self.config.listen_host, "port": self.api_port},
             "ocd": {
+                "executable": Path(self.config.ocd_path).name,
                 "pid": ocd_process.pid if ocd_process is not None else None,
                 "gdb_port": self.gdb_port,
                 "running": ocd_process is not None and ocd_process.returncode is None,
@@ -331,3 +334,15 @@ def _ocd_listener_message(executable: str, port: int) -> str | None:
     if "openocd" in name:
         return f"Listening on port {port} for gdb connections"
     return None
+
+
+def _is_shutdown_request(message: str | bytes, response: dict[str, Any] | None) -> bool:
+    try:
+        if isinstance(message, bytes):
+            message = message.decode("utf-8")
+        request = json.loads(message)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(request, dict) or request.get("method") != "server.shutdown":
+        return False
+    return response is None or response.get("result", {}).get("stopping") is True

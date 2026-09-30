@@ -102,6 +102,7 @@ class PyGdbClientApp(App[None]):
         super().__init__()
         self.client = JsonRpcClient(url)
         self._connected = False
+        self._ocd_executable = "unknown"
         self._target_refresh_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
@@ -147,6 +148,7 @@ class PyGdbClientApp(App[None]):
             await self.client.request("logs.subscribe")
             self.run_worker(self._consume_notifications(), group="notifications")
             status = await self.client.request("server.status")
+            self._ocd_executable = status.get("ocd", {}).get("executable", "unknown")
             self._append_output(
                 f"Connected to {self.client.url} · GDB {status['gdb']['interpreter']} · "
                 f"OCD port {status['ocd']['gdb_port']}"
@@ -195,8 +197,32 @@ class PyGdbClientApp(App[None]):
         """Submit the entered command to the server in a background worker."""
         command = event.value.strip()
         event.input.value = ""
-        if command:
+        if not command:
+            return
+        normalized = " ".join(command.lower().split())
+        if normalized == "help":
+            self.show_help()
+        elif normalized == "quit":
+            self.run_worker(self.quit_client(), group="shutdown")
+        elif normalized == "quit --all":
+            self.run_worker(self.quit_client(stop_server=True), group="shutdown")
+        else:
             self.run_worker(self.execute_command(command), group="commands")
+
+    def show_help(self) -> None:
+        """Display client, toolkit, GDB, and selected OCD command guidance."""
+        for paragraph in _help_text(self._ocd_executable):
+            self.query_one("#command-output", RichLog).write(paragraph)
+
+    async def quit_client(self, *, stop_server: bool = False) -> None:
+        """Quit this dashboard, optionally asking the server to stop its processes."""
+        if stop_server and self._connected:
+            try:
+                await self.client.request("server.shutdown", timeout=15)
+            except (RpcError, ConnectionError, TimeoutError) as error:
+                self._append_output(f"Server shutdown request failed: {error}", error=True)
+        await self.client.close()
+        self.exit()
 
     async def execute_command(self, command: str, *, show_command: bool = True) -> None:
         """Send a natural GDB/toolkit/OCD command to the server."""
@@ -304,9 +330,64 @@ class PyGdbClientApp(App[None]):
 
     async def action_quit(self) -> None:
         """Close the client socket and exit the dashboard."""
-        await self.client.close()
-        self.exit()
+        await self.quit_client()
 
     async def on_unmount(self) -> None:
         """Release the WebSocket when the dashboard closes."""
         await self.client.close()
+
+
+def _help_text(ocd_executable: str) -> list[Text]:
+    """Build dashboard help with documentation links for the selected tools."""
+    executable = ocd_executable.lower()
+    if "pyocd" in executable:
+        ocd_name = "pyOCD"
+        ocd_manual = "https://pyocd.io/docs/"
+    elif "openocd" in executable:
+        ocd_name = "OpenOCD"
+        ocd_manual = "https://openocd.org/doc/html/"
+    else:
+        ocd_name = ocd_executable
+        ocd_manual = f"{ocd_executable} --help / its installed manual"
+
+    return [
+        Text("CLIENT COMMANDS", style="bold cyan"),
+        Text("  help          Show this command reference."),
+        Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
+        Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
+        Text("  Ctrl+Q        Same as quit."),
+        Text("PYGDBTOOLKIT COMMANDS", style="bold cyan"),
+        Text(
+            "  lscpu         Identify the Cortex-M core, vendor, product family, memory, and UID."
+        ),
+        Text("  fault_info    Decode Cortex-M fault status and the stacked exception context."),
+        Text("  svd load      Detect the target and load a matching CMSIS-SVD description."),
+        Text("  svd read FILE Load an SVD file explicitly."),
+        Text("  svd list      List peripherals from the loaded SVD."),
+        Text(
+            "  svd show P [R] Read a peripheral's registers, or detail register R and its bitfields."
+        ),
+        Text("  svd write P R VALUE  Write a register value and read it back."),
+        Text("  svd monitor P R      Watch a register and report changes."),
+        Text("  svd dump P|all FILE  Export a peripheral or device snapshot as JSON."),
+        Text("  rtos list / select NAME  List or select a supported RTOS (Camelot)."),
+        Text("  rtos load-project --from DIR  Load RTOS symbols and task metadata."),
+        Text("  rtos show              Show the RTOS project layout."),
+        Text("  rtos show task NAME    Inspect a task's live context."),
+        Text("  rtos showsched N       Trace the next N scheduler elections."),
+        Text("  secscan audit [FILE]   Audit target security configuration; optionally save JSON."),
+        Text("  secscan report FILE    Display a saved report; see secscan help for formats."),
+        Text("  Use svd help, rtos, and secscan help for command-specific syntax."),
+        Text("GDB AND OCD COMMANDS", style="bold cyan"),
+        Text("  gdb XXX     Run XXX as a GDB CLI command (for example: gdb info registers)."),
+        Text(f"  monitor XXX Forward XXX to the selected {ocd_name} (for example: monitor help)."),
+        Text(
+            "  GDB manual: https://sourceware.org/gdb/current/onlinedocs/gdb.html/",
+            style="link https://sourceware.org/gdb/current/onlinedocs/gdb.html/",
+        ),
+        Text(
+            f"  {ocd_name} manual: {ocd_manual}",
+            style=f"link {ocd_manual}" if ocd_manual.startswith("https://") else "",
+        ),
+        Text("Commands without a prefix are sent to GDB and resolve pyGdbToolkit commands."),
+    ]

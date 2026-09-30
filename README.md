@@ -29,11 +29,35 @@ separate probe protocol or vendor IDE.
 
 ## Remote server
 
-The separate `pyGdbServer` executable supervises the OCD and GDB processes,
-loads this toolkit, and exposes the debug session through JSON-RPC 2.0 over
-WebSocket. It supports toolkit commands, arbitrary GDB commands, OCD `monitor`
-commands, raw MI commands, and persistent/live process logs. See
-[`doc/pygdbserver.md`](doc/pygdbserver.md) for configuration and protocol details.
+The toolkit is itself a library that aim to be used within Gdb CLI.
+Although, we also delivers a client-server mechanism to increase automation and
+insection using the toolkit through a remote programmative mechanism.
+
+`pyGdbServer` packages the target-debugging setup into one supervised session:
+it starts the configured on-chip debugger (OCD) and GDB, connects them to the
+target, loads pyGdbToolkit, and captures both processes' output. This avoids
+manually coordinating tool startup and provides one programmable endpoint for
+toolkit commands, GDB CLI/MI operations, OCD `monitor` commands, and live or
+persistent logs.
+
+Install the project in the Python environment used to run the server, then
+start it with a target configuration. The repository includes
+[`servercfg.json`](doc/examples/servercfg.json) as a pyOCD/GDB example; edit its executable,
+probe, target, initialization commands, and API listen address for your setup.
+The server waits for the OCD endpoint, starts GDB with MI3 (MI2 fallback),
+connects the target, imports pyGdbToolkit, and only then makes the WebSocket API
+available:
+
+```console
+python -m pip install -e .
+pyGdbServer stm32u5a5.json
+```
+
+The OCD's GDB port and GDB's diagnostic MI adapter use dynamic loopback ports.
+The API address is configurable; keep it on loopback for local use, or expose
+it only behind a trusted network and TLS/authentication when connecting
+remotely. Process output is available live and retained in timestamped JSONL
+logs under the configured log directory.
 
 `pyGdbClient` connects to that API and provides a Rich/Textual terminal
 dashboard with live process logs, a GDB command prompt, target state, and an
@@ -43,6 +67,16 @@ interactive SVD peripheral tree:
 pyGdbClient
 pyGdbClient ws://debug-host:1234
 ```
+
+Enter toolkit commands directly, for example `lscpu` or `fault_info`; use
+`gdb info registers` for GDB CLI commands and `monitor help` for commands
+forwarded to the selected OCD. Expand an SVD peripheral to inspect its live
+registers. `help` lists available client/toolkit commands and links to the GDB
+and configured OCD manuals; `quit` exits only the client, while `quit --all`
+also shuts down GDB and the OCD. The WebSocket API uses JSON-RPC 2.0, so other
+clients can automate the same session without the dashboard. See
+[`doc/pygdbserver.md`](doc/pygdbserver.md) for configuration fields, API
+methods, protocol examples, and complete client behavior.
 
 ![pyGdbClient dashboard snapshot](doc/pygdbclient.png)
 
@@ -73,6 +107,10 @@ package with that interpreter or add the installed package directory to
 `sys.path` in `gdbinit`.
 
 ## Loading the commands in GDB
+
+When not using the server executable, the pyGdbToolkit module can be used directly in
+a given Gdb instance. Note that the very same commands can be run through the client-server
+mode in its dedicated CLI in thr same way.
 
 The repository includes a [`gdbinit`](gdbinit) example that configures an Arm
 target, connects to a local GDB server, resets the target, and loads the

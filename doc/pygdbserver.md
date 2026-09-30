@@ -169,4 +169,11 @@ directly; use `gdb <command>` for explicit GDB commands and `monitor <command>`
 for OCD commands. Opening a peripheral node runs `svd show <peripheral>`;
 selecting a register runs `svd show <peripheral> <register>`. The client loads
 the target-matched SVD at connect time and also supports explicit `svd read`
-commands. `Ctrl+Q` exits the dashboard without stopping the server.
+commands. Enter `quit` or press `Ctrl+Q` to exit only the dashboard. Enter
+`quit --all` to request orderly shutdown of the server, GDB, and OCD before
+the client exits.
+
+Enter `help` in the dashboard prompt for the client commands, the available
+pyGdbToolkit commands and subcommands, and links to the GDB and configured OCD
+manuals. GDB CLI commands use `gdb <command>`; commands for the selected OCD use
+`monitor <command>`.

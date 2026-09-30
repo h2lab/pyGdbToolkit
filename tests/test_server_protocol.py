@@ -10,6 +10,8 @@ import shutil
 from typing import Any
 
 import pytest
+from websockets.asyncio.client import connect
+from websockets.asyncio.server import serve
 
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
@@ -200,6 +202,43 @@ def test_svd_peripherals_returns_structured_device_metadata(tmp_path: Path) -> N
     assert result["loaded"] is True
     assert result["device"] == "TestDevice"
     assert result["peripherals"][0]["name"] == "GPIOA"
+
+
+def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> None:
+    """Shutdown sends its JSON-RPC result before stopping both managed processes."""
+
+    class ManagedStop:
+        def __init__(self, name: str, stopped: list[str]) -> None:
+            self.name = name
+            self.stopped = stopped
+
+        async def stop(self) -> None:
+            self.stopped.append(self.name)
+
+    async def exercise() -> tuple[dict[str, Any], list[str]]:
+        server = object.__new__(PyGdbServer)
+        server.logs = LogStore(tmp_path)
+        server._shutdown = asyncio.Event()
+        server._websocket_server = None
+        stopped: list[str] = []
+        server.mi = ManagedStop("gdb", stopped)  # type: ignore[assignment]
+        server.ocd = ManagedStop("ocd", stopped)  # type: ignore[assignment]
+
+        async with serve(server._handle_connection, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            async with connect(f"ws://127.0.0.1:{port}") as websocket:
+                await websocket.send(
+                    json.dumps({"jsonrpc": "2.0", "id": 1, "method": "server.shutdown"})
+                )
+                response = json.loads(await asyncio.wait_for(websocket.recv(), 1))
+                await asyncio.wait_for(server._shutdown.wait(), 1)
+        await server.stop()
+        return response, stopped
+
+    response, stopped = asyncio.run(exercise())
+
+    assert response["result"] == {"stopping": True}
+    assert stopped == ["gdb", "ocd"]
 
 
 @pytest.mark.skipif(shutil.which("gdb-multiarch") is None, reason="gdb-multiarch is unavailable")
