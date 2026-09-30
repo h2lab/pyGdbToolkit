@@ -9,6 +9,7 @@ import asyncio
 from importlib.util import find_spec
 import json
 from pathlib import Path
+import re
 import socket
 from typing import Any
 
@@ -189,6 +190,10 @@ class PyGdbServer:
             if not isinstance(command, str) or not command.startswith("-"):
                 raise ValueError("MI command must be a string starting with '-'")
             return (await self.mi.execute(command, _timeout(params))).to_dict(), False
+        if method == "target.status":
+            return await self.target_status(), False
+        if method == "svd.peripherals":
+            return await self.svd_peripherals(), False
         if method == "logs.get":
             since = params.get("since", 0)
             limit = params.get("limit", 1_000)
@@ -201,6 +206,60 @@ class PyGdbServer:
             self._shutdown.set()
             return {"stopping": True}, False
         raise RpcMethodNotFound(f"Method not found: {method}")
+
+    async def target_status(self) -> dict[str, Any]:
+        """Return selected GDB thread/core, execution state, and discovered AP."""
+        result = await self.mi.execute("-thread-info")
+        state_match = re.search(r'\bstate="([^"]+)"', result.record)
+        thread_match = re.search(r'current-thread-id="([^"]+)"', result.record)
+        core_match = re.search(r'\bcore="([^"]+)"', result.record)
+        if core_match is None:
+            core_result = await self.mi.console("monitor core")
+            core_match = next(
+                (
+                    match
+                    for output in core_result.output
+                    if (match := re.search(r"\bCore\s+(\d+)\b", output, re.IGNORECASE))
+                ),
+                None,
+            )
+        ap_names = sorted(
+            {
+                match.group(1)
+                for event in self.logs.get(limit=10_000)
+                if event["source"] == "ocd"
+                if (match := re.search(r"\b((?:AHB\d+-)?AP#\d+)", str(event["message"])))
+            }
+        )
+        return {
+            "state": state_match.group(1) if state_match else "unknown",
+            "thread_id": thread_match.group(1) if thread_match else None,
+            "core": core_match.group(1) if core_match else None,
+            "access_port": ap_names[0] if len(ap_names) == 1 else None,
+            "access_ports": ap_names,
+        }
+
+    async def svd_peripherals(self) -> dict[str, Any]:
+        """Return loaded SVD metadata in a stable JSON shape for client trees."""
+        marker = "PYGDBSERVER_SVD_JSON:"
+        command = (
+            "python import json; from pyGdbToolkit.cmd_svd import SESSION; "
+            f"print('{marker}' + json.dumps({{'device': SESSION.device.name if SESSION.device else None, "
+            "'peripherals': [{'name': p.name, 'description': p.description, "
+            "'base_address': p.base_address, 'registers': [{'name': r.name, "
+            "'address_offset': r.address_offset, 'description': r.description} "
+            "for r in p.registers]} for p in SESSION.device.peripherals] "
+            "if SESSION.device else []}))"
+        )
+        result = await self.mi.console(command)
+        for output in result.output:
+            for line in output.splitlines():
+                payload_index = line.find(marker)
+                if payload_index >= 0:
+                    payload = line[payload_index + len(marker) :].strip()
+                    data = json.loads(payload)
+                    return {"loaded": data["device"] is not None, **data}
+        raise RuntimeError("GDB did not return structured SVD metadata")
 
     def status(self) -> dict[str, Any]:
         """Describe live endpoints and child process state."""

@@ -75,6 +75,7 @@ class MiSession:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=8 * 1024 * 1024,
         )
         assert self.process.stdout is not None
         assert self.process.stderr is not None
@@ -98,28 +99,35 @@ class MiSession:
         return self.process.returncode is None
 
     async def _read_stdout(self, reader: asyncio.StreamReader) -> None:
-        while line_bytes := await reader.readline():
-            line = line_bytes.decode(errors="replace").rstrip("\r\n")
-            self.logs.append("gdb", "mi", line)
-            self._broadcast_proxy(line_bytes)
-            if line.startswith("(gdb)"):
-                self._ready.set()
-                continue
-            if line[:1] in {"~", "@", "&"} and self._active_output is not None:
-                self._active_output.append(_decode_mi_string(line[1:]))
-                continue
-            token_text, separator, record = line.partition("^")
-            if separator and token_text.isdecimal():
-                future = self._pending.pop(int(token_text), None)
-                if future is not None and not future.done():
-                    result_class = record.split(",", 1)[0]
-                    future.set_result(
-                        MiResult(result_class, record, tuple(self._active_output or ()))
-                    )
-        error = RuntimeError("GDB MI stream closed")
+        try:
+            while line_bytes := await reader.readline():
+                line = line_bytes.decode(errors="replace").rstrip("\r\n")
+                self.logs.append("gdb", "mi", line)
+                self._broadcast_proxy(line_bytes)
+                if line.startswith("(gdb)"):
+                    self._ready.set()
+                    continue
+                if line[:1] in {"~", "@", "&"} and self._active_output is not None:
+                    self._active_output.append(_decode_mi_string(line[1:]))
+                    continue
+                token_text, separator, record = line.partition("^")
+                if separator and token_text.isdecimal():
+                    future = self._pending.pop(int(token_text), None)
+                    if future is not None and not future.done():
+                        result_class = record.split(",", 1)[0]
+                        future.set_result(
+                            MiResult(result_class, record, tuple(self._active_output or ()))
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self.logs.append("gdb", "error", f"MI reader failed: {error}")
+            failure = RuntimeError(f"GDB MI reader failed: {error}")
+        else:
+            failure = RuntimeError("GDB MI stream closed")
         for future in self._pending.values():
             if not future.done():
-                future.set_exception(error)
+                future.set_exception(failure)
         self._pending.clear()
 
     async def _read_stderr(self, reader: asyncio.StreamReader) -> None:
