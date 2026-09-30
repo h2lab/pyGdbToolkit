@@ -84,6 +84,10 @@ Runs a pyGdbToolkit or GDB CLI command. Commands are serialized. Optional
 
 The `gdb ` prefix is removed. `monitor` is forwarded unchanged to the OCD.
 Commands without a prefix are resolved by GDB, including toolkit commands.
+Execution commands such as `continue` may return before later breakpoint output.
+For example, `rtos showsched 8` arms a trace and `gdb continue` resumes the
+target; when tracing completes, the Rich chart arrives asynchronously as a
+`log.event` notification and is shown in the dashboard's command-output pane.
 
 ### `mi.execute`
 
@@ -131,6 +135,8 @@ Returns events after sequence `since`; `limit` is from 1 to 10,000.
 
 Each event has `sequence`, UTC `timestamp`, `source`, `stream`, and `message`.
 All events are retained in `events.jsonl` under the configured log directory.
+Console text emitted later by GDB, outside the original command response, is
+also delivered with `source: "gdb"` and `stream: "console"`.
 
 ### `logs.subscribe`
 

@@ -43,6 +43,7 @@ class MiSession:
         self._token = 0
         self._pending: dict[int, asyncio.Future[MiResult]] = {}
         self._active_output: list[str] | None = None
+        self._target_running = False
         self._lock = asyncio.Lock()
 
     async def start(self, timeout: float) -> None:
@@ -107,14 +108,26 @@ class MiSession:
                 if line.startswith("(gdb)"):
                     self._ready.set()
                     continue
-                if line[:1] in {"~", "@", "&"} and self._active_output is not None:
-                    self._active_output.append(_decode_mi_string(line[1:]))
+                if line.startswith("*running"):
+                    self._target_running = True
+                    continue
+                if line.startswith("*stopped"):
+                    self._target_running = False
+                    continue
+                if line[:1] in {"~", "@", "&"}:
+                    output = _decode_mi_string(line[1:])
+                    if self._target_running or self._active_output is None:
+                        self.logs.append("gdb", "console", output)
+                    else:
+                        self._active_output.append(output)
                     continue
                 token_text, separator, record = line.partition("^")
                 if separator and token_text.isdecimal():
+                    result_class = record.split(",", 1)[0]
+                    if result_class == "running":
+                        self._target_running = True
                     future = self._pending.pop(int(token_text), None)
                     if future is not None and not future.done():
-                        result_class = record.split(",", 1)[0]
                         future.set_result(
                             MiResult(result_class, record, tuple(self._active_output or ()))
                         )

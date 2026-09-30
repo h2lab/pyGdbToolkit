@@ -132,6 +132,32 @@ def test_logs_are_ordered_retrievable_and_persistent(tmp_path: Path) -> None:
     assert [record["message"] for record in records] == ["ready", "(gdb)"]
 
 
+def test_mi_publishes_console_output_after_async_continue_stops(tmp_path: Path) -> None:
+    """Breakpoint command output remains available after MI reports continue running."""
+
+    async def exercise() -> list[dict[str, int | str]]:
+        logs = LogStore(tmp_path)
+        session = MiSession("unused-gdb", (), logs)
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            b"1^running\n"
+            b'*running,thread-id="all"\n'
+            b'~"scheduler trace result\\n"\n'
+            b'*stopped,reason="breakpoint-hit",thread-id="1"\n'
+            b'~"late breakpoint callback output\\n"\n'
+        )
+        reader.feed_eof()
+        await session._read_stdout(reader)
+        return [event for event in logs.get() if event["stream"] == "console"]
+
+    output_events = asyncio.run(exercise())
+
+    assert [event["message"] for event in output_events] == [
+        "scheduler trace result",
+        "late breakpoint callback output",
+    ]
+
+
 def test_known_ocds_use_passive_listener_readiness() -> None:
     """Known OCDs are recognized by their listener logs, without TCP probes."""
     assert _ocd_listener_message("pyocd", 43123) == "GDB server listening on port 43123"

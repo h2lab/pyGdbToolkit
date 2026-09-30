@@ -172,6 +172,8 @@ class PyGdbClientApp(App[None]):
             message = str(event.get("message", ""))
             if source == "gdb":
                 self._append_log("#gdb-log", f"{stream:>6}  {message}")
+                if stream == "console":
+                    self._append_rendered_output([message])
             elif source == "ocd":
                 self._append_log("#ocd-log", f"{stream:>6}  {message}")
             elif source == "server":
