@@ -44,6 +44,9 @@ pyGdbClient
 pyGdbClient ws://debug-host:1234
 ```
 
+![pyGdbClient dashboard snapshot](doc/pygdbclient.png)
+
+
 ## Requirements
 
 - GDB with embedded Python support
