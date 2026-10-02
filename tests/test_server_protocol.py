@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
+from websockets.exceptions import InvalidStatus
 
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
@@ -246,6 +247,7 @@ def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> No
         server.logs = LogStore(tmp_path)
         server._shutdown = asyncio.Event()
         server._websocket_server = None
+        server._client = None
         stopped: list[str] = []
         server.mi = ManagedStop("gdb", stopped)  # type: ignore[assignment]
         server.ocd = ManagedStop("ocd", stopped)  # type: ignore[assignment]
@@ -265,6 +267,37 @@ def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> No
 
     assert response["result"] == {"stopping": True}
     assert stopped == ["gdb", "ocd"]
+
+
+def test_only_one_client_per_instance(tmp_path: Path) -> None:
+    """A second client is refused until the first one disconnects."""
+
+    async def exercise() -> tuple[int, dict[str, Any]]:
+        server, _ = _server(tmp_path)
+        server._client = None
+        server.status = lambda: {"ready": True}  # type: ignore[method-assign]
+        async with serve(
+            server._handle_connection,
+            "127.0.0.1",
+            0,
+            process_request=server._reject_when_busy,
+        ) as listener:
+            url = f"ws://127.0.0.1:{listener.sockets[0].getsockname()[1]}"
+            async with connect(url) as first:
+                await first.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "server.status"}))
+                await asyncio.wait_for(first.recv(), 1)
+                with pytest.raises(InvalidStatus) as rejected:
+                    async with connect(url):
+                        pass
+            async with connect(url) as second:
+                await second.send(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "server.status"}))
+                response = json.loads(await asyncio.wait_for(second.recv(), 1))
+        return rejected.value.response.status_code, response
+
+    status_code, response = asyncio.run(exercise())
+
+    assert status_code == 503
+    assert response["result"] == {"ready": True}
 
 
 @pytest.mark.skipif(shutil.which("gdb-multiarch") is None, reason="gdb-multiarch is unavailable")

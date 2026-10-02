@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
+[Unit]
+Description=pyGdbServer instance for USB probe %i
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=pygdbserver
+Group=pygdbserver
+SupplementaryGroups=pygdb-%i
+EnvironmentFile=/etc/pygdbserver/%i.conf
+ExecStart=/usr/bin/env pyGdbServer ${PYGDBSERVER_CONFIG} --device=${DEVICE_PATH} --listen-address=${LISTEN_ADDRESS} --log-directory=/var/lib/pygdbserver-%i
+Restart=on-failure
+RestartSec=5s
+StateDirectory=pygdbserver-%i
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

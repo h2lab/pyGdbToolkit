@@ -25,12 +25,24 @@ class ServerConfig:
     gdb_init: tuple[str, ...]
     log_directory: Path
     startup_timeout: float
+    device: Path | None = None
+    usb_serial: str | None = None
 
     def ocd_command(self, gdb_port: int) -> list[str]:
         """Build the OCD command line for a loopback-only dynamic GDB port."""
         values = {"gdb_port": str(gdb_port), "loopback": "127.0.0.1"}
+        if self.device is not None:
+            values["device"] = str(self.device)
+        if self.usb_serial is not None:
+            values["usb_serial"] = self.usb_serial
         has_dynamic_port = any("{gdb_port}" in argument for argument in self.ocd_args)
-        arguments = [argument.format_map(values) for argument in self.ocd_args]
+        try:
+            arguments = [argument.format_map(values) for argument in self.ocd_args]
+        except KeyError as error:
+            raise ValueError(
+                f"ocd-args placeholder {{{error.args[0]}}} is unavailable "
+                "(it requires --device on a USB serial device)"
+            ) from error
         executable = Path(self.ocd_path).name.lower()
         if "pyocd" in executable:
             if "--allow-remote" in arguments:
@@ -87,13 +99,39 @@ def _listen_address(value: object) -> tuple[str, int]:
     return host, port
 
 
-def load_config(path: str | Path) -> ServerConfig:
-    """Load a pyGdbServer JSON configuration file."""
+def _usb_serial(device: Path) -> str | None:
+    """Return the iSerial of the USB device owning a tty, if any."""
+    node = Path("/sys/class/tty") / device.resolve().name / "device"
+    if not node.exists():
+        return None
+    for parent in (node.resolve(), *node.resolve().parents):
+        if (parent / "busnum").is_file():
+            serial = parent / "serial"
+            return serial.read_text(encoding="utf-8").strip() if serial.is_file() else None
+    return None
+
+
+def load_config(
+    path: str | Path,
+    *,
+    device: str | Path | None = None,
+    listen_address: str | None = None,
+    log_directory: str | Path | None = None,
+) -> ServerConfig:
+    """Load a pyGdbServer JSON configuration file, with optional overrides."""
     config_path = Path(path).resolve()
     with config_path.open(encoding="utf-8") as config_file:
         data = json.load(config_file)
     if not isinstance(data, dict):
         raise ValueError("configuration root must be a JSON object")
+    if listen_address is not None:
+        data["listen-address"] = listen_address
+    if log_directory is not None:
+        data["log-directory"] = str(Path(log_directory).resolve())
+
+    device_path = Path(device) if device is not None else None
+    if device_path is not None and not device_path.is_char_device():
+        raise ValueError(f"{device_path} is not a character device")
 
     for key in ("gdb-path", "ocd-path"):
         if not isinstance(data.get(key), str) or not data[key]:
@@ -121,4 +159,6 @@ def load_config(path: str | Path) -> ServerConfig:
         gdb_init=_string_list(data, "gdb-init"),
         log_directory=log_directory.resolve(),
         startup_timeout=float(timeout),
+        device=device_path,
+        usb_serial=_usb_serial(device_path) if device_path is not None else None,
     )

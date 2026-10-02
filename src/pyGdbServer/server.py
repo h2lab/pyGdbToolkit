@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from http import HTTPStatus
 from importlib.util import find_spec
 import json
 from pathlib import Path
@@ -14,6 +15,7 @@ import socket
 from typing import Any
 
 from websockets.asyncio.server import Server, ServerConnection, serve
+from websockets.http11 import Request, Response
 
 from .config import ServerConfig
 from .logs import LogEvent, LogStore
@@ -32,6 +34,7 @@ class PyGdbServer:
         self.gdb_port = 0
         self.api_port = 0
         self._websocket_server: Server | None = None
+        self._client: ServerConnection | None = None
         self._shutdown = asyncio.Event()
 
     async def start(self) -> None:
@@ -56,6 +59,7 @@ class PyGdbServer:
             self._handle_connection,
             self.config.listen_host,
             self.config.listen_port,
+            process_request=self._reject_when_busy,
             max_size=8 * 1024 * 1024,
             ping_interval=20,
             ping_timeout=20,
@@ -95,7 +99,23 @@ class PyGdbServer:
             await asyncio.sleep(0.05)
         raise TimeoutError(f"OCD did not open GDB port {self.gdb_port}")
 
+    def _reject_when_busy(self, connection: ServerConnection, request: Request) -> Response | None:
+        if self._client is None:
+            return None
+        return connection.respond(HTTPStatus.SERVICE_UNAVAILABLE, "another client is connected\n")
+
     async def _handle_connection(self, websocket: ServerConnection) -> None:
+        # Re-checked here: concurrent handshakes may both pass process_request.
+        if self._client is not None:
+            await websocket.close(1013, "another client is connected")
+            return
+        self._client = websocket
+        try:
+            await self._serve_client(websocket)
+        finally:
+            self._client = None
+
+    async def _serve_client(self, websocket: ServerConnection) -> None:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1_000)
 
         def publish_log(event: LogEvent) -> None:

@@ -20,11 +20,25 @@ def _arguments() -> argparse.Namespace:
         description="Supervise an OCD and GDB, then expose pyGdbToolkit over JSON-RPC/WebSocket.",
     )
     parser.add_argument("config", type=Path, help="target JSON configuration")
+    parser.add_argument(
+        "--device",
+        type=Path,
+        help="probe tty (/dev/ttyACMx, /dev/ttyUSBx); enables {device} and {usb_serial} in ocd-args",
+    )
+    parser.add_argument("--listen-address", help="override listen-address (host:port)")
+    parser.add_argument("--log-directory", type=Path, help="override log-directory")
     return parser.parse_args()
 
 
-async def _run(config_path: Path) -> None:
-    server = PyGdbServer(load_config(config_path))
+async def _run(arguments: argparse.Namespace) -> None:
+    server = PyGdbServer(
+        load_config(
+            arguments.config,
+            device=arguments.device,
+            listen_address=arguments.listen_address,
+            log_directory=arguments.log_directory,
+        )
+    )
     loop = asyncio.get_running_loop()
     for signal_number in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signal_number, server._shutdown.set)
@@ -43,7 +57,7 @@ async def _run(config_path: Path) -> None:
 
 def main() -> None:
     """Run pyGdbServer from its JSON configuration."""
-    asyncio.run(_run(_arguments().config))
+    asyncio.run(_run(_arguments()))
 
 
 if __name__ == "__main__":

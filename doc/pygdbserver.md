@@ -51,6 +51,89 @@ ports. The raw MI adapter is for local diagnostics; clients should use the API.
 When exposing the public API beyond loopback, place it behind a trusted network
 or a TLS and authentication reverse proxy.
 
+## systemd multi-instance deployment
+
+The examples in [`doc/examples`](examples) provide a systemd template and a
+pyOCD configuration that binds each server process to the USB serial number
+found through its TTY. Each instance gets its own OCD, GDB process, log
+directory and WebSocket port. The server accepts one WebSocket client at a time;
+connect that client to the port assigned to its instance.
+
+For pyOCD/ST-LINK, the TTY (for example `/dev/ttyACM0`) identifies the probe,
+but pyOCD communicates through its USB device node under `/dev/bus/usb`. For
+that reason, the unit does not use `PrivateDevices=yes` or a TTY-only
+`DeviceAllow=` rule: either would hide/block the USB node required by libusb.
+Instead, the udev example makes ST-LINK V3 nodes inaccessible to the service
+account by default and grants the selected probe to a dedicated group. The USB
+nodes remain visible in `/dev`, but other probes cannot be opened by the
+unprivileged service account. Adapt the vendor/product and serial matches for
+other probe types.
+
+Install the package and create the shared service account, then install the
+template, boot-time scanner, and a suitably edited udev rule:
+
+```console
+sudo useradd --system --no-create-home --home-dir /var/lib/pygdbserver --shell /usr/sbin/nologin pygdbserver
+sudo install -d -m 0750 /etc/pygdbserver
+sudo install -D -m 0644 doc/examples/pygdbserver@.service /etc/systemd/system/pygdbserver@.service
+sudo install -D -m 0644 doc/examples/pygdbserver.service /etc/systemd/system/pygdbserver.service
+sudo install -D -m 0755 doc/examples/pygdbserver-start-all.py /usr/local/libexec/pygdbserver-start-all.py
+sudo install -D -m 0644 doc/examples/pygdbserver-udev.rules /etc/udev/rules.d/99-pygdbserver.rules
+```
+
+Install the target configuration and create one system group, udev rule and
+environment file for each probe serial:
+
+```console
+sudo install -m 0644 doc/examples/servercfg-multi.json /etc/pygdbserver/servercfg-multi.json
+sudo install -m 0644 doc/examples/pygdbserver-instance.conf /etc/pygdbserver/<USB-serial>.conf
+```
+
+Edit `/etc/pygdbserver/<USB-serial>.conf`, setting `DEVICE_PATH` to that
+probe's `/dev/ttyUSBx` or `/dev/ttyACMx` and assigning a unique
+`LISTEN_ADDRESS` port. Prefer a stable `/dev/serial/by-id/...` path when
+available. Add a matching per-serial group and udev rule for every probe;
+start from [`pygdbserver-udev.rules`](examples/pygdbserver-udev.rules). Set
+`PYGDBSERVER_CONFIG` to the target JSON file; start from
+[`servercfg-multi.json`](examples/servercfg-multi.json), which expands
+`{usb_serial}` for pyOCD. If `pyGdbServer` is installed in a virtual
+environment, change the `ExecStart` executable in the unit to its absolute
+path.
+
+For the sample ST-LINK serial, create the matching group before reloading udev:
+
+```console
+sudo groupadd --system pygdb-004300483232510239353236
+sudo udevadm control --reload
+```
+
+Unplug and reconnect the probe so the rules are applied. The `.conf` filename
+stem is used as the systemd instance name and must match the probe serial. Then
+enable the scanner service; it waits for udev, checks each `DEVICE_PATH`, and
+queues only instances whose path is a character device:
+
+```console
+sudo systemctl daemon-reload
+sudo systemctl enable --now pygdbserver.service
+```
+
+No device present, or no `.conf` files, is a successful no-op: the corresponding
+`pygdbserver@…` unit is not started. The scanner uses `systemctl start --no-block`
+so all detected instances start independently. To rescan after plugging in a
+probe later, run `sudo systemctl restart pygdbserver.service`. Repeat the group,
+udev rule, environment file and port for each additional probe. For example,
+clients can connect to
+`ws://debug-host:1234` and `ws://debug-host:1235`. These API endpoints have no
+built-in authentication or TLS; expose them only on a trusted network or behind
+a protected reverse proxy. Each started instance restarts if the server exits.
+
+This udev/group arrangement restricts which USB probe the service account can
+open, but it does not hide the other USB device-node names from `/dev`. A
+literal per-process device namespace for libusb would need a dynamic mount or
+device-cgroup setup tied to the current USB bus/device numbers, which can
+change whenever the probe reconnects; a static TTY-based systemd unit cannot
+reliably provide that stronger visibility boundary.
+
 ## Protocol
 
 The API is **JSON-RPC 2.0 over RFC 6455 WebSocket**. One WebSocket text message

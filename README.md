@@ -77,6 +77,8 @@ also shuts down GDB and the OCD. The WebSocket API uses JSON-RPC 2.0, so other
 clients can automate the same session without the dashboard. See
 [`doc/pygdbserver.md`](doc/pygdbserver.md) for configuration fields, API
 methods, protocol examples, and complete client behavior.
+For boot-time operation with one isolated server instance per USB probe, see
+the [systemd multi-instance deployment](doc/pygdbserver.md#systemd-multi-instance-deployment).
 
 ![pyGdbClient dashboard snapshot](doc/pygdbclient.png)
 
