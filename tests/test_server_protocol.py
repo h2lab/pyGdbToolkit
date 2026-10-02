@@ -4,15 +4,18 @@
 """Unit tests for pyGdbServer's network-independent protocol behavior."""
 
 import asyncio
+import base64
 import json
 from pathlib import Path
 import shutil
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
+from pyGdbClient.app import PyGdbClientApp
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
 from pyGdbServer.server import PyGdbServer, _ocd_listener_message
@@ -38,6 +41,7 @@ class FakeMiSession:
 
 def _server(tmp_path: Path) -> tuple[PyGdbServer, FakeMiSession]:
     server = object.__new__(PyGdbServer)
+    server.workspace = tmp_path
     server.logs = LogStore(tmp_path)
     fake_mi = FakeMiSession()
     server.mi = fake_mi  # type: ignore[assignment]
@@ -80,6 +84,140 @@ def test_command_prefixes_and_raw_mi_are_dispatched(tmp_path: Path) -> None:
         ("mi", "-data-list-register-names", 30.0),
     ]
     assert [response["result"]["class"] for response in responses] == ["done"] * 4
+
+
+def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
+    """Binary uploads and default, relative, and absolute listings bypass MI."""
+    server, fake_mi = _server(tmp_path)
+    directory = tmp_path / "remote files"
+    directory.mkdir()
+    content = b"\x00\xfffirmware\n"
+
+    async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        response, _ = await server.handle_rpc_message(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        )
+        assert response is not None
+        assert "error" not in response
+        return response["result"]
+
+    async def exercise() -> None:
+        for destination in (None, "remote files", str(directory)):
+            params = {"filename": "firmware.bin", "content": base64.b64encode(content).decode()}
+            if destination is not None:
+                params["directory"] = destination
+            result = await request("workspace.upload", params)
+            assert Path(result["path"]).read_bytes() == content
+            assert result["size"] == len(content)
+        default = await request("workspace.list", {})
+        assert default["path"] == str(tmp_path)
+        assert {"name": "remote files", "is_directory": True} in default["entries"]
+        for destination in ("remote files", str(directory)):
+            listing = await request("workspace.list", {"directory": destination})
+            assert listing == {
+                "path": str(directory),
+                "entries": [{"name": "firmware.bin", "is_directory": False}],
+            }
+        await request("workspace.upload", {"filename": "empty", "content": ""})
+        assert (tmp_path / "empty").read_bytes() == b""
+        await request("workspace.upload", {"filename": "firmware.bin", "content": ""})
+        assert (tmp_path / "firmware.bin").read_bytes() == b""
+
+    asyncio.run(exercise())
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize(
+    "method, params, code",
+    [
+        ("workspace.upload", {"filename": "../escape", "content": ""}, -32602),
+        ("workspace.upload", {"filename": ".", "content": ""}, -32602),
+        ("workspace.upload", {"filename": "file", "content": "!"}, -32602),
+        ("workspace.upload", {"filename": "file", "content": 42}, -32602),
+        ("workspace.upload", {"filename": "file"}, -32602),
+        ("workspace.list", {"directory": 42}, -32602),
+        ("workspace.list", {"directory": "missing"}, -32000),
+        ("workspace.upload", {"filename": "file", "content": "", "directory": "missing"}, -32000),
+    ],
+)
+def test_workspace_errors_do_not_call_gdb(
+    tmp_path: Path, method: str, params: dict[str, Any], code: int
+) -> None:
+    """Invalid file requests fail without dispatching a GDB command."""
+    server, fake_mi = _server(tmp_path)
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        )
+    )
+    assert response is not None
+    assert response["error"]["code"] == code
+    assert fake_mi.calls == []
+
+
+def test_workspace_upload_size_limit(tmp_path: Path) -> None:
+    """The server accepts the size boundary and rejects larger uploads without MI."""
+    server, fake_mi = _server(tmp_path)
+
+    async def exercise() -> None:
+        for size in (5 * 1024 * 1024, 5 * 1024 * 1024 + 1):
+            response, _ = await server.handle_rpc_message(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "workspace.upload",
+                        "params": {
+                            "filename": "large.bin",
+                            "content": base64.b64encode(bytes(size)).decode("ascii"),
+                        },
+                    }
+                )
+            )
+            assert response is not None
+            if size == 5 * 1024 * 1024:
+                assert response["result"]["size"] == size
+            else:
+                assert response["error"]["code"] == -32602
+        assert (tmp_path / "large.bin").stat().st_size == 5 * 1024 * 1024
+
+    asyncio.run(exercise())
+    assert fake_mi.calls == []
+
+
+def test_client_workspace_commands_over_websocket_do_not_call_gdb(tmp_path: Path) -> None:
+    """Actual client commands install and list files through the server transport."""
+    server, fake_mi = _server(tmp_path)
+    source_directory = tmp_path / "client"
+    source_directory.mkdir()
+    source = source_directory / "firmware image.bin"
+    content = b"\x00\xfffirmware\n"
+    source.write_bytes(content)
+    remote_directory = tmp_path / "server"
+    remote_directory.mkdir()
+    server.workspace = remote_directory
+
+    async def exercise() -> None:
+        async with serve(server._handle_connection, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            app = PyGdbClientApp(f"ws://127.0.0.1:{port}")
+            app._append_output = Mock()
+            await app.client.connect()
+            app._connected = True
+            try:
+                await app.execute_command(f'upload "{source}"')
+                assert (remote_directory / source.name).read_bytes() == content
+                await app.execute_command("ls")
+                app._append_output.assert_any_call(f"  {source.name}")
+                await app.execute_command(f'upload "{source}" "{remote_directory}"')
+                await app.execute_command(f'ls "{remote_directory}"')
+                await app.execute_command("ls missing")
+                assert app._append_output.call_args.kwargs == {"error": True}
+            finally:
+                await app.client.close()
+
+    asyncio.run(exercise())
+    assert fake_mi.calls == []
 
 
 def test_json_rpc_errors_and_notification(tmp_path: Path) -> None:
