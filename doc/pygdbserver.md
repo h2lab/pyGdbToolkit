@@ -27,7 +27,7 @@ finally the public API. A failed stage stops the complete stack.
   "gdb-path": "gdb-multiarch",
   "gdb-args": [],
   "ocd-path": "pyocd",
-  "ocd-args": ["gdbserver", "--port", "{gdb_port}"],
+  "ocd-args": ["gdbserver", "--port", "{gdb_port}", "-T", "{telnet_port}"],
   "listen-address": "127.0.0.1:1234",
   "gdb-init": ["monitor reset halt"],
   "log-directory": ".pygdbserver-logs",
@@ -40,7 +40,7 @@ finally the public API. A failed stage stops the complete stack.
 | `gdb-path` | GDB executable. |
 | `gdb-args` | Extra GDB arguments. They must not establish the target connection. |
 | `ocd-path` | pyOCD, OpenOCD, or another GDB-server executable. |
-| `ocd-args` | OCD arguments. `{gdb_port}` and `{loopback}` are expanded. pyOCD and OpenOCD receive suitable arguments automatically when placeholders are omitted. |
+| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. pyOCD and OpenOCD receive GDB port arguments automatically when `{gdb_port}` is omitted; Telnet arguments must be supplied explicitly. |
 | `listen-address` | Public WebSocket address. Port `0` requests a dynamic API port. |
 | `gdb-init` | GDB CLI commands run after connection and toolkit loading. |
 | `log-directory` | Parent of timestamped run-log directories. |
@@ -50,6 +50,61 @@ The OCD GDB endpoint and raw MI adapter always bind to `127.0.0.1` with dynamic
 ports. The raw MI adapter is for local diagnostics; clients should use the API.
 When exposing the public API beyond loopback, place it behind a trusted network
 or a TLS and authentication reverse proxy.
+
+### Multiple instances on the same loopback address
+
+Use a different public `listen-address` port in each instance's JSON file.
+pyGdbServer selects distinct free GDB and Telnet ports on `127.0.0.1` using the
+operating system's port-`0` allocation and substitutes them for `{gdb_port}` and
+`{telnet_port}` in `ocd-args`. Both sockets are held during allocation to ensure
+the ports differ, then released before OCD starts. Another process could still
+claim a port between allocation and OCD startup.
+
+For **pyOCD**, keep `--port {gdb_port}` for GDB and add `-T {telnet_port}`
+(equivalently, `--telnet-port {telnet_port}`) to use the allocated Telnet port instead of
+the default `4444`. Each option and its value must be separate JSON strings:
+
+```json
+{
+  "ocd-path": "pyocd",
+  "ocd-args": ["gdbserver", "--port", "{gdb_port}", "-T", "{telnet_port}"]
+}
+```
+
+pyGdbServer supplies `{telnet_port}` but does **not** add the Telnet option
+automatically. Add it explicitly to each configuration used for concurrent
+pyOCD instances. Existing configurations without this placeholder retain their
+Telnet settings, including `-T 0` if allocation by pyOCD itself is preferred.
+
+For **OpenOCD**, use `gdb_port {gdb_port}` for GDB and configure both auxiliary
+listeners: Telnet defaults to `4444` and TCL to `6666`. Their equivalent dynamic
+port settings are `-c "telnet_port {telnet_port}"` and `-c "tcl_port 0"`.
+The Telnet port comes from pyGdbServer; TCL port allocation remains OpenOCD's
+responsibility:
+
+```json
+{
+  "ocd-path": "openocd",
+  "ocd-args": [
+    "-c", "gdb_port {gdb_port}",
+    "-c", "telnet_port {telnet_port}",
+    "-c", "tcl_port 0",
+    "-f", "interface/stlink.cfg",
+    "-f", "target/stm32f4x.cfg"
+  ]
+}
+```
+
+Replace the interface and target files with those for your hardware. If Telnet
+and TCL are not needed, use `telnet_port disabled` and `tcl_port disabled`
+instead. Alternatively, assign distinct fixed ports to each instance.
+These settings must be applied before OpenOCD's `init`; configuration scripts
+must not override them. pyGdbServer adds neither the Telnet nor the TCL settings.
+Any additional listeners enabled by your OCD configuration also need distinct
+ports or must be disabled.
+
+See the [pyOCD GDB server documentation](https://pyocd.io/docs/gdbserver.html)
+and [OpenOCD TCP/IP port configuration](https://openocd.org/doc/html/Server-Configuration.html#TCP_002fIP-Ports).
 
 ## Protocol
 

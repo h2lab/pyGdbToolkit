@@ -30,14 +30,17 @@ class PyGdbServer:
         self.ocd: ManagedProcess | None = None
         self.mi = MiSession(config.gdb_path, config.gdb_args, self.logs)
         self.gdb_port = 0
+        self.telnet_port = 0
         self.api_port = 0
         self._websocket_server: Server | None = None
         self._shutdown = asyncio.Event()
 
     async def start(self) -> None:
         """Start OCD and GDB, connect the target, and load pyGdbToolkit."""
-        self.gdb_port = _free_loopback_port()
-        self.ocd = ManagedProcess("ocd", self.config.ocd_command(self.gdb_port), self.logs)
+        self.gdb_port, self.telnet_port = _free_loopback_ports()
+        self.ocd = ManagedProcess(
+            "ocd", self.config.ocd_command(self.gdb_port, self.telnet_port), self.logs
+        )
         await self.ocd.start()
         await self._wait_for_ocd()
 
@@ -310,10 +313,14 @@ def _rpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
-def _free_loopback_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as temporary:
-        temporary.bind(("127.0.0.1", 0))
-        return int(temporary.getsockname()[1])
+def _free_loopback_ports() -> tuple[int, int]:
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gdb_socket,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as telnet_socket,
+    ):
+        gdb_socket.bind(("127.0.0.1", 0))
+        telnet_socket.bind(("127.0.0.1", 0))
+        return int(gdb_socket.getsockname()[1]), int(telnet_socket.getsockname()[1])
 
 
 def _toolkit_python_path() -> Path:

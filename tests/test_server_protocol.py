@@ -7,6 +7,7 @@ import asyncio
 import json
 from pathlib import Path
 import shutil
+import socket
 from typing import Any
 
 import pytest
@@ -15,7 +16,22 @@ from websockets.asyncio.server import serve
 
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
-from pyGdbServer.server import PyGdbServer, _ocd_listener_message
+from pyGdbServer.server import PyGdbServer, _free_loopback_ports, _ocd_listener_message
+
+
+def test_gdb_and_telnet_ports_are_distinct_and_available() -> None:
+    """The operating system allocates two distinct free loopback ports."""
+    gdb_port, telnet_port = _free_loopback_ports()
+
+    assert 0 < gdb_port <= 65535
+    assert 0 < telnet_port <= 65535
+    assert gdb_port != telnet_port
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gdb_socket,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as telnet_socket,
+    ):
+        gdb_socket.bind(("127.0.0.1", gdb_port))
+        telnet_socket.bind(("127.0.0.1", telnet_port))
 
 
 class FakeMiSession:
