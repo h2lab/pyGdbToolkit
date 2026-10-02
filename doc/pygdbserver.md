@@ -97,6 +97,35 @@ Runs a raw MI command, which must start with `-`.
 {"jsonrpc":"2.0","id":5,"method":"mi.execute","params":{"command":"-data-list-register-names"}}
 ```
 
+### `workspace.upload`
+
+Installs a file in an existing server directory, independently of GDB and OCD.
+`filename` is a basename without directory components; `content` is strict
+base64-encoded binary data, limited to 5 MiB before encoding. Optional
+`directory` defaults to the server workspace: the working directory captured
+when the server is created. Relative directories are resolved from that
+workspace; absolute paths such as `/tmp` are also accepted. Existing files
+are replaced atomically. The destination directory must already exist.
+
+```json
+{"jsonrpc":"2.0","id":12,"method":"workspace.upload","params":{"filename":"example.txt","content":"aGVsbG8K","directory":"/tmp"}}
+{"jsonrpc":"2.0","id":12,"result":{"path":"/tmp/example.txt","size":6}}
+```
+
+### `workspace.list`
+
+Lists the server workspace by default, or an existing `directory` using the
+same path rules as uploads. Entries are sorted by name and identify directories.
+This method does not send any GDB or OCD command.
+
+```json
+{"jsonrpc":"2.0","id":13,"method":"workspace.list","params":{"directory":"/tmp"}}
+{"jsonrpc":"2.0","id":13,"result":{"path":"/tmp","entries":[{"name":"example.txt","is_directory":false}]}}
+```
+
+These methods use the server process's filesystem permissions. They are not
+restricted to the workspace, so expose the API only to trusted clients.
+
 ### `server.status`
 
 Returns process IDs, selected MI version, dynamic internal ports, API address,
@@ -187,6 +216,21 @@ manuals. GDB CLI commands use `gdb <command>`; commands for the selected OCD use
 The command prompt retains the last 40 submitted commands. Use `Up` and `Down`
 to browse them; enter `history` to list the retained commands in the output
 panel. This history is local to the client session.
+
+Enter `upload <file> [dir]` to copy a local file to the server, preserving its
+basename. Without `dir`, it is installed in the server workspace; with `dir`,
+it is installed in that server directory. Uploads support binary files up to
+5 MiB and replace existing files. Enter `ls [dir]` to display the workspace or
+the specified server directory; directory names are shown with a trailing `/`.
+Quote paths containing spaces. Neither command interacts with GDB or OCD;
+the dashboard's existing periodic target-status polling remains unchanged.
+
+```console
+upload firmware.elf
+upload "local files/device.svd" /tmp
+ls
+ls /tmp
+```
 
 `rtos load-project --from <path>` is executed by GDB on the **server**. The path
 is therefore resolved in the server's filesystem, not the client's. For a
