@@ -1,5 +1,5 @@
 # Example for ST-LINK V3 (0483:374e). Other ST-LINK probes stay inaccessible
-# to the unprivileged server user; grant this probe to its dedicated group.
+# to the unprivileged server user; grant configured probes to the shared group.
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0483", ATTR{idProduct}=="374e", MODE="0600"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{serial}=="004300483232510239353236", GROUP="pygdb-004300483232510239353236", MODE="0660"
-SUBSYSTEM=="tty", ATTRS{serial}=="004300483232510239353236", GROUP="pygdb-004300483232510239353236", MODE="0660"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{serial}=="004300483232510239353236", GROUP="pygdb", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{serial}=="004300483232510239353236", GROUP="pygdb", MODE="0660"

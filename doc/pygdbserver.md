@@ -64,10 +64,10 @@ but pyOCD communicates through its USB device node under `/dev/bus/usb`. For
 that reason, the unit does not use `PrivateDevices=yes` or a TTY-only
 `DeviceAllow=` rule: either would hide/block the USB node required by libusb.
 Instead, the udev example makes ST-LINK V3 nodes inaccessible to the service
-account by default and grants the selected probe to a dedicated group. The USB
-nodes remain visible in `/dev`, but other probes cannot be opened by the
-unprivileged service account. Adapt the vendor/product and serial matches for
-other probe types.
+account by default and grants configured probes to the shared `pygdb` group.
+The USB nodes remain visible in `/dev`; probes not matched by a serial-specific
+rule cannot be opened by the unprivileged service account. Adapt the
+vendor/product and serial matches for other probe types.
 
 Install the package and create the shared service account, then install the
 template, boot-time scanner, and a suitably edited udev rule:
@@ -82,24 +82,39 @@ sudo install -D -m 0755 doc/examples/pygdbserver-start-all.py /usr/local/libexec
 sudo install -D -m 0644 doc/examples/pygdbserver-udev.rules /etc/udev/rules.d/99-pygdbserver.rules
 ```
 
-Install the target configuration and create one system group, udev rule and
-environment file for each probe serial:
+Create the shared device-access group once and install the example instance
+files. They are templates only; each probe must get its own pair of files:
 
 ```console
-sudo install -m 0644 doc/examples/servercfg-multi.json /etc/pygdbserver/servercfg-multi.json
-sudo install -m 0644 doc/examples/pygdbserver-instance.conf /etc/pygdbserver/<USB-serial>.conf
+sudo groupadd --system pygdb
+sudo install -m 0644 doc/examples/servercfg-instance.json /etc/pygdbserver/<instance>.json
+sudo install -m 0644 doc/examples/pygdbserver-instance.conf /etc/pygdbserver/<instance>.conf
 ```
 
-Edit `/etc/pygdbserver/<USB-serial>.conf`, setting `DEVICE_PATH` to that
-probe's `/dev/ttyUSBx` or `/dev/ttyACMx` and assigning a unique
-`LISTEN_ADDRESS` port. Prefer a stable `/dev/serial/by-id/...` path when
-available. Add a matching per-serial group and udev rule for every probe;
-start from [`pygdbserver-udev.rules`](examples/pygdbserver-udev.rules). Set
-`PYGDBSERVER_CONFIG` to the target JSON file; start from
-[`servercfg-multi.json`](examples/servercfg-multi.json), which expands
-`{usb_serial}` for pyOCD. If `pyGdbServer` is installed in a virtual
-environment, change the `ExecStart` executable in the unit to its absolute
-path.
+Each pair shares the same `<instance>` stem. In `<instance>.conf`, set
+`PYGDBSERVER_CONFIG=/etc/pygdbserver/<instance>.json`, `DEVICE_PATH` to that
+probe's `/dev/ttyUSBx` or `/dev/ttyACMx`, and a unique `LISTEN_ADDRESS` port.
+Prefer a stable `/dev/serial/by-id/...` path when available. In the paired JSON,
+configure the GDB binary and arguments, OCD binary and arguments, target, and
+GDB initialization commands for that probe. The JSON file is not shared
+between instances; `servercfg-instance.json` is a starting template whose
+sample target (`stm32u5a5zjtxq`) must be changed to match each board. Add a
+matching serial-specific udev rule for every probe, assigning each to the
+shared `pygdb` group; start from
+[`pygdbserver-udev.rules`](examples/pygdbserver-udev.rules). Set
+`{usb_serial}` in pyOCD arguments to select the probe from the TTY. If
+`pyGdbServer` is installed in a virtual environment, change the `ExecStart`
+executable in the unit to its absolute path.
+
+The scanner uses each `.conf` filename stem as the systemd instance name. For
+example, `/etc/pygdbserver/stlink-lab.conf` paired with
+`/etc/pygdbserver/stlink-lab.json` starts
+`pygdbserver@stlink-lab.service`. In the template unit
+`pygdbserver@.service`, systemd substitutes `%i` with `stlink-lab`, so
+`EnvironmentFile=/etc/pygdbserver/%i.conf` loads the matching environment file;
+the file's `PYGDBSERVER_CONFIG` then selects the matching JSON. The scanner
+requires that `PYGDBSERVER_CONFIG` point to `/etc/pygdbserver/<instance>.json`
+and skips a connected device if this paired JSON file is missing.
 
 ### Install pyOCD packs for the service account
 
@@ -123,12 +138,12 @@ Run `pack install` once for each target family that needs a pack. `pack show`
 should list the downloaded pack when run as `pygdbserver`; that is the same
 user and home used by the systemd instances. If `pyocd` is not in the service
 account's `PATH`, use its absolute executable path in both commands and in
-`ocd-path` in each server configuration.
+`ocd-path` in each instance JSON file.
 
-For the sample ST-LINK serial, create the matching group before reloading udev:
+Reload udev after creating the shared group and installing all serial-specific
+rules:
 
 ```console
-sudo groupadd --system pygdb-004300483232510239353236
 sudo udevadm control --reload
 ```
 
@@ -145,14 +160,17 @@ sudo systemctl enable --now pygdbserver.service
 No device present, or no `.conf` files, is a successful no-op: the corresponding
 `pygdbserver@…` unit is not started. The scanner uses `systemctl start --no-block`
 so all detected instances start independently. To rescan after plugging in a
-probe later, run `sudo systemctl restart pygdbserver.service`. Repeat the group,
-udev rule, environment file and port for each additional probe. For example,
-clients can connect to
+probe later, run `sudo systemctl restart pygdbserver.service`. Repeat the udev
+rule, environment file and port for each additional probe. All instances use
+the same `pygdb` group, so Linux device permissions allow each instance access
+to every probe matched by these rules. PyOCD still selects its configured probe
+by USB serial, but the common group does not enforce per-process device
+isolation. For example, clients can connect to
 `ws://debug-host:1234` and `ws://debug-host:1235`. These API endpoints have no
 built-in authentication or TLS; expose them only on a trusted network or behind
 a protected reverse proxy. Each started instance restarts if the server exits.
 
-This udev/group arrangement restricts which USB probe the service account can
+This udev/group arrangement restricts which USB probes the service account can
 open, but it does not hide the other USB device-node names from `/dev`. A
 literal per-process device namespace for libusb would need a dynamic mount or
 device-cgroup setup tied to the current USB bus/device numbers, which can

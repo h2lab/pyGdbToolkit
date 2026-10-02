@@ -31,6 +31,28 @@ def _device_path(config_path: Path) -> Path:
     return Path(fields[0])
 
 
+def _server_config_path(config_path: Path) -> Path:
+    """Read the JSON configuration path assigned to this instance."""
+    value: str | None = None
+    for line in config_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, raw_value = line.partition("=")
+        if separator and key.strip() == "PYGDBSERVER_CONFIG":
+            value = raw_value.strip()
+    if value is None:
+        raise ValueError("missing PYGDBSERVER_CONFIG assignment")
+    fields = shlex.split(value, comments=True)
+    if len(fields) != 1 or not Path(fields[0]).is_absolute():
+        raise ValueError("PYGDBSERVER_CONFIG must be one absolute path")
+    server_config = Path(fields[0])
+    expected_config = config_path.with_suffix(".json")
+    if server_config != expected_config:
+        raise ValueError(f"PYGDBSERVER_CONFIG must point to paired file {expected_config}")
+    return server_config
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config-dir", type=Path, default=Path("/etc/pygdbserver"))
@@ -55,6 +77,17 @@ def main() -> int:
             continue
         if not device.is_char_device():
             print(f"Skipping {config_path}: device {device} is absent")
+            continue
+
+        try:
+            server_config = _server_config_path(config_path)
+        except (OSError, ValueError) as error:
+            print(f"Skipping {config_path}: {error}", file=sys.stderr)
+            failures += 1
+            continue
+        if not server_config.is_file():
+            print(f"Skipping {config_path}: JSON config {server_config} is absent", file=sys.stderr)
+            failures += 1
             continue
 
         unit = f"pygdbserver@{config_path.stem}.service"
