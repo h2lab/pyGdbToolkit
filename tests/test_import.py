@@ -13,6 +13,17 @@ def test_import() -> None:
     assert pyGdbToolkit is not None
 
 
+def test_toolkit_commands_register_their_help_in_the_session() -> None:
+    """Every top-level command publishes its own help through the shared session."""
+    from pyGdbToolkit import SESSION
+
+    helps = {command.name: command for command in SESSION.commands}
+
+    assert set(helps) >= {"lscpu", "fault_info", "rtos", "svd", "secscan"}
+    assert any(entry.syntax == "svd load" for entry in helps["svd"].usage)
+    assert helps["rtos"].to_dict()["notes"]
+
+
 def test_arm_package_exports_only_target_probe_integration() -> None:
     """The Arm package does not become a convenience barrel for implementation APIs."""
     import pyGdbToolkit.arch.arm as arm

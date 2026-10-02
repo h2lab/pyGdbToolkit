@@ -25,7 +25,7 @@ from .arch import (
     DiagnosticSeverity,
 )
 from .diagnostic_runtime import gdb_diagnostic_access
-from .session import SESSION, ToolkitSession
+from .session import SESSION, CommandHelp, CommandUsage, ToolkitSession
 from .target_memory import TargetReadError
 
 CONSOLE = Console(force_terminal=True)
@@ -326,6 +326,24 @@ def load_report_from_json(input_path: Path) -> SecscanReport:
         raise ValueError(f"'{input_path}' is not a valid secscan report: {error}") from error
 
 
+SECSCAN_HELP = CommandHelp(
+    name="secscan",
+    summary="Audit the target security configuration and render or export the report.",
+    usage=(
+        CommandUsage(
+            "secscan audit [<output.json>]",
+            "Run the full security audit against the live target and optionally dump it to JSON",
+        ),
+        CommandUsage(
+            "secscan report <report.json> [--html <output.html>]",
+            "Render a clean report from a previously dumped audit file (console by default, "
+            "or a standalone HTML file with --html)",
+        ),
+        CommandUsage("secscan help", "Show this command reference"),
+    ),
+)
+
+
 def render_help() -> None:
     """Render the secscan command overview and help table."""
     table = Table(
@@ -336,25 +354,20 @@ def render_help() -> None:
     )
     table.add_column("Command Syntax", style="bold yellow", no_wrap=True)
     table.add_column("Description")
-    table.add_row(
-        "secscan audit [<output.json>]",
-        "Run the full security audit against the live target and optionally dump it to JSON",
-    )
-    table.add_row(
-        "secscan report <report.json> [--html <output.html>]",
-        "Render a clean report from a previously dumped audit file (console by default, "
-        "or a standalone HTML file with --html)",
-    )
-    table.add_row("secscan help", "Show this command reference")
+    for entry in SECSCAN_HELP.usage:
+        table.add_row(entry.syntax, entry.description)
     CONSOLE.print(table)
 
 
 class SecscanCmd(gdb.Command):
     """Run a registered security audit and render its portable report."""
 
+    HELP = SECSCAN_HELP
+
     def __init__(self) -> None:
         """Register the command with GDB."""
         super().__init__("secscan", gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+        SESSION.register_command(self.HELP)
 
     def invoke(self, arg: str, from_tty: bool) -> None:
         """Display the help overview."""

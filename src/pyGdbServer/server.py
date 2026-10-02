@@ -197,6 +197,13 @@ class PyGdbServer:
             return await self.target_status(), False
         if method == "svd.peripherals":
             return await self.svd_peripherals(), False
+        if method == "toolkit.commands":
+            return await self.toolkit_commands(), False
+        if method == "toolkit.help":
+            command = params.get("command")
+            if command is not None and not isinstance(command, str):
+                raise ValueError("command must be a string")
+            return await self.toolkit_help(command), False
         if method == "logs.get":
             since = params.get("since", 0)
             limit = params.get("limit", 1_000)
@@ -253,15 +260,50 @@ class PyGdbServer:
             "for r in p.registers]} for p in SESSION.device.peripherals] "
             "if SESSION.device else []}))"
         )
+        data = await self._python_json(marker, command)
+        if data is None:
+            raise RuntimeError("GDB did not return structured SVD metadata")
+        return {"loaded": data["device"] is not None, **data}
+
+    async def toolkit_commands(self) -> dict[str, Any]:
+        """Return the name and summary of every pyGdbToolkit command loaded in GDB."""
+        commands = await self._toolkit_command_helps()
+        return {
+            "commands": [
+                {"name": command["name"], "summary": command["summary"]} for command in commands
+            ]
+        }
+
+    async def toolkit_help(self, command: str | None = None) -> dict[str, Any]:
+        """Return the help of one pyGdbToolkit command, or of all of them."""
+        commands = await self._toolkit_command_helps()
+        if command is None:
+            return {"commands": commands}
+        selected = [entry for entry in commands if entry["name"] == command.strip()]
+        if not selected:
+            raise ValueError(f"Unknown pyGdbToolkit command: {command}")
+        return {"commands": selected}
+
+    async def _toolkit_command_helps(self) -> list[dict[str, Any]]:
+        marker = "PYGDBSERVER_TOOLKIT_HELP_JSON:"
+        command = (
+            "python import json; from pyGdbToolkit.session import SESSION; "
+            f"print('{marker}' + json.dumps([c.to_dict() for c in SESSION.commands]))"
+        )
+        data = await self._python_json(marker, command)
+        if not isinstance(data, list):
+            raise RuntimeError("GDB did not return the pyGdbToolkit command help")
+        return data
+
+    async def _python_json(self, marker: str, command: str) -> Any:
+        """Run a GDB Python command and decode the JSON payload printed after ``marker``."""
         result = await self.mi.console(command)
         for output in result.output:
             for line in output.splitlines():
                 payload_index = line.find(marker)
                 if payload_index >= 0:
-                    payload = line[payload_index + len(marker) :].strip()
-                    data = json.loads(payload)
-                    return {"loaded": data["device"] is not None, **data}
-        raise RuntimeError("GDB did not return structured SVD metadata")
+                    return json.loads(line[payload_index + len(marker) :].strip())
+        return None
 
     def status(self) -> dict[str, Any]:
         """Describe live endpoints and child process state."""
