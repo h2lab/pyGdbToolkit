@@ -11,6 +11,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=pygdbserver
 Group=pygdbserver
+Environment=HOME=/var/lib/pygdbserver
 SupplementaryGroups=pygdb-%i
 EnvironmentFile=/etc/pygdbserver/%i.conf
 ExecStart=/usr/bin/env pyGdbServer ${PYGDBSERVER_CONFIG} --device=${DEVICE_PATH} --listen-address=${LISTEN_ADDRESS} --log-directory=/var/lib/pygdbserver-%i
@@ -23,6 +24,7 @@ PrivateTmp=yes
 PrivateDevices=no
 ProtectSystem=strict
 ProtectHome=yes
+ReadWritePaths=/var/lib/pygdbserver/.pyocd
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

@@ -73,7 +73,8 @@ Install the package and create the shared service account, then install the
 template, boot-time scanner, and a suitably edited udev rule:
 
 ```console
-sudo useradd --system --no-create-home --home-dir /var/lib/pygdbserver --shell /usr/sbin/nologin pygdbserver
+sudo useradd --system --user-group --create-home --home-dir /var/lib/pygdbserver --shell /usr/sbin/nologin pygdbserver
+sudo install -d -o pygdbserver -g pygdbserver -m 0750 /var/lib/pygdbserver
 sudo install -d -m 0750 /etc/pygdbserver
 sudo install -D -m 0644 doc/examples/pygdbserver@.service /etc/systemd/system/pygdbserver@.service
 sudo install -D -m 0644 doc/examples/pygdbserver.service /etc/systemd/system/pygdbserver.service
@@ -99,6 +100,30 @@ start from [`pygdbserver-udev.rules`](examples/pygdbserver-udev.rules). Set
 `{usb_serial}` for pyOCD. If `pyGdbServer` is installed in a virtual
 environment, change the `ExecStart` executable in the unit to its absolute
 path.
+
+### Install pyOCD packs for the service account
+
+pyOCD stores user-installed CMSIS-Packs in its per-user data directory. The
+instance unit sets `HOME=/var/lib/pygdbserver`, so install and inspect packs as
+that same account; installing them as root or as an interactive user will put
+them in a different context and the service may not find them. The `pyocd`
+executable used below must be the same installation that the service resolves
+from `ocd-path` (and must be readable/executable outside any home directory
+hidden by systemd sandboxing).
+
+For the sample target:
+
+```console
+sudo -u pygdbserver -H pyocd pack install stm32u5a5zjtxq
+sudo -u pygdbserver -H pyocd pack show
+```
+
+`-H` selects the service account's configured home, `/var/lib/pygdbserver`.
+Run `pack install` once for each target family that needs a pack. `pack show`
+should list the downloaded pack when run as `pygdbserver`; that is the same
+user and home used by the systemd instances. If `pyocd` is not in the service
+account's `PATH`, use its absolute executable path in both commands and in
+`ocd-path` in each server configuration.
 
 For the sample ST-LINK serial, create the matching group before reloading udev:
 
