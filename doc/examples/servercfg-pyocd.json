@@ -5,6 +5,7 @@
     "ocd-args": [
         "gdbserver",
         "--port", "{gdb_port}",
+        "-T", "{telnet_port}",
         "--target", "stm32u5a5zjtxq",
         "-u", "004300483232510239353236"
     ],

@@ -1,0 +1,22 @@
+{
+    "gdb-path": "gdb-multiarch",
+    "gdb-args": [],
+    "ocd-path": "openocd",
+    "ocd-args": [
+        "-c", "bindto {loopback}",
+        "-c", "gdb_port {gdb_port}",
+        "-c", "telnet_port {telnet_port}",
+        "-c", "tcl_port 0",
+        "-f", "interface/stlink.cfg",
+        "-f", "target/stm32u5x.cfg"
+    ],
+    "listen-address": "localhost:1235",
+    "gdb-init": [
+        "set arch arm",
+        "monitor reset halt",
+        "set mem inaccessible-by-default off",
+        "svd load"
+    ],
+    "log-directory": ".pygdbserver-logs",
+    "startup-timeout": 15
+}
