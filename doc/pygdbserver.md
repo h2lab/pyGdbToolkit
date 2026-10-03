@@ -328,6 +328,14 @@ commands. Enter `quit` or press `Ctrl+Q` to exit only the dashboard. Enter
 `quit --all` to request orderly shutdown of the server, GDB, and OCD before
 the client exits.
 
+The left panel shows the active physical CPU core and its TCP endpoint above
+the logs. Its core selector lists the discovered CPUs and selects through
+`target.select_core`; it is disabled when inventory is unavailable. The display
+refreshes periodically and after a `dap core` command. A failed selection restores
+the confirmed active core and reports the error in the command-output panel.
+`dap core list`, `dap core`, and `dap core <id>` are also accepted directly at
+the command prompt for both pyOCD and OpenOCD.
+
 Enter `help` in the dashboard prompt for the client commands, the available
 pyGdbToolkit commands and subcommands, and links to the GDB and configured OCD
 manuals. GDB CLI commands use `gdb <command>`; commands for the selected OCD use
