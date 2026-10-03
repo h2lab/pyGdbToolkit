@@ -135,6 +135,24 @@ server. To use this file explicitly, start GDB with `gdb -x gdbinit`.
 
 ## Command reference
 
+### `dap`
+
+Lists, selects and profiles the debug Access Ports exposed by pyOCD or OpenOCD, and
+exports a fresh JSON inventory. ARM ADIv5/APv1 and ADIv6/APv2 are supported
+over the existing JTAG or SWD connection. The OCD is detected automatically
+through the [OCD module interface](doc/ocd.md).
+
+```gdb
+dap list
+dap select 0x2000
+dap profile
+dap report access-ports.json
+```
+
+Selection changes the server AP, not the GDB CPU core. See
+[doc/dap.md](doc/dap.md) for addressing, capability evidence, limitations and
+the Pico 2 W example.
+
 ### `lscpu`
 
 Displays the Arm CPU identity and, for supported STM32 devices, the
