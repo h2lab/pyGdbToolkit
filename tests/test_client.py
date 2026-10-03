@@ -4,9 +4,13 @@
 """Client transport and Textual dashboard tests."""
 
 import asyncio
+import base64
 import json
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 from typing import Any
 
+import pytest
 from textual.widgets import Input, Tree
 from websockets.asyncio.server import ServerConnection, serve
 
@@ -295,6 +299,8 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     for expected in (
         "help",
         "history",
+        "upload FILE [DIR]",
+        "ls [DIR]",
         "quit --all",
         "lscpu",
         "Display the CPU report",
@@ -308,6 +314,89 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     assert "https://pyocd.io/docs/" in pyocd_help
     assert "https://openocd.org/doc/html/" in openocd_help
     assert "not connected" in openocd_help
+
+
+@pytest.mark.parametrize("directory", [None, "/tmp", "remote directory"])
+def test_client_upload_uses_a_dedicated_rpc(tmp_path: Path, directory: str | None) -> None:
+    """Quoted local and remote paths transfer binary data without any GDB RPC."""
+    source = tmp_path / "firmware image.bin"
+    content = b"\x00\xffbinary\n"
+    source.write_bytes(content)
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    app.client.request = AsyncMock(
+        return_value={"path": "/tmp/firmware image.bin", "size": len(content)}
+    )
+    app._append_output = Mock()
+    command = f'upload "{source}"'
+    if directory is not None:
+        command += f' "{directory}"'
+
+    asyncio.run(app.execute_command(command))
+
+    params = {"filename": source.name, "content": base64.b64encode(content).decode("ascii")}
+    if directory is not None:
+        params["directory"] = directory
+    app.client.request.assert_awaited_once_with("workspace.upload", params, timeout=300)
+    app._append_output.assert_called_with("Uploaded /tmp/firmware image.bin (9 bytes)")
+
+
+@pytest.mark.parametrize(
+    "command, params", [("ls", {}), ('ls "/tmp/remote files"', {"directory": "/tmp/remote files"})]
+)
+def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) -> None:
+    """Remote listings render entries and never request a target refresh."""
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    app.client.request = AsyncMock(
+        return_value={
+            "path": "/workspace",
+            "entries": [
+                {"name": "firmware.bin", "is_directory": False},
+                {"name": "images", "is_directory": True},
+            ],
+        }
+    )
+    app._append_output = Mock()
+
+    asyncio.run(app.execute_command(command))
+
+    app.client.request.assert_awaited_once_with("workspace.list", params)
+    app._append_output.assert_any_call("/workspace")
+    app._append_output.assert_any_call("  firmware.bin")
+    app._append_output.assert_any_call("  images/")
+
+
+@pytest.mark.parametrize(
+    "command", ["upload", "upload a b c", "upload /nonexistent/file", "ls a b", 'ls "unfinished']
+)
+def test_invalid_workspace_commands_never_reach_gdb(command: str) -> None:
+    """Syntax and local file errors stay in the client output panel."""
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    app.client.request = AsyncMock()
+    app._append_output = Mock()
+
+    asyncio.run(app.execute_command(command))
+
+    app.client.request.assert_not_awaited()
+    assert app._append_output.call_args.kwargs == {"error": True}
+
+
+def test_client_rejects_oversized_upload_before_sending(tmp_path: Path) -> None:
+    """Oversized files fail locally instead of exceeding the WebSocket limit."""
+    source = tmp_path / "large.bin"
+    with source.open("wb") as output:
+        output.truncate(5 * 1024 * 1024 + 1)
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    app.client.request = AsyncMock()
+    app._append_output = Mock()
+
+    asyncio.run(app.execute_command(f"upload {source}"))
+
+    app.client.request.assert_not_awaited()
+    app._append_output.assert_called_with("upload size must not exceed 5 MiB", error=True)
 
 
 def test_help_command_is_handled_locally() -> None:

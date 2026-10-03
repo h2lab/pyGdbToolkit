@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 from importlib.util import find_spec
 import json
 from pathlib import Path
 import re
 import socket
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from websockets.asyncio.server import Server, ServerConnection, serve
@@ -26,6 +29,7 @@ class PyGdbServer:
 
     def __init__(self, config: ServerConfig) -> None:
         self.config = config
+        self.workspace = Path.cwd().resolve()
         self.logs = LogStore(config.log_directory)
         self.ocd: ManagedProcess | None = None
         self.mi = MiSession(config.gdb_path, config.gdb_args, self.logs)
@@ -182,6 +186,10 @@ class PyGdbServer:
     ) -> tuple[dict[str, Any] | list[dict[str, int | str]], bool]:
         if method == "server.status":
             return self.status(), False
+        if method == "workspace.upload":
+            return await asyncio.to_thread(self._upload_file, params), False
+        if method == "workspace.list":
+            return await asyncio.to_thread(self._list_directory, params), False
         if method == "command.execute":
             command = params["command"]
             if not isinstance(command, str) or not command.strip():
@@ -218,6 +226,58 @@ class PyGdbServer:
         if method == "server.shutdown":
             return {"stopping": True}, False
         raise RpcMethodNotFound(f"Method not found: {method}")
+
+    def _workspace_directory(self, params: dict[str, Any]) -> Path:
+        directory = params.get("directory", ".")
+        if not isinstance(directory, str) or not directory:
+            raise ValueError("directory must be a non-empty string")
+        path = Path(directory).expanduser()
+        if not path.is_absolute():
+            path = self.workspace / path
+        path = path.resolve()
+        if not path.is_dir():
+            raise NotADirectoryError(f"Not a directory: {path}")
+        return path
+
+    def _upload_file(self, params: dict[str, Any]) -> dict[str, Any]:
+        filename = params["filename"]
+        content = params["content"]
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or filename in {".", ".."}
+            or Path(filename).name != filename
+        ):
+            raise ValueError("filename must be a file name without directory components")
+        if not isinstance(content, str):
+            raise ValueError("content must be a base64 string")
+        if len(content) > 4 * ((5 * 1024 * 1024 + 2) // 3):
+            raise ValueError("upload size must not exceed 5 MiB")
+        try:
+            data = base64.b64decode(content, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise ValueError("content must be valid base64") from error
+        if len(data) > 5 * 1024 * 1024:
+            raise ValueError("upload size must not exceed 5 MiB")
+        directory = self._workspace_directory(params)
+        destination = directory / filename
+        with NamedTemporaryFile(dir=directory, delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            try:
+                temporary.write(data)
+                temporary.close()
+                temporary_path.replace(destination)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+        return {"path": str(destination), "size": len(data)}
+
+    def _list_directory(self, params: dict[str, Any]) -> dict[str, Any]:
+        directory = self._workspace_directory(params)
+        entries = [
+            {"name": entry.name, "is_directory": entry.is_dir()}
+            for entry in sorted(directory.iterdir(), key=lambda entry: entry.name)
+        ]
+        return {"path": str(directory), "entries": entries}
 
     async def target_status(self) -> dict[str, Any]:
         """Return selected GDB thread/core, execution state, and discovered AP."""

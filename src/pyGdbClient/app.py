@@ -6,6 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+from pathlib import Path
+import shlex
 from typing import Any
 
 from rich.text import Text
@@ -290,6 +293,8 @@ class PyGdbClientApp(App[None]):
         if show_command:
             self._append_output(f"› {command}")
         try:
+            if await self._execute_workspace_command(command):
+                return
             response = await self.client.request(
                 "command.execute", {"command": command}, timeout=300
             )
@@ -302,10 +307,36 @@ class PyGdbClientApp(App[None]):
                     summary.write(Text.from_ansi(part))
             if response.get("class") == "error":
                 self._append_output(response.get("record", "GDB command failed"), error=True)
-        except (RpcError, ConnectionError, TimeoutError) as error:
+        except (RpcError, ConnectionError, TimeoutError, OSError, ValueError) as error:
             self._append_output(str(error), error=True)
         if command.strip().lower().startswith(("svd load", "svd read")):
             await self.refresh_svd_tree()
+
+    async def _execute_workspace_command(self, command: str) -> bool:
+        name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
+        if name not in {"upload", "ls"}:
+            return False
+        arguments = shlex.split(command)[1:]
+        if name == "upload":
+            if not 1 <= len(arguments) <= 2:
+                raise ValueError("Usage: upload <file> [dir]")
+            path = Path(arguments[0]).expanduser()
+            content = await asyncio.to_thread(_read_upload_file, path)
+            params = {"filename": path.name, "content": base64.b64encode(content).decode("ascii")}
+            if len(arguments) == 2:
+                params["directory"] = arguments[1]
+            response = await self.client.request("workspace.upload", params, timeout=300)
+            self._append_output(f"Uploaded {response['path']} ({response['size']} bytes)")
+        else:
+            if len(arguments) > 1:
+                raise ValueError("Usage: ls [dir]")
+            params = {"directory": arguments[0]} if arguments else {}
+            response = await self.client.request("workspace.list", params)
+            self._append_output(response["path"])
+            for entry in response["entries"]:
+                suffix = "/" if entry["is_directory"] else ""
+                self._append_output(f"  {entry['name']}{suffix}")
+        return True
 
     async def _load_svd(self) -> None:
         """Load the target-matched SVD once and populate the peripheral tree."""
@@ -395,6 +426,14 @@ class PyGdbClientApp(App[None]):
         await self.client.close()
 
 
+def _read_upload_file(path: Path) -> bytes:
+    with path.open("rb") as source:
+        content = source.read(5 * 1024 * 1024 + 1)
+    if len(content) > 5 * 1024 * 1024:
+        raise ValueError("upload size must not exceed 5 MiB")
+    return content
+
+
 def _help_text(
     ocd_executable: str, toolkit_commands: list[dict[str, Any]] | None = None
 ) -> list[Text]:
@@ -414,6 +453,11 @@ def _help_text(
         Text("CLIENT COMMANDS", style="bold cyan"),
         Text("  help          Show this command reference."),
         Text("  history       List the last 40 commands; use Up/Down to browse them."),
+        Text(
+            "  upload FILE [DIR]  Copy a local file to the server directory (default: workspace)."
+        ),
+        Text("    Uploads replace existing files, accept quoted paths, and are limited to 5 MiB."),
+        Text("  ls [DIR]      List a server directory (default: workspace), without calling GDB."),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
         Text("  Ctrl+Q        Same as quit."),
@@ -430,7 +474,7 @@ def _help_text(
             f"  {ocd_name} manual: {ocd_manual}",
             style=f"link {ocd_manual}" if ocd_manual.startswith("https://") else "",
         ),
-        Text("Commands without a prefix are sent to GDB and resolve pyGdbToolkit commands."),
+        Text("Other commands without a prefix are sent to GDB and resolve pyGdbToolkit commands."),
     ]
 
 
