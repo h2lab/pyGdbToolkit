@@ -242,7 +242,7 @@ The console equivalent remains available:
 {"jsonrpc":"2.0","id":24,"method":"command.execute","params":{"command":"dap core 1"}}
 ```
 
-See [CPU core selection](ap.md#cpu-core-selection) for standalone GDB usage and
+See [CPU core selection](dap.md#cpu-core-selection) for standalone GDB usage and
 the opt-in RP2350 hardware tests. `dap select` still selects only an Access Port.
 
 ### `svd.peripherals`

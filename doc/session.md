@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Unified Session Technical Documentation
 
-The session module ([src/pyGdbToolkit/session.py](src/pyGdbToolkit/session.py)) owns the whole
+The session module ([implementation](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/session.py)) owns the whole
 runtime context of a GDB debugging session: target-memory access, architecture identity,
 diagnostic dispatch, and the per-command state previously scattered across the command modules.
 
@@ -106,12 +106,12 @@ expose these event registries is silently supported.
 
 The session core stays architecture-neutral: it only manipulates `Architecture`,
 `TargetDescription`, `ProbeResult`, and `DiagnosticResult`, which are the portable contracts of
-the [`arch`](src/pyGdbToolkit/arch) package. Adding a new architecture therefore requires no
+the [`arch`](https://github.com/h2lab/pyGdbToolkit/tree/main/src/pyGdbToolkit/arch) package. Adding a new architecture therefore requires no
 change in the session module: registering an `ArchitectureProbe` in `DEFAULT_ARCHITECTURE_REGISTRY`
 is enough for `SESSION.probe()` to recognize its targets.
 
 Architecture-specific caching lives in the architecture package itself. For Arm, the
-[src/pyGdbToolkit/arch/arm/session_state.py](src/pyGdbToolkit/arch/arm/session_state.py) module
+[Arm session state](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/arch/arm/session_state.py) module
 defines `ArmInspectionState` and mutualizes:
 
 - **`cortex_m_target(session)`**: Decoded CPUID identity (`CortexMTargetDescription`).

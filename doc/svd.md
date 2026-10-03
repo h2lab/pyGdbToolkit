@@ -6,7 +6,7 @@ The `svd` command provides full CMSIS-SVD hardware peripheral inspection, regist
 
 ## Technical Overview
 
-The `svd` command integrates with [src/pyGdbToolkit/svd.py](src/pyGdbToolkit/svd.py) to manage the lifecycle of hardware register descriptions:
+The `svd` command integrates with the [SVD module](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/svd.py) to manage the lifecycle of hardware register descriptions:
 1. **Auto-Detection**: Automatically identifies the connected MCU via CPUID and vendor electronic signatures, downloads the matching SVD file from [cmsis-svd/cmsis-svd-data](https://github.com/cmsis-svd/cmsis-svd-data), and loads the peripheral model and dictionary hierarchy into memory.
 2. **Explicit Loading**: Accepts arbitrary user-supplied SVD XML files.
 3. **Canonical Inspection**: Reads target peripheral registers over GDB memory access, displaying formatted tabular views and bitfield breakdowns.
