@@ -18,7 +18,7 @@ from .arch import (
     DiagnosticTable,
 )
 from .diagnostic_runtime import gdb_diagnostic_access
-from .session import SESSION, ToolkitSession
+from .session import SESSION, CommandHelp, CommandUsage, ToolkitSession
 from .target_memory import TargetReadError
 
 CONSOLE = Console(force_terminal=True)
@@ -87,9 +87,16 @@ def render_report(report: DiagnosticReport) -> None:
 class FaultInfoCmd(gdb.Command):
     """Run portable fault analysis and render the returned diagnostic report."""
 
+    HELP = CommandHelp(
+        name="fault_info",
+        summary="Decode the target fault status and the stacked exception context.",
+        usage=(CommandUsage("fault_info", "Run the fault analysis on the stopped target"),),
+    )
+
     def __init__(self) -> None:
         """Register the command with GDB."""
         super().__init__("fault_info", gdb.COMMAND_USER)
+        SESSION.register_command(self.HELP)
 
     def invoke(self, arg: str, from_tty: bool) -> None:
         """Execute ``fault_info`` without command-line arguments."""

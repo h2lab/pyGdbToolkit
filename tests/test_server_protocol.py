@@ -8,6 +8,7 @@ import base64
 import json
 from pathlib import Path
 import shutil
+import socket
 from typing import Any
 from unittest.mock import Mock
 
@@ -18,7 +19,22 @@ from websockets.asyncio.server import serve
 from pyGdbClient.app import PyGdbClientApp
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
-from pyGdbServer.server import PyGdbServer, _ocd_listener_message
+from pyGdbServer.server import PyGdbServer, _free_loopback_ports, _ocd_listener_message
+
+
+def test_gdb_and_telnet_ports_are_distinct_and_available() -> None:
+    """The operating system allocates two distinct free loopback ports."""
+    gdb_port, telnet_port = _free_loopback_ports()
+
+    assert 0 < gdb_port <= 65535
+    assert 0 < telnet_port <= 65535
+    assert gdb_port != telnet_port
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gdb_socket,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as telnet_socket,
+    ):
+        gdb_socket.bind(("127.0.0.1", gdb_port))
+        telnet_socket.bind(("127.0.0.1", telnet_port))
 
 
 class FakeMiSession:
@@ -366,6 +382,53 @@ def test_svd_peripherals_returns_structured_device_metadata(tmp_path: Path) -> N
     assert result["loaded"] is True
     assert result["device"] == "TestDevice"
     assert result["peripherals"][0]["name"] == "GPIOA"
+
+
+def test_toolkit_commands_and_help_come_from_the_gdb_session(tmp_path: Path) -> None:
+    """Toolkit command listing and help are read from the GDB-side session registry."""
+    helps = [
+        {"name": "lscpu", "summary": "Identify the core.", "usage": [], "notes": []},
+        {
+            "name": "svd",
+            "summary": "Inspect registers.",
+            "usage": [{"syntax": "svd load", "description": "Load the SVD"}],
+            "notes": [],
+        },
+    ]
+
+    class HelpMiSession(FakeMiSession):
+        async def console(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("console", command, timeout))
+            return MiResult(
+                "done", "done", ("PYGDBSERVER_TOOLKIT_HELP_JSON:" + json.dumps(helps),)
+            )
+
+    async def exercise() -> list[dict[str, Any]]:
+        server, _ = _server(tmp_path)
+        server.mi = HelpMiSession()  # type: ignore[assignment]
+        responses = []
+        for identifier, method, params in (
+            (1, "toolkit.commands", {}),
+            (2, "toolkit.help", {}),
+            (3, "toolkit.help", {"command": "svd"}),
+            (4, "toolkit.help", {"command": "unknown"}),
+        ):
+            response, _ = await server.handle_rpc_message(
+                json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params})
+            )
+            assert response is not None
+            responses.append(response)
+        return responses
+
+    listing, all_help, svd_help, unknown = asyncio.run(exercise())
+
+    assert listing["result"]["commands"] == [
+        {"name": "lscpu", "summary": "Identify the core."},
+        {"name": "svd", "summary": "Inspect registers."},
+    ]
+    assert all_help["result"]["commands"] == helps
+    assert svd_help["result"]["commands"] == [helps[1]]
+    assert unknown["error"]["code"] == -32602
 
 
 def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> None:

@@ -34,14 +34,17 @@ class PyGdbServer:
         self.ocd: ManagedProcess | None = None
         self.mi = MiSession(config.gdb_path, config.gdb_args, self.logs)
         self.gdb_port = 0
+        self.telnet_port = 0
         self.api_port = 0
         self._websocket_server: Server | None = None
         self._shutdown = asyncio.Event()
 
     async def start(self) -> None:
         """Start OCD and GDB, connect the target, and load pyGdbToolkit."""
-        self.gdb_port = _free_loopback_port()
-        self.ocd = ManagedProcess("ocd", self.config.ocd_command(self.gdb_port), self.logs)
+        self.gdb_port, self.telnet_port = _free_loopback_ports()
+        self.ocd = ManagedProcess(
+            "ocd", self.config.ocd_command(self.gdb_port, self.telnet_port), self.logs
+        )
         await self.ocd.start()
         await self._wait_for_ocd()
 
@@ -205,6 +208,13 @@ class PyGdbServer:
             return await self.target_status(), False
         if method == "svd.peripherals":
             return await self.svd_peripherals(), False
+        if method == "toolkit.commands":
+            return await self.toolkit_commands(), False
+        if method == "toolkit.help":
+            command = params.get("command")
+            if command is not None and not isinstance(command, str):
+                raise ValueError("command must be a string")
+            return await self.toolkit_help(command), False
         if method == "logs.get":
             since = params.get("since", 0)
             limit = params.get("limit", 1_000)
@@ -313,15 +323,50 @@ class PyGdbServer:
             "for r in p.registers]} for p in SESSION.device.peripherals] "
             "if SESSION.device else []}))"
         )
+        data = await self._python_json(marker, command)
+        if data is None:
+            raise RuntimeError("GDB did not return structured SVD metadata")
+        return {"loaded": data["device"] is not None, **data}
+
+    async def toolkit_commands(self) -> dict[str, Any]:
+        """Return the name and summary of every pyGdbToolkit command loaded in GDB."""
+        commands = await self._toolkit_command_helps()
+        return {
+            "commands": [
+                {"name": command["name"], "summary": command["summary"]} for command in commands
+            ]
+        }
+
+    async def toolkit_help(self, command: str | None = None) -> dict[str, Any]:
+        """Return the help of one pyGdbToolkit command, or of all of them."""
+        commands = await self._toolkit_command_helps()
+        if command is None:
+            return {"commands": commands}
+        selected = [entry for entry in commands if entry["name"] == command.strip()]
+        if not selected:
+            raise ValueError(f"Unknown pyGdbToolkit command: {command}")
+        return {"commands": selected}
+
+    async def _toolkit_command_helps(self) -> list[dict[str, Any]]:
+        marker = "PYGDBSERVER_TOOLKIT_HELP_JSON:"
+        command = (
+            "python import json; from pyGdbToolkit.session import SESSION; "
+            f"print('{marker}' + json.dumps([c.to_dict() for c in SESSION.commands]))"
+        )
+        data = await self._python_json(marker, command)
+        if not isinstance(data, list):
+            raise RuntimeError("GDB did not return the pyGdbToolkit command help")
+        return data
+
+    async def _python_json(self, marker: str, command: str) -> Any:
+        """Run a GDB Python command and decode the JSON payload printed after ``marker``."""
         result = await self.mi.console(command)
         for output in result.output:
             for line in output.splitlines():
                 payload_index = line.find(marker)
                 if payload_index >= 0:
-                    payload = line[payload_index + len(marker) :].strip()
-                    data = json.loads(payload)
-                    return {"loaded": data["device"] is not None, **data}
-        raise RuntimeError("GDB did not return structured SVD metadata")
+                    return json.loads(line[payload_index + len(marker) :].strip())
+        return None
 
     def status(self) -> dict[str, Any]:
         """Describe live endpoints and child process state."""
@@ -370,10 +415,14 @@ def _rpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
-def _free_loopback_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as temporary:
-        temporary.bind(("127.0.0.1", 0))
-        return int(temporary.getsockname()[1])
+def _free_loopback_ports() -> tuple[int, int]:
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gdb_socket,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as telnet_socket,
+    ):
+        gdb_socket.bind(("127.0.0.1", 0))
+        telnet_socket.bind(("127.0.0.1", 0))
+        return int(gdb_socket.getsockname()[1]), int(telnet_socket.getsockname()[1])
 
 
 def _toolkit_python_path() -> Path:

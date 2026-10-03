@@ -17,6 +17,21 @@ from websockets.asyncio.server import ServerConnection, serve
 from pyGdbClient.app import PyGdbClientApp, _help_text
 from pyGdbClient.rpc import JsonRpcClient, RpcError
 
+_TOOLKIT_HELP: list[dict[str, Any]] = [
+    {
+        "name": "lscpu",
+        "summary": "Identify the core.",
+        "usage": [{"syntax": "lscpu", "description": "Display the CPU report"}],
+        "notes": [],
+    },
+    {
+        "name": "rtos",
+        "summary": "Manage the RTOS.",
+        "usage": [{"syntax": "rtos showsched <num>", "description": "Trace elections"}],
+        "notes": ["<path> is resolved by GDB."],
+    },
+]
+
 
 async def _respond(websocket: ServerConnection, request: dict[str, Any]) -> None:
     method = request["method"]
@@ -50,6 +65,8 @@ async def _respond(websocket: ServerConnection, request: dict[str, Any]) -> None
                 }
             ],
         }
+    elif method == "toolkit.help":
+        params = {"commands": _TOOLKIT_HELP}
     elif method == "missing":
         error = {"code": -32601, "message": "Method not found"}
     elif method == "logs.subscribe":
@@ -273,8 +290,10 @@ def test_quit_commands_only_stop_the_server_when_all_is_requested() -> None:
 
 
 def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
-    """Help includes client/toolkit commands and manuals for the selected OCD."""
-    pyocd_help = "\n".join(paragraph.plain for paragraph in _help_text("pyocd"))
+    """Help includes client commands, server-provided toolkit help, and OCD manuals."""
+    pyocd_help = "\n".join(
+        paragraph.plain for paragraph in _help_text("pyocd", _TOOLKIT_HELP)
+    )
     openocd_help = "\n".join(paragraph.plain for paragraph in _help_text("openocd"))
 
     for expected in (
@@ -284,10 +303,9 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
         "ls [DIR]",
         "quit --all",
         "lscpu",
-        "fault_info",
-        "svd show",
-        "rtos showsched",
-        "secscan audit",
+        "Display the CPU report",
+        "rtos showsched <num>",
+        "<path> is resolved by GDB.",
         "gdb XXX",
         "monitor XXX",
         "https://sourceware.org/gdb/current/onlinedocs/gdb.html/",
@@ -295,6 +313,7 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
         assert expected in pyocd_help
     assert "https://pyocd.io/docs/" in pyocd_help
     assert "https://openocd.org/doc/html/" in openocd_help
+    assert "not connected" in openocd_help
 
 
 @pytest.mark.parametrize("directory", [None, "/tmp", "remote directory"])
@@ -381,9 +400,9 @@ def test_client_rejects_oversized_upload_before_sending(tmp_path: Path) -> None:
 
 
 def test_help_command_is_handled_locally() -> None:
-    """Submitting help does not forward it as a GDB CLI command."""
+    """Submitting help fetches toolkit help over RPC instead of running a GDB command."""
 
-    async def exercise() -> list[str]:
+    async def exercise() -> tuple[list[str], str]:
         methods: list[str] = []
 
         async def handler(websocket: ServerConnection) -> None:
@@ -401,8 +420,14 @@ def test_help_command_is_handled_locally() -> None:
                 await pilot.click("#command")
                 await pilot.press(*list("help"))
                 await pilot.press("enter")
-                await pilot.pause(0.1)
+                await pilot.pause(0.2)
                 assert methods.count("command.execute") == command_count
-        return methods
+                rendered = "\n".join(
+                    str(line) for line in app.query_one("#command-output").lines
+                )
+        return methods, rendered
 
-    asyncio.run(exercise())
+    methods, rendered = asyncio.run(exercise())
+
+    assert "toolkit.help" in methods
+    assert "rtos showsched <num>" in rendered

@@ -26,9 +26,13 @@ class ServerConfig:
     log_directory: Path
     startup_timeout: float
 
-    def ocd_command(self, gdb_port: int) -> list[str]:
+    def ocd_command(self, gdb_port: int, telnet_port: int) -> list[str]:
         """Build the OCD command line for a loopback-only dynamic GDB port."""
-        values = {"gdb_port": str(gdb_port), "loopback": "127.0.0.1"}
+        values = {
+            "gdb_port": str(gdb_port),
+            "telnet_port": str(telnet_port),
+            "loopback": "127.0.0.1",
+        }
         has_dynamic_port = any("{gdb_port}" in argument for argument in self.ocd_args)
         arguments = [argument.format_map(values) for argument in self.ocd_args]
         executable = Path(self.ocd_path).name.lower()

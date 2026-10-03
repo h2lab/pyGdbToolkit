@@ -21,7 +21,7 @@ from rich.text import Text
 
 from .arch.arm.session_state import device_report
 from .session import SESSION as TOOLKIT_SESSION
-from .session import SessionSlice
+from .session import CommandHelp, CommandUsage, SessionSlice
 from .svd import (
     SvdDevice,
     SvdError,
@@ -506,6 +506,39 @@ def render_register_detail(peripheral: SvdPeripheral, reg: SvdRegister, value: i
     CONSOLE.print(fields_table)
 
 
+SVD_HELP = CommandHelp(
+    name="svd",
+    summary="Inspect, manipulate, and monitor peripheral registers from a CMSIS-SVD file.",
+    usage=(
+        CommandUsage(
+            "svd load", "Auto-detect target CPUID/SoC, fetch and load matching SVD definition"
+        ),
+        CommandUsage("svd read <file.svd>", "Load an explicit SVD XML file from local filesystem"),
+        CommandUsage(
+            "svd show <device>", "Display canonical memory state and registers of a peripheral"
+        ),
+        CommandUsage(
+            "svd show <device> <register>",
+            "Display detailed register state and decoded bitfields",
+        ),
+        CommandUsage(
+            "svd write <device> <reg> <hex_val>",
+            "Write numeric/hex value into peripheral register",
+        ),
+        CommandUsage(
+            "svd monitor <device> <reg>",
+            "Set a watchpoint on a register and report bitfield diffs",
+        ),
+        CommandUsage(
+            "svd dump <device> <file.json>",
+            "Dump snapshot of device/peripheral state into a JSON file",
+        ),
+        CommandUsage("svd list", "List the names of all peripherals in the loaded SVD device"),
+        CommandUsage("svd help", "Show this command reference"),
+    ),
+)
+
+
 def render_help() -> None:
     """Render the command overview and help table."""
     table = Table(
@@ -516,27 +549,8 @@ def render_help() -> None:
     )
     table.add_column("Command Syntax", style="bold yellow", no_wrap=True)
     table.add_column("Description")
-    table.add_row(
-        "svd load", "Auto-detect target CPUID/SoC, fetch and load matching SVD definition"
-    )
-    table.add_row("svd read <file.svd>", "Load an explicit SVD XML file from local filesystem")
-    table.add_row(
-        "svd show <device>", "Display canonical memory state and registers of a peripheral"
-    )
-    table.add_row(
-        "svd show <device> <register>", "Display detailed register state and decoded bitfields"
-    )
-    table.add_row(
-        "svd write <device> <reg> <hex_val>", "Write numeric/hex value into peripheral register"
-    )
-    table.add_row(
-        "svd monitor <device> <reg>", "Set a watchpoint on a register and report bitfield diffs"
-    )
-    table.add_row(
-        "svd dump <device> <file.json>", "Dump snapshot of device/peripheral state into a JSON file"
-    )
-    table.add_row("svd list", "List the names of all peripherals in the loaded SVD device")
-    table.add_row("svd help", "Show this command reference")
+    for entry in SVD_HELP.usage:
+        table.add_row(entry.syntax, entry.description)
     CONSOLE.print(table)
 
 
@@ -569,8 +583,11 @@ def render_peripheral_list(device: SvdDevice) -> None:
 class SvdCmd(gdb.Command):
     """Inspect, manipulate, and monitor hardware registers using CMSIS-SVD definitions."""
 
+    HELP = SVD_HELP
+
     def __init__(self) -> None:
         super().__init__("svd", gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+        TOOLKIT_SESSION.register_command(self.HELP)
 
     def is_svd_loaded(self) -> bool:
         """Return whether an SVD file is loaded in the current GDB session."""

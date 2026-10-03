@@ -6,13 +6,15 @@
 
 Commands do not own their state anymore: they request it from the process-wide
 :data:`SESSION` object, which owns target access, architecture identification,
-and the per-command state slices registered through :meth:`ToolkitSession.state`.
+the per-command state slices registered through :meth:`ToolkitSession.state`,
+and the command help registered through :meth:`ToolkitSession.register_command`.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TypeVar
+from dataclasses import dataclass
+from typing import Any, TypeVar
 
 import gdb
 
@@ -44,6 +46,36 @@ class SessionSlice(ABC):
         """Clear the slice in place and release its target-dependent resources."""
 
 
+@dataclass(frozen=True)
+class CommandUsage:
+    """One syntax line of a command reference and its description."""
+
+    syntax: str
+    description: str
+
+
+@dataclass(frozen=True)
+class CommandHelp:
+    """Self-describing help of one top-level pyGdbToolkit command."""
+
+    name: str
+    summary: str
+    usage: tuple[CommandUsage, ...] = ()
+    notes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable view of the command help."""
+        return {
+            "name": self.name,
+            "summary": self.summary,
+            "usage": [
+                {"syntax": entry.syntax, "description": entry.description}
+                for entry in self.usage
+            ],
+            "notes": list(self.notes),
+        }
+
+
 SliceT = TypeVar("SliceT", bound=SessionSlice)
 TargetT = TypeVar("TargetT", bound=TargetDescription)
 
@@ -70,6 +102,22 @@ class ToolkitSession:
         self._memory: WritableTargetMemory | None = None
         self._probe: ProbeResult | None = None
         self._slices: dict[type[SessionSlice], SessionSlice] = {}
+        self._commands: dict[str, CommandHelp] = {}
+
+    def register_command(self, command_help: CommandHelp) -> None:
+        """Record the help of a toolkit command registered in GDB.
+
+        Parameters
+        ----------
+        command_help : CommandHelp
+            Help describing the command; replaces any previous entry of the same name.
+        """
+        self._commands[command_help.name] = command_help
+
+    @property
+    def commands(self) -> tuple[CommandHelp, ...]:
+        """The help of every registered toolkit command, in registration order."""
+        return tuple(self._commands.values())
 
     @property
     def memory(self) -> WritableTargetMemory:

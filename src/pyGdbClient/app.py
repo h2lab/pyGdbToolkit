@@ -224,7 +224,7 @@ class PyGdbClientApp(App[None]):
         self._history_draft = ""
         normalized = " ".join(command.lower().split())
         if normalized == "help":
-            self.show_help()
+            self.run_worker(self.show_help(), group="commands")
         elif normalized == "history":
             self.show_command_history()
         elif normalized == "quit":
@@ -263,9 +263,16 @@ class PyGdbClientApp(App[None]):
         for index, command in enumerate(self._command_history, start=1):
             self._append_output(f"{index:>2}  {command}")
 
-    def show_help(self) -> None:
+    async def show_help(self) -> None:
         """Display client, toolkit, GDB, and selected OCD command guidance."""
-        for paragraph in _help_text(self._ocd_executable):
+        toolkit_commands: list[dict[str, Any]] | None = None
+        if self._connected:
+            try:
+                response = await self.client.request("toolkit.help")
+                toolkit_commands = list(response.get("commands", []))
+            except (RpcError, ConnectionError, TimeoutError) as error:
+                self._append_output(f"Toolkit help unavailable: {error}", error=True)
+        for paragraph in _help_text(self._ocd_executable, toolkit_commands):
             self.query_one("#command-output", RichLog).write(paragraph)
 
     async def quit_client(self, *, stop_server: bool = False) -> None:
@@ -427,8 +434,10 @@ def _read_upload_file(path: Path) -> bytes:
     return content
 
 
-def _help_text(ocd_executable: str) -> list[Text]:
-    """Build dashboard help with documentation links for the selected tools."""
+def _help_text(
+    ocd_executable: str, toolkit_commands: list[dict[str, Any]] | None = None
+) -> list[Text]:
+    """Build dashboard help from the server-provided toolkit command help."""
     executable = ocd_executable.lower()
     if "pyocd" in executable:
         ocd_name = "pyOCD"
@@ -453,34 +462,7 @@ def _help_text(ocd_executable: str) -> list[Text]:
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
         Text("  Ctrl+Q        Same as quit."),
         Text("PYGDBTOOLKIT COMMANDS", style="bold cyan"),
-        Text(
-            "  lscpu         Identify the Cortex-M core, vendor, product family, memory, and UID."
-        ),
-        Text("  fault_info    Decode Cortex-M fault status and the stacked exception context."),
-        Text("  svd load      Detect the target and load a matching CMSIS-SVD description."),
-        Text("  svd read FILE Load an SVD file explicitly."),
-        Text("  svd list      List peripherals from the loaded SVD."),
-        Text(
-            "  svd show P [R] Read a peripheral's registers, or detail register R and its bitfields."
-        ),
-        Text("  svd write P R VALUE  Write a register value and read it back."),
-        Text("  svd monitor P R      Watch a register and report changes."),
-        Text("  svd dump P|all FILE  Export a peripheral or device snapshot as JSON."),
-        Text("  rtos list / select NAME  List or select a supported RTOS (Camelot)."),
-        Text("  rtos load-project --from DIR  Load RTOS symbols and task metadata."),
-        Text("    DIR is resolved on the GDB server, not on this client."),
-        Text(
-            "    For remote use, that path must also exist on the server (or be identically mounted)."
-        ),
-        Text(
-            "    This is intentional: the same native command works in classic GDB without pyGdbServer."
-        ),
-        Text("  rtos show              Show the RTOS project layout."),
-        Text("  rtos show task NAME    Inspect a task's live context."),
-        Text("  rtos showsched N       Trace the next N scheduler elections."),
-        Text("  secscan audit [FILE]   Audit target security configuration; optionally save JSON."),
-        Text("  secscan report FILE    Display a saved report; see secscan help for formats."),
-        Text("  Use svd help, rtos, and secscan help for command-specific syntax."),
+        *_toolkit_help_text(toolkit_commands),
         Text("GDB AND OCD COMMANDS", style="bold cyan"),
         Text("  gdb XXX     Run XXX as a GDB CLI command (for example: gdb info registers)."),
         Text(f"  monitor XXX Forward XXX to the selected {ocd_name} (for example: monitor help)."),
@@ -494,3 +476,28 @@ def _help_text(ocd_executable: str) -> list[Text]:
         ),
         Text("Other commands without a prefix are sent to GDB and resolve pyGdbToolkit commands."),
     ]
+
+
+def _toolkit_help_text(toolkit_commands: list[dict[str, Any]] | None) -> list[Text]:
+    """Render the help that each pyGdbToolkit command registered in the server session."""
+    if toolkit_commands is None:
+        return [Text("  Command help unavailable: not connected to pyGdbServer.", style="dim")]
+    if not toolkit_commands:
+        return [Text("  No pyGdbToolkit command is loaded in GDB.", style="dim")]
+    lines: list[Text] = []
+    for command in toolkit_commands:
+        lines.append(
+            Text.assemble(
+                (f"  {command.get('name', '?')}", "bold yellow"),
+                f"  {command.get('summary', '')}",
+            )
+        )
+        usage = command.get("usage", [])
+        width = max((len(str(entry.get("syntax", ""))) for entry in usage), default=0)
+        for entry in usage:
+            lines.append(
+                Text(f"    {str(entry.get('syntax', '')):<{width}}  {entry.get('description', '')}")
+            )
+        for note in command.get("notes", []):
+            lines.append(Text(f"    {note}", style="dim"))
+    return lines
