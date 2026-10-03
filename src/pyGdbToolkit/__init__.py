@@ -3,6 +3,7 @@
 
 """GDB commands provided by pyGdbToolkit."""
 
+from .cmd_dap import DapCmd, DapSubcommand
 from .cmd_faultinfo import FaultInfoCmd
 from .cmd_lscpu import LscpuCmd
 from . import cmd_rtos
@@ -11,6 +12,7 @@ from . import cmd_secscan
 from .cmd_secscan import SecscanCmd
 from . import cmd_svd
 from .cmd_svd import SvdCmd
+from .ocd import OCD, OcdIdentifier, OcdInfo, get_ocd, initialize_ocd
 from .session import (
     SESSION,
     CommandHelp,
@@ -21,6 +23,11 @@ from .session import (
 )
 
 install_event_hooks()
+initialize_ocd()
+
+_DAP_COMMAND = DapCmd()
+for _dap_name in ("list", "core", "select", "profile", "report", "help"):
+    DapSubcommand(_DAP_COMMAND, _dap_name)
 
 LscpuCmd()
 FaultInfoCmd()
@@ -47,6 +54,11 @@ cmd_secscan.SecscanReportCmd(_SECSCAN_COMMAND)
 cmd_secscan.SecscanHelpCmd(_SECSCAN_COMMAND)
 
 __all__ = [
+    "DapCmd",
+    "OCD",
+    "OcdIdentifier",
+    "OcdInfo",
+    "get_ocd",
     "SESSION",
     "CommandHelp",
     "CommandUsage",

@@ -15,7 +15,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.events import Key, Resize
-from textual.widgets import Footer, Header, Input, RichLog, Static, Tree
+from textual.widgets import Footer, Header, Input, RichLog, Select, Static, Tree
 
 from .rpc import JsonRpcClient, RpcError
 
@@ -63,6 +63,14 @@ class PyGdbClientApp(App[None]):
         height: 1fr;
         border: tall $surface;
         scrollbar-size-vertical: 1;
+    }
+    #core-current {
+        height: auto;
+        min-height: 2;
+    }
+    #core-select {
+        width: 100%;
+        margin-bottom: 1;
     }
     #target-summary {
         height: 13;
@@ -112,12 +120,17 @@ class PyGdbClientApp(App[None]):
         self._command_history: list[str] = []
         self._history_position: int | None = None
         self._history_draft = ""
+        self._core_options: list[tuple[str, int]] = []
+        self._core_selecting = False
 
     def compose(self) -> ComposeResult:
         """Build the log, output, target, tree, and command-input regions."""
         yield Header(show_clock=True)
         with Horizontal(id="panels"):
             with Vertical(id="logs-column"):
+                yield Static("CPU CORES", classes="panel-title")
+                yield Static("Active core: --", id="core-current", markup=False)
+                yield Select[int]([], prompt="Cores unavailable", id="core-select", disabled=True)
                 yield Static("GDB LOG", classes="panel-title")
                 yield RichLog(id="gdb-log", wrap=True, markup=False, highlight=False)
                 yield Static("OCD LOG", classes="panel-title")
@@ -311,6 +324,61 @@ class PyGdbClientApp(App[None]):
             self._append_output(str(error), error=True)
         if command.strip().lower().startswith(("svd load", "svd read")):
             await self.refresh_svd_tree()
+        normalized = command.strip().lower()
+        if normalized.startswith(("dap core", "gdb dap core", "gdb thread", "gdb inferior")):
+            await self._refresh_target_status()
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        """Select a physical CPU through the structured server RPC."""
+        if event.select.id != "core-select" or event.value is Select.BLANK:
+            return
+        if not self._connected or self._core_selecting:
+            return
+        self._core_selecting = True
+        selector = self.query_one("#core-select", Select)
+        selector.disabled = True
+        try:
+            response = await self.client.request(
+                "target.select_core", {"core": event.value}, timeout=60
+            )
+            core = response["core"]
+            self._append_output(f"Active core: {core['id']} ({core['name']})")
+        except (RpcError, ConnectionError, TimeoutError) as error:
+            self._append_output(f"Core selection failed: {error}", error=True)
+        finally:
+            self._core_selecting = False
+            await self._refresh_target_status()
+
+    async def _refresh_cores(self) -> None:
+        """Render the discovered cores and their confirmed GDB selection."""
+        selector = self.query_one("#core-select", Select)
+        current = self.query_one("#core-current", Static)
+        if self._core_selecting:
+            return
+        try:
+            response = await self.client.request("target.cores", timeout=5)
+        except (RpcError, ConnectionError, TimeoutError):
+            selector.disabled = True
+            current.update("Active core: unavailable")
+            return
+        cores = response.get("cores", [])
+        options = [(f"Core {core['id']} | {core['name']}", core["id"]) for core in cores]
+        selected = next((core for core in cores if core.get("selected")), None)
+        with self.prevent(Select.Changed):
+            if options != self._core_options:
+                selector.set_options(options)
+                self._core_options = options
+            selector.value = selected["id"] if selected is not None else Select.BLANK
+        selector.disabled = not bool(options)
+        if selected is None:
+            current.update("Active core: unavailable")
+        else:
+            current.update(
+                Text.assemble(
+                    (f"Active core: {selected['id']}\n", "bold green"),
+                    (str(selected["endpoint"]), "dim"),
+                )
+            )
 
     async def _execute_workspace_command(self, command: str) -> bool:
         name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
@@ -396,6 +464,7 @@ class PyGdbClientApp(App[None]):
         if not self._connected or self._target_refresh_lock.locked():
             return
         async with self._target_refresh_lock:
+            await self._refresh_cores()
             try:
                 data = await self.client.request("target.status", timeout=5)
             except (RpcError, ConnectionError, TimeoutError):

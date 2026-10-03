@@ -42,3 +42,21 @@ def test_legacy_arm_modules_are_removed() -> None:
     """Arm modules are exposed only from the architecture namespace."""
     for module_name in ("coresight", "cpuid", "models", "providers"):
         assert find_spec(f"pyGdbToolkit.{module_name}") is None
+
+
+def test_dap_module_paths_replace_ap_modules() -> None:
+    """Portable and ARM DAP modules are available only under their new paths."""
+    for package in ("pyGdbToolkit.arch", "pyGdbToolkit.arch.arm"):
+        assert find_spec(f"{package}.dap") is not None
+        assert find_spec(f"{package}.ap") is None
+
+
+def test_dap_command_module_and_export_replace_ap_names() -> None:
+    """The command uses DAP naming in its module and package-level API."""
+    import pyGdbToolkit
+    from pyGdbToolkit.cmd_dap import DapCmd
+
+    assert pyGdbToolkit.DapCmd is DapCmd
+    assert "DapCmd" in pyGdbToolkit.__all__
+    assert not hasattr(pyGdbToolkit, "ApCmd")
+    assert find_spec("pyGdbToolkit.cmd_ap") is None

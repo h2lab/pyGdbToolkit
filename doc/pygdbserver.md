@@ -200,6 +200,51 @@ logs; otherwise it is `null`, not inferred.
 {"jsonrpc":"2.0","id":10,"method":"target.status"}
 ```
 
+### `target.cores`, `target.core`, `target.select_core`
+
+Discover physical CPU cores, report the active core, or select a core for the
+shared GDB session. These methods use the same runtime as `dap core`:
+
+```json
+{"jsonrpc":"2.0","id":20,"method":"target.cores"}
+{"jsonrpc":"2.0","id":21,"method":"target.core"}
+{"jsonrpc":"2.0","id":22,"method":"target.select_core","params":{"core":1}}
+```
+
+`target.cores` returns `{"cores": [...]}`. The other two return `{"core": {...}}`:
+
+```json
+{"jsonrpc":"2.0","id":22,"result":{"core":{"id":1,"name":"rp2350.cm1","selected":true,"endpoint":"127.0.0.1:3333","inferior":1,"thread":2}}}
+```
+
+Each descriptor includes the physical `id`, server `name`, selection flag,
+TCP `endpoint`, GDB `inferior` number and global GDB `thread` ID. Inferior/thread
+fields are `null` when unavailable (in particular, a pyOCD core not yet attached).
+The `core` parameter must be a non-negative JSON integer, not a boolean or string.
+Invalid parameters return `-32602`; unavailable cores and failed connections
+return `-32000`. The optional `timeout` is limited to 300 seconds.
+
+With pyOCD, pyGdbServer starts on core 0's lowest port; core N uses
+`gdb_port + N`. Additional sockets are attached lazily as separate GDB inferiors.
+OpenOCD uses named hardware-core threads on its existing SMP connection.
+Core selection does not explicitly reset or resume the target; a new GDB
+attachment may halt a core according to the server configuration.
+
+Selection applies to all clients sharing this server, including subsequent
+register/memory commands and toolkit diagnostics. `target.status` reports the
+selected physical core. Each selection RPC executes as one serialized GDB
+operation, but separate requests from different clients can interleave.
+
+The console equivalent remains available:
+
+```json
+{"jsonrpc":"2.0","id":23,"method":"command.execute","params":{"command":"dap core list"}}
+{"jsonrpc":"2.0","id":24,"method":"command.execute","params":{"command":"dap core 1"}}
+```
+
+See [CPU core selection](ap.md#cpu-core-selection) for standalone GDB usage and
+the opt-in RP2350 hardware tests. `dap select` still selects only an Access Port.
+
 ### `svd.peripherals`
 
 Returns the loaded SVD device and peripheral/register metadata as JSON. When no
@@ -282,6 +327,14 @@ the target-matched SVD at connect time and also supports explicit `svd read`
 commands. Enter `quit` or press `Ctrl+Q` to exit only the dashboard. Enter
 `quit --all` to request orderly shutdown of the server, GDB, and OCD before
 the client exits.
+
+The left panel shows the active physical CPU core and its TCP endpoint above
+the logs. Its core selector lists the discovered CPUs and selects through
+`target.select_core`; it is disabled when inventory is unavailable. The display
+refreshes periodically and after a `dap core` command. A failed selection restores
+the confirmed active core and reports the error in the command-output panel.
+`dap core list`, `dap core`, and `dap core <id>` are also accepted directly at
+the command prompt for both pyOCD and OpenOCD.
 
 Enter `help` in the dashboard prompt for the client commands, the available
 pyGdbToolkit commands and subcommands, and links to the GDB and configured OCD

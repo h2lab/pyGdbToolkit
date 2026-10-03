@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock
 from typing import Any
 
 import pytest
-from textual.widgets import Input, Tree
+from textual.widgets import Input, Select, Static, Tree
 from websockets.asyncio.server import ServerConnection, serve
 
 from pyGdbClient.app import PyGdbClientApp, _help_text
@@ -52,6 +52,13 @@ async def _respond(websocket: ServerConnection, request: dict[str, Any]) -> None
         }
     elif method == "target.status":
         params = {"state": "stopped", "thread_id": "1", "core": "0", "access_port": "AP#0"}
+    elif method == "target.cores":
+        params = {
+            "cores": [
+                {"id": 0, "name": "Cortex-M33", "selected": True, "endpoint": "localhost:3333"},
+                {"id": 1, "name": "Cortex-M33", "selected": False, "endpoint": "localhost:3334"},
+            ]
+        }
     elif method == "svd.peripherals":
         params = {
             "loaded": True,
@@ -291,9 +298,7 @@ def test_quit_commands_only_stop_the_server_when_all_is_requested() -> None:
 
 def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     """Help includes client commands, server-provided toolkit help, and OCD manuals."""
-    pyocd_help = "\n".join(
-        paragraph.plain for paragraph in _help_text("pyocd", _TOOLKIT_HELP)
-    )
+    pyocd_help = "\n".join(paragraph.plain for paragraph in _help_text("pyocd", _TOOLKIT_HELP))
     openocd_help = "\n".join(paragraph.plain for paragraph in _help_text("openocd"))
 
     for expected in (
@@ -422,12 +427,139 @@ def test_help_command_is_handled_locally() -> None:
                 await pilot.press("enter")
                 await pilot.pause(0.2)
                 assert methods.count("command.execute") == command_count
-                rendered = "\n".join(
-                    str(line) for line in app.query_one("#command-output").lines
-                )
+                rendered = "\n".join(str(line) for line in app.query_one("#command-output").lines)
         return methods, rendered
 
     methods, rendered = asyncio.run(exercise())
 
     assert "toolkit.help" in methods
     assert "rtos showsched <num>" in rendered
+
+
+@pytest.mark.parametrize("size", [(150, 48), (80, 40)])
+def test_core_panel_selection_and_cli_refresh(size) -> None:
+    """The left panel follows confirmed RPC and console core selections."""
+
+    async def exercise():
+        active = 0
+        selections = []
+
+        async def handler(websocket):
+            nonlocal active
+            async for payload in websocket:
+                request = json.loads(payload)
+                method = request["method"]
+                if method == "target.select_core":
+                    active = request["params"]["core"]
+                    selections.append(active)
+                    result = {"core": {"id": active, "name": f"rp2350.cm{active}"}}
+                elif method == "target.cores":
+                    result = {
+                        "cores": [
+                            {
+                                "id": index,
+                                "name": f"rp2350.cm{index}",
+                                "selected": index == active,
+                                "endpoint": "localhost:3333",
+                            }
+                            for index in (0, 1)
+                        ]
+                    }
+                else:
+                    if method == "command.execute" and request["params"]["command"] == "dap core 0":
+                        active = 0
+                    await _respond(websocket, request)
+                    continue
+                await websocket.send(
+                    json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                )
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            app = PyGdbClientApp(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+            async with app.run_test(size=size) as pilot:
+                await pilot.pause(0.5)
+                selector = app.query_one("#core-select", Select)
+                assert selector.parent.id == "logs-column"
+                assert selector.value == 0
+                assert selections == []
+                assert "Active core: 0" in str(app.query_one("#core-current", Static).render())
+                await pilot.click("#core-select")
+                await pilot.press("end", "enter")
+                await pilot.pause(0.3)
+                assert selections == [1]
+                assert selector.value == 1
+                assert "Active core: 1" in str(app.query_one("#core-current", Static).render())
+                await app.execute_command("dap core 0")
+                await pilot.pause(0.1)
+                assert selector.value == 0
+                assert selections == [1]
+                assert "Active core: 0" in str(app.query_one("#core-current", Static).render())
+
+    asyncio.run(exercise())
+
+
+def test_core_selection_failure_restores_confirmed_core() -> None:
+    """A refused selection keeps the previous core visible and usable."""
+
+    async def exercise():
+        async def handler(websocket):
+            async for payload in websocket:
+                request = json.loads(payload)
+                if request["method"] == "target.select_core":
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": request["id"],
+                                "error": {"code": -32000, "message": "connection refused"},
+                            }
+                        )
+                    )
+                else:
+                    await _respond(websocket, request)
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            app = PyGdbClientApp(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+            async with app.run_test(size=(150, 48)) as pilot:
+                await pilot.pause(0.5)
+                selector = app.query_one("#core-select", Select)
+                selector.value = 1
+                await pilot.pause(0.3)
+                assert selector.value == 0
+                assert not selector.disabled
+                assert "Active core: 0" in str(app.query_one("#core-current", Static).render())
+                rendered = "\n".join(str(line) for line in app.query_one("#command-output").lines)
+                assert "Core selection failed" in rendered
+                assert "connection refused" in rendered
+
+    asyncio.run(exercise())
+
+
+def test_core_inventory_unavailable_disables_selection() -> None:
+    """Servers without a usable inventory do not offer a guessed CPU choice."""
+
+    async def exercise():
+        async def handler(websocket):
+            async for payload in websocket:
+                request = json.loads(payload)
+                if request["method"] == "target.cores":
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": request["id"],
+                                "error": {"code": -32601, "message": "Method not found"},
+                            }
+                        )
+                    )
+                else:
+                    await _respond(websocket, request)
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            app = PyGdbClientApp(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+            async with app.run_test(size=(150, 48)) as pilot:
+                await pilot.pause(0.5)
+                assert app.query_one("#core-select", Select).disabled
+                assert "unavailable" in str(app.query_one("#core-current", Static).render())
+
+    asyncio.run(exercise())

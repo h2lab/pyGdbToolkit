@@ -134,3 +134,18 @@ def test_telnet_port_placeholder(
     )
 
     assert config.ocd_command(43123, 43124) == expected
+
+
+def test_pico2w_openocd_example() -> None:
+    """The Pico 2 W example uses CMSIS-DAP and dynamic loopback endpoints."""
+    path = Path(__file__).resolve().parents[1] / "doc/examples/boards/pico2w-openocd.json"
+    config = load_config(path)
+    command = config.ocd_command(43123, 43124)
+    assert "openocd" in Path(config.ocd_path).name
+    assert "interface/cmsis-dap.cfg" in command
+    assert "target/rp2350.cfg" in command
+    assert "adapter serial E6647C74034BC430" in command
+    assert "bindto 127.0.0.1" in command
+    assert "gdb_port 43123" in command
+    assert "telnet_port 43124" in command
+    assert "tcl_port disabled" in command

@@ -384,6 +384,85 @@ def test_svd_peripherals_returns_structured_device_metadata(tmp_path: Path) -> N
     assert result["peripherals"][0]["name"] == "GPIOA"
 
 
+def test_core_rpc_returns_structured_metadata(tmp_path: Path) -> None:
+    """CLI and dedicated RPC select through the same GDB-side runtime."""
+    core = {
+        "id": 1,
+        "name": "rp2350.cm1",
+        "selected": True,
+        "endpoint": "localhost:3333",
+        "inferior": 1,
+        "thread": 2,
+    }
+
+    class CoreMiSession(FakeMiSession):
+        async def console(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("console", command, timeout))
+            data = {"cores": [core]} if "CORES.list()" in command else {"core": core}
+            return MiResult("done", "done", ("PYGDBSERVER_CORE_JSON:" + json.dumps(data),))
+
+    async def exercise() -> None:
+        server, _ = _server(tmp_path)
+        server.mi = CoreMiSession()  # type: ignore[assignment]
+        for method, params, key in (
+            ("target.cores", {}, "cores"),
+            ("target.core", {}, "core"),
+            ("target.select_core", {"core": 1, "timeout": 7}, "core"),
+        ):
+            response, _ = await server.handle_rpc_message(
+                json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+            )
+            assert response is not None
+            assert response["result"][key] == ([core] if key == "cores" else core)
+        calls = server.mi.calls
+        assert "CORES.list()" in calls[0][1]
+        assert "CORES.current()" in calls[1][1]
+        assert "CORES.select(1)" in calls[2][1]
+        assert calls[2][2] == 7
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("value", [-1, True, "1", 1.5, None])
+def test_core_rpc_rejects_invalid_identifiers(tmp_path: Path, value: Any) -> None:
+    """Invalid core identifiers never enter a GDB Python expression."""
+    server, fake_mi = _server(tmp_path)
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "target.select_core",
+                    "params": {"core": value},
+                }
+            )
+        )
+    )
+    assert response is not None
+    assert response["error"]["code"] == -32602
+    assert not fake_mi.calls
+
+
+def test_target_status_prefers_selected_physical_core(tmp_path: Path) -> None:
+    """A core field on the first MI thread is not the selected physical CPU."""
+
+    class CoreMiSession(FakeMiSession):
+        async def execute(self, command: str, timeout: float = 30.0) -> MiResult:
+            return MiResult(
+                "done", 'done,threads=[{id="1",core="0",state="stopped"}],current-thread-id="2"', ()
+            )
+
+        async def console(self, command: str, timeout: float = 30.0) -> MiResult:
+            return MiResult("done", "done", ('PYGDBSERVER_CORE_JSON:{"core":{"id":1}}',))
+
+    server, _ = _server(tmp_path)
+    server.mi = CoreMiSession()  # type: ignore[assignment]
+    status = asyncio.run(server.target_status())
+    assert status["core"] == "1"
+    assert status["thread_id"] == "2"
+
+
 def test_toolkit_commands_and_help_come_from_the_gdb_session(tmp_path: Path) -> None:
     """Toolkit command listing and help are read from the GDB-side session registry."""
     helps = [
@@ -399,9 +478,7 @@ def test_toolkit_commands_and_help_come_from_the_gdb_session(tmp_path: Path) -> 
     class HelpMiSession(FakeMiSession):
         async def console(self, command: str, timeout: float = 30.0) -> MiResult:
             self.calls.append(("console", command, timeout))
-            return MiResult(
-                "done", "done", ("PYGDBSERVER_TOOLKIT_HELP_JSON:" + json.dumps(helps),)
-            )
+            return MiResult("done", "done", ("PYGDBSERVER_TOOLKIT_HELP_JSON:" + json.dumps(helps),))
 
     async def exercise() -> list[dict[str, Any]]:
         server, _ = _server(tmp_path)
