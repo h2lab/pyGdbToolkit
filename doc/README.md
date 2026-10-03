@@ -10,8 +10,11 @@ The guide stays in English, matching the existing chapters.
 From the repository root, in a Python 3.12+ virtual environment:
 
 ```console
-python -m pip install -e '.[dev]'
+python -m pip install tox
 ```
+
+Tox creates an isolated environment and installs the documentation dependencies
+from the project's `dev` extra.
 
 Mermaid diagrams are rendered at build time, so the HTML can be used offline.
 Install Node.js and Mermaid CLI separately:
@@ -40,24 +43,21 @@ These are build-only tools, not application runtime dependencies.
 From the repository root with the environment activated:
 
 ```console
-make -C doc html
-make -C doc singlehtml
-make -C doc pdf
-make -C doc dist
+tox -e docs
+tox -e docs-pdf
 ```
 
-Set `PYTHON=/absolute/path/to/python` when the desired interpreter is not
-`python3`. Outputs are:
+To generate both HTML and PDF in one invocation, use `tox -e docs,docs-pdf`.
+Outputs relative to this directory are:
 
 | Target | Output |
 | --- | --- |
-| `html` | `_build/html/index.html`, navigation, search, images and downloads |
-| `singlehtml` | `_build/singlehtml/index.html`, a continuous guide with local assets |
-| `pdf` | `_build/latex/pyGdbToolkit-user-guide.pdf` |
-| `dist` | Both HTML ZIP archives and the PDF directly under `_build/` |
+| `docs` | `_build/html/index.html`, navigation, search, images and downloads |
+| `docs` | `_build/singlehtml/index.html`, a continuous guide with local assets |
+| `docs-pdf` | `_build/latex/pyGdbToolkit-user-guide.pdf` |
 
-HTML archives include local assets and downloadable example configurations.
-Extract the complete archive before opening `index.html`; the monopage output
+HTML outputs include local assets and downloadable example configurations.
+Keep the complete output directory when opening `index.html`; the monopage output
 is not a single resource-embedded HTML file. No web server is required.
 The PDF contains the generic configuration listings, but downloadable board
 files are available in the HTML distribution only.
@@ -65,12 +65,7 @@ files are available in the HTML distribution only.
 Use `make -C doc clean` to delete only generated documentation output. Clean
 before a release build to avoid retaining stale files in an archive.
 
-## Tox and CI
-
-```console
-tox -e docs
-tox -e docs-pdf
-```
+## CI and distribution archives
 
 `docs` builds both HTML layouts and is part of the default tox environment list.
 `docs-pdf` additionally builds the PDF and is opt-in because it requires TeX.
@@ -81,6 +76,18 @@ set `PUPPETEER_EXECUTABLE_PATH` before invoking tox.
 Builds enable nitpicky references and fail on warnings. A CI job can run these
 commands and publish `_build/html/` and the PDF as artifacts. No CI or hosting
 configuration outside `doc/` is introduced here.
+
+For optional ZIP archives and a PDF copy directly under `_build/`, install the
+`dev` extra in your active environment and use the packaging target:
+
+```console
+python -m pip install -e '.[dev]'
+make -C doc dist
+```
+
+Set `PYTHON=/absolute/path/to/python` for Make if the intended interpreter is not
+`python3`. HTML archives contain all local resources; extract the full archive
+before opening `index.html`.
 
 ## Maintain the sources
 
