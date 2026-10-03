@@ -24,7 +24,6 @@ lscpu
 dap
 svd
 fault_info
-profile
 secscan
 rtos
 ```

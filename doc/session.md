@@ -44,7 +44,6 @@ flowchart TD
     E --> G
     F --> H[SvdSessionState]
     F --> I[RtosSessionState]
-    F --> J[ProfileSessionState]
     F --> K[ShowstackSessionState]
     F --> L[ArmInspectionState]
     M[GDB events: exited, new_objfile] --> N[invalidate]
@@ -130,7 +129,6 @@ that `arch` stays usable, and testable, without any session or GDB concern.
 |---|---|---|---|
 | `SvdSessionState` | `cmd_svd` | Parsed `SvdDevice`, dictionary export, SVD file path, register watchpoints | Deletes the watchpoints, drops the device model |
 | `RtosSessionState` | `cmd_rtos` | Selected RTOS module, project path, decoded task list, scheduler trace | Deletes the scheduler trace, drops the project and the selection |
-| `ProfileSessionState` | `cmd_profile` | Accumulated profiling reports, active peripherals, scanned regions | Drops every accumulated result |
 | `ShowstackSessionState` | `cmd_showstack` | Stack selected by the user (`msp` / `psp` / auto) | Restores automatic stack selection |
 | `ArmInspectionState` | `arch.arm.session_state` | CPUID identity, ROM-table discovery, device report | Drops every cached inspection result |
 
