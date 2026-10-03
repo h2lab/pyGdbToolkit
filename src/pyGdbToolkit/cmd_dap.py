@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Architecture-neutral GDB debug-access-port commands."""
 
 from __future__ import annotations

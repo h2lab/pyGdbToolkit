@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Read-only ARM ADIv5/APv1 and ADIv6/APv2 capabilities."""
 
 from __future__ import annotations

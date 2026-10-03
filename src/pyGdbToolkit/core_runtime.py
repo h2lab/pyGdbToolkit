@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Select actual GDB CPU contexts behind pyOCD and OpenOCD connections."""
 
 from __future__ import annotations

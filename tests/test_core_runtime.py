@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise core selection against deterministic GDB connections."""
 
 from types import SimpleNamespace

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Architecture-neutral debug-port contracts and OCD monitor transports."""
 
 from __future__ import annotations

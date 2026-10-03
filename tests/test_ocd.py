@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Read-only OCD detection and connection lifecycle tests."""
 
 from pyGdbToolkit.ocd import OcdDetector, OcdIdentifier, probe_ocd

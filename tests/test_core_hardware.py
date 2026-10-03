@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Opt-in RP2350 checks using the example board configurations and real OCDs."""
 
 import asyncio
