@@ -206,6 +206,13 @@ class PyGdbServer:
             return (await self.mi.execute(command, _timeout(params))).to_dict(), False
         if method == "target.status":
             return await self.target_status(), False
+        if method in ("target.cores", "target.core", "target.select_core"):
+            core_id = params["core"] if method == "target.select_core" else None
+            if method == "target.select_core" and (
+                isinstance(core_id, bool) or not isinstance(core_id, int) or core_id < 0
+            ):
+                raise ValueError("core must be a non-negative integer")
+            return await self.target_cores(method, core_id, _timeout(params)), False
         if method == "svd.peripherals":
             return await self.svd_peripherals(), False
         if method == "toolkit.commands":
@@ -285,7 +292,12 @@ class PyGdbServer:
         state_match = re.search(r'\bstate="([^"]+)"', result.record)
         thread_match = re.search(r'current-thread-id="([^"]+)"', result.record)
         core_match = re.search(r'\bcore="([^"]+)"', result.record)
-        if core_match is None:
+        selected_core = None
+        try:
+            selected_core = str((await self.target_cores("target.core"))["core"]["id"])
+        except RuntimeError:
+            pass
+        if selected_core is None and core_match is None:
             core_result = await self.mi.console("monitor core")
             core_match = next(
                 (
@@ -306,10 +318,34 @@ class PyGdbServer:
         return {
             "state": state_match.group(1) if state_match else "unknown",
             "thread_id": thread_match.group(1) if thread_match else None,
-            "core": core_match.group(1) if core_match else None,
+            "core": (
+                selected_core
+                if selected_core is not None
+                else core_match.group(1) if core_match else None
+            ),
             "access_port": ap_names[0] if len(ap_names) == 1 else None,
             "access_ports": ap_names,
         }
+
+    async def target_cores(
+        self, method: str, core_id: int | None = None, timeout: float = 30.0
+    ) -> dict[str, Any]:
+        """Execute discovery or selection atomically in the GDB-side core runtime."""
+        marker = "PYGDBSERVER_CORE_JSON:"
+        if method == "target.cores":
+            expression = "{'cores': [core.to_dict() for core in CORES.list()]}"
+        elif method == "target.select_core":
+            expression = f"{{'core': CORES.select({core_id}).to_dict()}}"
+        else:
+            expression = "{'core': CORES.current().to_dict()}"
+        command = (
+            "python import json; from pyGdbToolkit.core_runtime import CORES; "
+            f"print('{marker}' + json.dumps({expression}))"
+        )
+        data = await self._python_json(marker, command, timeout)
+        if not isinstance(data, dict):
+            raise RuntimeError("GDB did not return structured CPU core metadata")
+        return data
 
     async def svd_peripherals(self) -> dict[str, Any]:
         """Return loaded SVD metadata in a stable JSON shape for client trees."""
@@ -358,9 +394,9 @@ class PyGdbServer:
             raise RuntimeError("GDB did not return the pyGdbToolkit command help")
         return data
 
-    async def _python_json(self, marker: str, command: str) -> Any:
+    async def _python_json(self, marker: str, command: str, timeout: float = 30.0) -> Any:
         """Run a GDB Python command and decode the JSON payload printed after ``marker``."""
-        result = await self.mi.console(command)
+        result = await self.mi.console(command, timeout)
         for output in result.output:
             for line in output.splitlines():
                 payload_index = line.find(marker)
