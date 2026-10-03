@@ -5,6 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # pyGdbToolkit
 
+<img src="doc/logo.png" alt="pyGdbToolkit logo" width="200">
+
 Rich-based GDB commands for inspecting and diagnosing embedded debugging
 targets, especially Arm Cortex-M microcontrollers.
 
