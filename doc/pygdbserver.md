@@ -180,6 +180,26 @@ description has been loaded, `loaded` is false and `peripherals` is empty.
 {"jsonrpc":"2.0","id":11,"method":"svd.peripherals"}
 ```
 
+### `toolkit.commands`
+
+Lists the pyGdbToolkit commands loaded in GDB, each with its `name` and
+`summary`. Every command registers its own help in the toolkit session.
+
+```json
+{"jsonrpc":"2.0","id":12,"method":"toolkit.commands"}
+```
+
+### `toolkit.help`
+
+Returns the help of every toolkit command, or only of `command` when given
+(unknown names return `-32602`). Each entry has `name`, `summary`, `usage`
+(a list of `syntax`/`description`), and `notes`. The client `help` command
+renders this result.
+
+```json
+{"jsonrpc":"2.0","id":13,"method":"toolkit.help","params":{"command":"svd"}}
+```
+
 ### `logs.get`
 
 Returns events after sequence `since`; `limit` is from 1 to 10,000.

@@ -246,6 +246,53 @@ def test_svd_peripherals_returns_structured_device_metadata(tmp_path: Path) -> N
     assert result["peripherals"][0]["name"] == "GPIOA"
 
 
+def test_toolkit_commands_and_help_come_from_the_gdb_session(tmp_path: Path) -> None:
+    """Toolkit command listing and help are read from the GDB-side session registry."""
+    helps = [
+        {"name": "lscpu", "summary": "Identify the core.", "usage": [], "notes": []},
+        {
+            "name": "svd",
+            "summary": "Inspect registers.",
+            "usage": [{"syntax": "svd load", "description": "Load the SVD"}],
+            "notes": [],
+        },
+    ]
+
+    class HelpMiSession(FakeMiSession):
+        async def console(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("console", command, timeout))
+            return MiResult(
+                "done", "done", ("PYGDBSERVER_TOOLKIT_HELP_JSON:" + json.dumps(helps),)
+            )
+
+    async def exercise() -> list[dict[str, Any]]:
+        server, _ = _server(tmp_path)
+        server.mi = HelpMiSession()  # type: ignore[assignment]
+        responses = []
+        for identifier, method, params in (
+            (1, "toolkit.commands", {}),
+            (2, "toolkit.help", {}),
+            (3, "toolkit.help", {"command": "svd"}),
+            (4, "toolkit.help", {"command": "unknown"}),
+        ):
+            response, _ = await server.handle_rpc_message(
+                json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params})
+            )
+            assert response is not None
+            responses.append(response)
+        return responses
+
+    listing, all_help, svd_help, unknown = asyncio.run(exercise())
+
+    assert listing["result"]["commands"] == [
+        {"name": "lscpu", "summary": "Identify the core."},
+        {"name": "svd", "summary": "Inspect registers."},
+    ]
+    assert all_help["result"]["commands"] == helps
+    assert svd_help["result"]["commands"] == [helps[1]]
+    assert unknown["error"]["code"] == -32602
+
+
 def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> None:
     """Shutdown sends its JSON-RPC result before stopping both managed processes."""
 

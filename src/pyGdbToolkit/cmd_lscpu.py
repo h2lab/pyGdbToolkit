@@ -14,6 +14,7 @@ from rich.text import Text
 from .arch.arm.coresight import RomTableDiscovery
 from .arch.arm.models import DeviceReport, FieldValue
 from .arch.arm.session_state import device_report
+from .session import SESSION, CommandHelp, CommandUsage
 from .target_memory import TargetReadError
 
 CONSOLE = Console(force_terminal=True)
@@ -22,9 +23,16 @@ CONSOLE = Console(force_terminal=True)
 class LscpuCmd(gdb.Command):
     """Display CPU and electronic-signature information for a Cortex-M target."""
 
+    HELP = CommandHelp(
+        name="lscpu",
+        summary="Identify the Cortex-M core, vendor, product family, memory, and UID.",
+        usage=(CommandUsage("lscpu", "Display the CPU and electronic-signature report"),),
+    )
+
     def __init__(self) -> None:
         """Register the command with GDB."""
         super().__init__("lscpu", gdb.COMMAND_USER)
+        SESSION.register_command(self.HELP)
 
     def invoke(self, arg: str, from_tty: bool) -> None:
         """Run the command.

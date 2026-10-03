@@ -20,7 +20,7 @@ from rich.text import Text
 
 from .rtos import SUPPORTED_RTOS
 from .session import SESSION as TOOLKIT_SESSION
-from .session import SessionSlice
+from .session import CommandHelp, CommandUsage, SessionSlice
 
 CONSOLE = Console(force_terminal=True)
 
@@ -50,10 +50,29 @@ class RtosSessionState(SessionSlice):
 class RtosCmd(gdb.Command):
     """Manage the selected RTOS."""
 
+    HELP = CommandHelp(
+        name="rtos",
+        summary="Select a supported RTOS, load its project, and inspect tasks and scheduling.",
+        usage=(
+            CommandUsage("rtos select <name>", "Select a supported RTOS"),
+            CommandUsage("rtos list", "List supported RTOS implementations"),
+            CommandUsage(
+                "rtos load-project --from <path>", "Load project symbols and task metadata"
+            ),
+            CommandUsage("rtos show", "Show the kernel and task memory layout and metadata"),
+            CommandUsage("rtos show task <taskname>", "Inspect a task on the stopped target"),
+            CommandUsage("rtos showsched <num>", "Trace the next num scheduler elections"),
+        ),
+        notes=(
+            "<path> is resolved by GDB: with pyGdbServer it must exist on the server host.",
+        ),
+    )
+
     def __init__(self) -> None:
         """Register the prefix command and bind the session-owned RTOS state."""
         self.state = TOOLKIT_SESSION.state(RtosSessionState)
         super().__init__("rtos", gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+        TOOLKIT_SESSION.register_command(self.HELP)
 
     def invoke(self, arg: str, from_tty: bool) -> None:
         """Show the RTOS command reference."""
@@ -61,12 +80,8 @@ class RtosCmd(gdb.Command):
         table = Table(title="RTOS Commands", box=box.SIMPLE_HEAVY, header_style="bold cyan")
         table.add_column("Command", style="bold yellow")
         table.add_column("Description")
-        table.add_row("rtos select <name>", "Select a supported RTOS")
-        table.add_row("rtos list", "List supported RTOS implementations")
-        table.add_row("rtos load-project --from <path>", "Load project symbols and task metadata")
-        table.add_row("rtos show", "Show the kernel and task memory layout and metadata")
-        table.add_row("rtos show task <taskname>", "Inspect a task on the stopped target")
-        table.add_row("rtos showsched <num>", "Trace the next num scheduler elections")
+        for entry in self.HELP.usage:
+            table.add_row(entry.syntax, entry.description)
         CONSOLE.print(table)
 
     def _invoke_select(self, args: list[str]) -> None:
