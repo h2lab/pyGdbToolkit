@@ -19,19 +19,7 @@ The module performs:
 
 ## Architecture and Workflow
 
-```mermaid
-flowchart TD
-    A[Target Connected in GDB] --> B[TargetMemoryReader]
-    B --> C[detect_target_device]
-    C --> D[DeviceReport via providers]
-    D --> E[resolve_svd_candidates]
-    E --> F{Cache Hit?}
-    F -- Yes --> H[parse_svd_file]
-    F -- No --> G[Download from cmsis-svd-data]
-    G --> H
-    H --> I[SvdDevice Models]
-    I --> J[to_dict for cmd_svd]
-```
+![SVD provider architecture and workflow](diagrams/providers-svd.png)
 
 ---
 

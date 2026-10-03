@@ -1,8 +1,8 @@
 # Building the user guide
 
 The Markdown files in this directory are the shared source for HTML and PDF.
-`index.md` defines the reading order. Sphinx uses MyST Parser, the Furo HTML
-theme and sphinxcontrib-mermaid; no toolkit module is imported by the build.
+`index.md` defines the reading order. Sphinx uses MyST Parser and the Furo HTML
+theme; no toolkit module is imported by the build.
 The guide stays in English, matching the existing chapters.
 
 ## Install the build tools
@@ -16,7 +16,7 @@ python -m pip install tox
 Tox creates an isolated environment and installs the documentation dependencies
 from the project's `dev` extra.
 
-Mermaid diagrams are rendered at build time, so the HTML can be used offline.
+Tox renders Mermaid sources to versioned PNG images before building HTML or PDF.
 Install Node.js and Mermaid CLI separately:
 
 ```console
@@ -74,8 +74,9 @@ prerequisites; tox does not install them. To forward a system-browser override,
 set `PUPPETEER_EXECUTABLE_PATH` before invoking tox.
 
 Builds enable nitpicky references and fail on warnings. A CI job can run these
-commands and publish `_build/html/` and the PDF as artifacts. No CI or hosting
-configuration outside `doc/` is introduced here.
+commands and publish `_build/html/` and the PDF as artifacts. Read the Docs runs
+Sphinx directly using the committed PNG images: it needs neither Node.js,
+Mermaid CLI nor Chromium.
 
 For optional ZIP archives and a PDF copy directly under `_build/`, install the
 `dev` extra in your active environment and use the packaging target:
@@ -96,7 +97,10 @@ before opening `index.html`.
 - Include configurations with `literalinclude` rather than copying their contents.
 - Use download roles for files to distribute; never copy all of `examples/`,
   which can contain local session logs.
-- Keep diagram fences marked `mermaid`; the build produces static images for both formats.
+- Edit Mermaid sources in `diagrams/*.mmd`, then run `tox -e docs` or
+    `tox -e docs-pdf` to regenerate every PNG through `render_diagrams.py`.
+- Commit each changed Mermaid source together with its regenerated PNG.
+    Markdown chapters reference `diagrams/*.png` directly; Sphinx does not render Mermaid.
 - Prefer prerequisites, commands, expected results and limitations before implementation details.
 
 The document version is read from installed package metadata, falling back to

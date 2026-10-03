@@ -18,26 +18,7 @@ The `svd` command integrates with the [SVD module](https://github.com/h2lab/pyGd
 
 ## Architecture and Command Workflow
 
-```mermaid
-flowchart TD
-    subgraph SVD_Command ["GDB Command: svd"]
-        A["User Invocation"] --> B{"Subcommand"}
-        B -->|"load"| C["Auto-detect CPUID & SoC<br/>Download & Cache SVD<br/>Build In-Memory Models"]
-        B -->|"read &lt;file.svd&gt;"| D["Explicit File Loading<br/>Parse SVD XML"]
-        B -->|"show &lt;dev&gt; [&lt;reg&gt;]"| E["Target Memory Inspection<br/>Canonical Peripheral/Register View<br/>Bitfield Decoding"]
-        B -->|"write &lt;dev&gt; &lt;reg&gt; &lt;val&gt;"| F["Memory Write to Target<br/>Verification Readback"]
-        B -->|"monitor &lt;dev&gt; &lt;reg&gt;"| G["GDB Watchpoint Injection<br/>Live Bitfield Diff on Trigger"]
-        B -->|"dump &lt;dev&gt; &lt;file.json&gt;"| H["Full State Snapshot<br/>JSON Serialization"]
-        B -->|"list"| J["List Loaded Peripheral Names"]
-    end
-    C --> I[("SVD Session State<br/>(SvdDevice / Dict)")]
-    D --> I
-    I --> E
-    I --> F
-    I --> G
-    I --> H
-    I --> J
-```
+![SVD command architecture and workflow](diagrams/svd.png)
 
 ---
 

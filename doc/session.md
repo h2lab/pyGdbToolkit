@@ -32,24 +32,7 @@ The module provides:
 
 ## Architecture and Workflow
 
-```mermaid
-flowchart TD
-    A[GDB commands] --> B[SESSION: ToolkitSession]
-    B --> C[memory: TargetMemoryReader]
-    B --> D[probe: ArchitectureRegistry]
-    B --> E[diagnose: DiagnosticRuntime]
-    B --> F[state: SessionSlice registry]
-    C --> G[Target]
-    D --> G
-    E --> G
-    F --> H[SvdSessionState]
-    F --> I[RtosSessionState]
-    F --> K[ShowstackSessionState]
-    F --> L[ArmInspectionState]
-    M[GDB events: exited, new_objfile] --> N[invalidate]
-    N --> C
-    N --> D
-```
+![Unified session architecture and workflow](diagrams/session.png)
 
 ---
 
