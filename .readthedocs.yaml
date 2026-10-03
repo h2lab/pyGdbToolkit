@@ -23,6 +23,3 @@ sphinx:
 #   - pdf
 #   - epub
 
-python:
-  install:
-    - requirements: requirements.txt
