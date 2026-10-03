@@ -1,6 +1,6 @@
 # CMSIS-SVD Provider Technical Documentation
 
-The `svd` module ([src/pyGdbToolkit/svd.py](src/pyGdbToolkit/svd.py)) provides download, caching, parsing, and dictionary mapping primitives for CMSIS-SVD (System View Description) hardware descriptions.
+The `svd` module ([implementation](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/svd.py)) provides download, caching, parsing, and dictionary mapping primitives for CMSIS-SVD (System View Description) hardware descriptions.
 
 It is designed as an underlying provider layer intended for use by GDB inspection commands such as `cmd_svd.py`.
 

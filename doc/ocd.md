@@ -53,4 +53,4 @@ unrecognized server responses are explicit errors, not empty inventories.
 AP selection does not switch the GDB core or reroute ordinary GDB memory
 packets. Discovery is not identical between backends: OpenOCD ROM-table
 traversal can access component memory and modify MEM-AP transfer registers
-as part of its own implementation. See [ap.md](ap.md) for usage and limits.
+as part of its own implementation. See [dap.md](dap.md) for usage and limits.

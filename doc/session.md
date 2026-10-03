@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Unified Session Technical Documentation
 
-The session module ([src/pyGdbToolkit/session.py](src/pyGdbToolkit/session.py)) owns the whole
+The session module ([implementation](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/session.py)) owns the whole
 runtime context of a GDB debugging session: target-memory access, architecture identity,
 diagnostic dispatch, and the per-command state previously scattered across the command modules.
 
@@ -44,7 +44,6 @@ flowchart TD
     E --> G
     F --> H[SvdSessionState]
     F --> I[RtosSessionState]
-    F --> J[ProfileSessionState]
     F --> K[ShowstackSessionState]
     F --> L[ArmInspectionState]
     M[GDB events: exited, new_objfile] --> N[invalidate]
@@ -106,12 +105,12 @@ expose these event registries is silently supported.
 
 The session core stays architecture-neutral: it only manipulates `Architecture`,
 `TargetDescription`, `ProbeResult`, and `DiagnosticResult`, which are the portable contracts of
-the [`arch`](src/pyGdbToolkit/arch) package. Adding a new architecture therefore requires no
+the [`arch`](https://github.com/h2lab/pyGdbToolkit/tree/main/src/pyGdbToolkit/arch) package. Adding a new architecture therefore requires no
 change in the session module: registering an `ArchitectureProbe` in `DEFAULT_ARCHITECTURE_REGISTRY`
 is enough for `SESSION.probe()` to recognize its targets.
 
 Architecture-specific caching lives in the architecture package itself. For Arm, the
-[src/pyGdbToolkit/arch/arm/session_state.py](src/pyGdbToolkit/arch/arm/session_state.py) module
+[Arm session state](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/arch/arm/session_state.py) module
 defines `ArmInspectionState` and mutualizes:
 
 - **`cortex_m_target(session)`**: Decoded CPUID identity (`CortexMTargetDescription`).
@@ -130,7 +129,6 @@ that `arch` stays usable, and testable, without any session or GDB concern.
 |---|---|---|---|
 | `SvdSessionState` | `cmd_svd` | Parsed `SvdDevice`, dictionary export, SVD file path, register watchpoints | Deletes the watchpoints, drops the device model |
 | `RtosSessionState` | `cmd_rtos` | Selected RTOS module, project path, decoded task list, scheduler trace | Deletes the scheduler trace, drops the project and the selection |
-| `ProfileSessionState` | `cmd_profile` | Accumulated profiling reports, active peripherals, scanned regions | Drops every accumulated result |
 | `ShowstackSessionState` | `cmd_showstack` | Stack selected by the user (`msp` / `psp` / auto) | Restores automatic stack selection |
 | `ArmInspectionState` | `arch.arm.session_state` | CPUID identity, ROM-table discovery, device report | Drops every cached inspection result |
 
