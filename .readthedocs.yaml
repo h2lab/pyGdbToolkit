@@ -1,25 +1,30 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-# Required
 version: 2
 
-# Set the OS, Python version and other tools you might need
 build:
-  os: ubuntu-22.04
+  os: ubuntu-24.04
+  apt_packages:
+    - libasound2t64
   tools:
     python: "3.12"
+    nodejs: "22"
+  jobs:
+    post_install:
+      - npm install --global @mermaid-js/mermaid-cli@11
+    build:
+      html:
+        - python -m sphinx -b html -n -W --keep-going -D mermaid_params="--backgroundColor,white,--width,1200,--puppeteerConfigFile,doc/puppeteer-readthedocs.json" doc "$READTHEDOCS_OUTPUT/html"
 
-# Build documentation in the "docs/" directory with Sphinx
 sphinx:
   configuration: doc/conf.py
-  # You can configure Sphinx to use a different builder, for instance use the dirhtml builder for simpler URLs
-  # builder: "dirhtml"
-  # Fail on all warnings to avoid broken references
-  # fail_on_warning: true
+  builder: html
+  fail_on_warning: true
 
-# Optionally build your docs in additional formats such as PDF and ePub
-# formats:
-#   - pdf
-#   - epub
-
+python:
+  install:
+    - method: pip
+      path: .
+      extra_requirements:
+        - dev
