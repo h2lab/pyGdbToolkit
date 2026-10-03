@@ -20,7 +20,7 @@ Load the toolkit in a GDB session and build the Camelot project before running
 (gdb) py import pyGdbToolkit
 (gdb) rtos list
 (gdb) rtos select camelot
-(gdb) rtos load-project --from /home/phil/Camelot/projects/calculator
+(gdb) rtos load-project --from /path/to/camlot/project
 (gdb) rtos show
 ```
 
