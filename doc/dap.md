@@ -131,10 +131,7 @@ pyGdbServer doc/examples/boards/pico2w-openocd.json
 ```
 
 The OpenOCD example listens at `localhost:1235` and selects the CMSIS-DAP probe
-`E6647C74034BC430`. It uses the local binary and matching scripts under
-`/home/phil/Camelot/pico2/openocd`, because the installed ST OpenOCD build does
-not support the available RP2350 scripts. Update `ocd-path` and the `-s`
-directory together when moving this example to another machine. A build with
+`E6647C74034BC430`. Note that an openocd build with
 RP2350/ADIv6 support is required. Only one server can use this probe at a time.
 
 Once connected, run these commands in GDB or the pyGdbClient command prompt:
