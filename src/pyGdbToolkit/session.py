@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, Callable, TypeVar
 
 import gdb
 
@@ -31,6 +31,8 @@ from .arch import (
     TargetDescription,
 )
 from .target_memory import TargetMemoryReader, WritableTargetMemory
+from .arch.memmap import MemoryRegion, TargetFingerprint
+from .memmap import MemoryMapReport
 
 
 class SessionSlice(ABC):
@@ -69,8 +71,7 @@ class CommandHelp:
             "name": self.name,
             "summary": self.summary,
             "usage": [
-                {"syntax": entry.syntax, "description": entry.description}
-                for entry in self.usage
+                {"syntax": entry.syntax, "description": entry.description} for entry in self.usage
             ],
             "notes": list(self.notes),
         }
@@ -103,6 +104,47 @@ class ToolkitSession:
         self._probe: ProbeResult | None = None
         self._slices: dict[type[SessionSlice], SessionSlice] = {}
         self._commands: dict[str, CommandHelp] = {}
+        self._discovery: MemoryMapReport | None = None
+        self._discovery_context: Callable[[], dict[str, Any]] | None = None
+
+    def publish_discovery(
+        self, report: MemoryMapReport, context: Callable[[], dict[str, Any]]
+    ) -> bool:
+        """Share confirmed identity and memory evidence for the current target only."""
+        self._discovery = None
+        self._discovery_context = None
+        if report.fingerprint is None or not report.fingerprint.confirmed:
+            return False
+        if context() != report.context:
+            return False
+        self._discovery = report
+        self._discovery_context = context
+        return True
+
+    @property
+    def discovery(self) -> MemoryMapReport | None:
+        """The confirmed discovery, discarded when its access context changes."""
+        if self._discovery is not None and self._discovery_context is not None:
+            try:
+                current = self._discovery_context()
+            except (gdb.error, RuntimeError):
+                current = None
+            if current != self._discovery.context:
+                self._discovery = None
+                self._discovery_context = None
+        return self._discovery
+
+    @property
+    def target_info(self) -> TargetFingerprint | None:
+        """Supplement architectural identity with a confirmed vendor/SoC fingerprint."""
+        discovery = self.discovery
+        return None if discovery is None else discovery.fingerprint
+
+    @property
+    def memory_regions(self) -> tuple[MemoryRegion, ...]:
+        """Declared regions of the confirmed target; candidates are kept separate."""
+        discovery = self.discovery
+        return () if discovery is None else tuple(discovery.regions)
 
     def register_command(self, command_help: CommandHelp) -> None:
         """Record the help of a toolkit command registered in GDB.
@@ -248,6 +290,8 @@ class ToolkitSession:
         """Drop the cached target access and identity without clearing command state."""
         self._memory = None
         self._probe = None
+        self._discovery = None
+        self._discovery_context = None
 
     def reset(self) -> None:
         """Drop the cached target data and clear every registered state slice."""
