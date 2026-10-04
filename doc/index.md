@@ -22,6 +22,7 @@ configuration-examples
 
 lscpu
 dap
+memmap
 svd
 fault_info
 secscan

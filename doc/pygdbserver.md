@@ -139,6 +139,16 @@ Runs a pyGdbToolkit or GDB CLI command. Commands are serialized. Optional
 
 The `gdb ` prefix is removed. `monitor` is forwarded unchanged to the OCD.
 Commands without a prefix are resolved by GDB, including toolkit commands.
+This includes every `memmap` operation: discovery, verification, baselines,
+sampling, display, help and JSON report export. It uses the same
+`command.execute` route, not a dedicated `memmap.*` execution API. For example:
+
+```json
+{"jsonrpc":"2.0","id":25,"method":"command.execute","params":{"command":"memmap discover --verify","timeout":60}}
+```
+
+`memmap` also appears in `toolkit.commands` and `toolkit.help`. See
+[memory mapping](memmap.md) for the confidence model and sampling safeguards.
 Execution commands such as `continue` may return before later breakpoint output.
 For example, `rtos showsched 8` arms a trace and `gdb continue` resumes the
 target; when tracing completes, the Rich chart arrives asynchronously as a
@@ -327,6 +337,22 @@ the target-matched SVD at connect time and also supports explicit `svd read`
 commands. Enter `quit` or press `Ctrl+Q` to exit only the dashboard. Enter
 `quit --all` to request orderly shutdown of the server, GDB, and OCD before
 the client exits.
+
+Memory inspection uses the same command prompt and output panel as other
+toolkit commands, with no separate command parser or automatic memory scan:
+
+```text
+memmap discover --verify
+memmap show
+memmap bases st
+memmap probe --known --max-reads 16
+memmap report "reports/mapping.json"
+```
+
+SVD loading is not required. `help` includes the registered `memmap` reference.
+Report files are written by GDB on the server, and the destination directory
+must already exist. Explicit-range sampling requires the same consent flags
+as direct GDB; neither the client nor the server relaxes these rules.
 
 The left panel shows the active physical CPU core and its TCP endpoint above
 the logs. Its core selector lists the discovered CPUs and selects through

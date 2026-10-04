@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 
 GDB commands for inspecting and diagnosing embedded targets, especially Arm
 Cortex-M microcontrollers. The toolkit provides processor identification, debug
-access-port inspection, fault analysis, SVD peripheral access, profiling,
+access-port inspection, memory discovery, fault analysis, SVD peripheral access, profiling,
 security auditing and Camelot RTOS inspection.
 
 Use it directly in GDB, or run `pyGdbServer` and `pyGdbClient` for a supervised
@@ -30,6 +30,12 @@ Follow the [first-session guide](doc/getting-started.md) for GDB setup or the
 server/client workflow. Adapt an [example configuration](doc/configuration-examples.md)
 to your board and probe. Keep the server API on loopback unless protected by
 appropriate network, TLS and authentication controls.
+
+For a connected, stopped target without an SVD or firmware ELF, use
+`memmap discover --verify` to collect identity and declared memory regions and
+sample their endpoints. Confirmed fingerprints enrich the shared `SESSION`;
+manufacturer baselines remain separate hypotheses. See the
+[memory-mapping guide](doc/memmap.md) for confidence levels and safe probing limits.
 
 ## Build the documentation with tox
 
