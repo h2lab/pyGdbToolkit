@@ -30,6 +30,14 @@ _TOOLKIT_HELP: list[dict[str, Any]] = [
         "usage": [{"syntax": "rtos showsched <num>", "description": "Trace elections"}],
         "notes": ["<path> is resolved by GDB."],
     },
+    {
+        "name": "memmap",
+        "summary": "Discover memory regions.",
+        "usage": [
+            {"syntax": "memmap discover --verify", "description": "Verify declared endpoints"}
+        ],
+        "notes": ["Candidates are not physical capacities."],
+    },
 ]
 
 
@@ -310,6 +318,8 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
         "lscpu",
         "Display the CPU report",
         "rtos showsched <num>",
+        "memmap discover --verify",
+        "Candidates are not physical capacities.",
         "<path> is resolved by GDB.",
         "gdb XXX",
         "monitor XXX",
@@ -402,6 +412,38 @@ def test_client_rejects_oversized_upload_before_sending(tmp_path: Path) -> None:
 
     app.client.request.assert_not_awaited()
     app._append_output.assert_called_with("upload size must not exceed 5 MiB", error=True)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "memmap",
+        "memmap help",
+        "memmap discover",
+        "memmap discover --vendor st --verify",
+        "memmap show",
+        "memmap bases nxp",
+        "memmap probe --known --max-reads 2",
+        "memmap probe --range 0x18000000:0x18000004 --allow-unsafe --ignore-memory-map",
+        'memmap report "remote directory/mapping.json"',
+        "gdb memmap show",
+        "memmap unsupported-option",
+    ],
+)
+def test_memmap_uses_the_common_command_rpc(command: str) -> None:
+    """Forward all memory commands verbatim; syntax validation stays in GDB."""
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    app.client.request = AsyncMock(return_value={"class": "done", "output": ["memory evidence"]})
+    app._append_output = Mock()
+    app._append_rendered_output = Mock()
+
+    asyncio.run(app.execute_command(command))
+
+    app.client.request.assert_awaited_once_with(
+        "command.execute", {"command": command}, timeout=300
+    )
+    app._append_rendered_output.assert_called_once_with(["memory evidence"])
 
 
 def test_help_command_is_handled_locally() -> None:

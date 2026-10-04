@@ -36,6 +36,17 @@ def test_read_register() -> None:
     assert transport.read_ap(2, 0xFC) == 0x24770011
 
 
+def test_hash_prefixed_ap_inventory() -> None:
+    """Accept the APv1 inventory emitted by the STM32N657 pyOCD server."""
+    transport = PyOcdMonitorTransport(
+        lambda command: "3 APs:\n#0: APB-AP\n#1: AHB-AP (selected)\n#2: AXI-AP\n"
+    )
+    ports = transport.list_access_ports()
+    assert [port.index for port in ports] == [0, 1, 2]
+    assert [port.selected for port in ports] == [False, True, False]
+    assert all(port.ap_version == 1 for port in ports)
+
+
 @pytest.mark.parametrize(
     "output", ["Unknown command", "Target is locked", "2 APs:\n0: AHB-AP", "1 APs:\nDP1:0: APB-AP"]
 )

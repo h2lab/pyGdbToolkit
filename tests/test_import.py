@@ -19,9 +19,10 @@ def test_toolkit_commands_register_their_help_in_the_session() -> None:
 
     helps = {command.name: command for command in SESSION.commands}
 
-    assert set(helps) >= {"lscpu", "fault_info", "rtos", "svd", "secscan"}
+    assert set(helps) >= {"lscpu", "fault_info", "rtos", "svd", "secscan", "memmap"}
     assert any(entry.syntax == "svd load" for entry in helps["svd"].usage)
     assert helps["rtos"].to_dict()["notes"]
+    assert any(entry.syntax.startswith("memmap discover") for entry in helps["memmap"].usage)
 
 
 def test_arm_package_exports_only_target_probe_integration() -> None:

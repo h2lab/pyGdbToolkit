@@ -102,6 +102,65 @@ def test_command_prefixes_and_raw_mi_are_dispatched(tmp_path: Path) -> None:
     assert [response["result"]["class"] for response in responses] == ["done"] * 4
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "memmap",
+        "memmap help",
+        "memmap discover --vendor st --verify",
+        "memmap show",
+        "memmap bases xilinx",
+        "memmap probe --known --max-reads 2",
+        "memmap probe --range 0x18000000:0x18000004 --allow-unsafe --ignore-memory-map",
+        'memmap report "remote directory/mapping.json"',
+        "gdb memmap show",
+    ],
+)
+def test_memmap_is_dispatched_like_other_toolkit_commands(tmp_path: Path, command: str) -> None:
+    """All memory operations use the common CLI path without server-side parsing."""
+    server, mi = _server(tmp_path)
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "command.execute",
+                    "params": {"command": command, "timeout": 60},
+                }
+            )
+        )
+    )
+    expected = command[4:] if command.startswith("gdb ") else command
+    assert mi.calls == [("console", expected, 60)]
+    assert response["result"]["output"] == [f"output:{expected}"]
+
+
+def test_memmap_execution_rpcs_are_not_special_cases(tmp_path: Path) -> None:
+    """No duplicate execution API can bypass the normal command registry."""
+    server, mi = _server(tmp_path)
+    for method in (
+        "memmap.discover",
+        "memmap.probe",
+        "memmap.bases",
+        "memmap.report",
+        "memmap.status",
+    ):
+        response, _ = asyncio.run(
+            server.handle_rpc_message(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": method,
+                    }
+                )
+            )
+        )
+        assert response["error"]["code"] == -32601
+    assert not mi.calls
+
+
 def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
     """Binary uploads and default, relative, and absolute listings bypass MI."""
     server, fake_mi = _server(tmp_path)
@@ -473,6 +532,12 @@ def test_toolkit_commands_and_help_come_from_the_gdb_session(tmp_path: Path) -> 
             "usage": [{"syntax": "svd load", "description": "Load the SVD"}],
             "notes": [],
         },
+        {
+            "name": "memmap",
+            "summary": "Discover memory regions.",
+            "usage": [{"syntax": "memmap discover --verify", "description": "Verify endpoints"}],
+            "notes": ["Candidates are not physical capacities."],
+        },
     ]
 
     class HelpMiSession(FakeMiSession):
@@ -489,6 +554,7 @@ def test_toolkit_commands_and_help_come_from_the_gdb_session(tmp_path: Path) -> 
             (2, "toolkit.help", {}),
             (3, "toolkit.help", {"command": "svd"}),
             (4, "toolkit.help", {"command": "unknown"}),
+            (5, "toolkit.help", {"command": "memmap"}),
         ):
             response, _ = await server.handle_rpc_message(
                 json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params})
@@ -497,15 +563,17 @@ def test_toolkit_commands_and_help_come_from_the_gdb_session(tmp_path: Path) -> 
             responses.append(response)
         return responses
 
-    listing, all_help, svd_help, unknown = asyncio.run(exercise())
+    listing, all_help, svd_help, unknown, memmap_help = asyncio.run(exercise())
 
     assert listing["result"]["commands"] == [
         {"name": "lscpu", "summary": "Identify the core."},
         {"name": "svd", "summary": "Inspect registers."},
+        {"name": "memmap", "summary": "Discover memory regions."},
     ]
     assert all_help["result"]["commands"] == helps
     assert svd_help["result"]["commands"] == [helps[1]]
     assert unknown["error"]["code"] == -32602
+    assert memmap_help["result"]["commands"] == [helps[2]]
 
 
 def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> None:
