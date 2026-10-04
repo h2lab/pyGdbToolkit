@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Cortex-M address-space hints, never a physical device memory map."""
 
 from __future__ import annotations

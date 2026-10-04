@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Execution pointers supply evidence after relocation, never invented capacities."""
 
 from unittest.mock import Mock

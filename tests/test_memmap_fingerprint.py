@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Fingerprint provenance, contradictions and local GDB-policy restoration."""
 
 from types import SimpleNamespace

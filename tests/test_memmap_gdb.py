@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise metadata and CLI adapters in an actual GDB process when available."""
 
 from pathlib import Path
