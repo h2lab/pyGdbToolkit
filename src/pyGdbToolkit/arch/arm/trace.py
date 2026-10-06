@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Read-only Arm trace capability probing through discovered CoreSight components."""
 
 from __future__ import annotations
