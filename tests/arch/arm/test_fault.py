@@ -165,6 +165,49 @@ def test_extended_frame_selects_psp_and_offsets_core_registers_after_fpu_state()
     assert (frame.r0, frame.lr, frame.pc, frame.xpsr) == (18, 23, 24, 25)
 
 
+@pytest.mark.parametrize("lr", [-1, 0xFFFFFFFF, 0xFFFFFFFD])
+def test_thread_mode_does_not_read_an_exception_stack(lr: int) -> None:
+    """A Thread-mode LR is not evidence of a live hardware exception frame."""
+    registers = Registers({"lr": lr, "xpsr": 1 << 24, "psp": 0})
+    report = CortexMFaultCollector().collect(
+        _scb_memory(),
+        _target(),  # type: ignore[arg-type]
+        DiagnosticRuntimeAccess(registers, Symbols()),
+    )
+    assert all(not table.title.startswith("Stacked frame") for table in report.tables)
+    assert all(panel.title != "Stack Frame" for panel in report.panels)
+    assert ("psp_s", "psp") not in registers.requests
+    assert "0x-" not in str(report)
+    if lr in (-1, 0xFFFFFFFF):
+        assert report.tables[0].rows[4].values == ("Current LR", "0xFFFFFFFF [symbol_FFFFFFFF]")
+
+
+def test_signed_exc_return_and_stack_pointer_are_unsigned_cortex_m_values() -> None:
+    """Handle signed GDB registers locally without changing portable runtime access."""
+    memory = _scb_memory()
+    memory.values.update({0x80001000 + 4 * index: index for index in range(8)})
+    report = CortexMFaultCollector().collect(
+        memory,
+        _target(),  # type: ignore[arg-type]
+        _access({"lr": -3, "ipsr": 3, "psp": 0x80001000 - (1 << 32)}, Symbols()),
+    )
+    assert report.tables[0].rows[4].values == ("Current LR", "0xFFFFFFFD (valid EXC_RETURN)")
+    assert "Stack: PSP @ 0x80001000" in report.tables[1].title
+
+
+@pytest.mark.parametrize("lr", [0xFFFFFFFF, 0xFFFFFFF5])
+def test_invalid_exc_return_does_not_trigger_stack_reads(lr: int) -> None:
+    """Reject reserved EXC_RETURN bit patterns even in Handler mode."""
+    registers = Registers({"lr": lr, "ipsr": 3, "psp": 0})
+    report = CortexMFaultCollector().collect(
+        _scb_memory(),
+        _target(),  # type: ignore[arg-type]
+        DiagnosticRuntimeAccess(registers, Symbols()),
+    )
+    assert "valid EXC_RETURN" not in report.tables[0].rows[4].values[1]
+    assert ("psp_s", "psp") not in registers.requests
+
+
 @pytest.mark.parametrize(
     ("exc_return", "selected_name", "other_name", "selected_stack", "other_stack"),
     (
@@ -183,14 +226,8 @@ def test_collector_prefers_exc_return_selected_banked_stack_register(
 ) -> None:
     """EXC_RETURN[6] selects the secure bank before the unbanked stack alias."""
     memory = Memory(
-        {
-            selected_stack + 4 * index: index
-            for index in range(8)
-        }
-        | {
-            other_stack + 4 * index: 0xDEADBEEF
-            for index in range(8)
-        }
+        {selected_stack + 4 * index: index for index in range(8)}
+        | {other_stack + 4 * index: 0xDEADBEEF for index in range(8)}
     )
     registers = Registers(
         {
@@ -253,5 +290,7 @@ def test_collector_retains_stack_read_error_and_unavailable_scb_registers() -> N
     assert report.blocks[1].lines == (
         "Cannot read stacked frame at 0x20003000: could not read 4 byte(s) at 0x20003000: not mapped",
     )
-    causes = next(panel for panel in report.panels if panel.title == "Diagnostics & Probable Causes")
-    assert causes.lines == ("• No obvious error conditions detected in SCB registers.",)
+    causes = next(
+        panel for panel in report.panels if panel.title == "Diagnostics & Probable Causes"
+    )
+    assert causes.lines == ("Fault diagnosis incomplete: CFSR or HFSR is unavailable.",)

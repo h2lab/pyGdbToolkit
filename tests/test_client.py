@@ -577,20 +577,30 @@ def test_core_selection_failure_restores_confirmed_core() -> None:
     asyncio.run(exercise())
 
 
-def test_core_inventory_unavailable_disables_selection() -> None:
-    """Servers without a usable inventory do not offer a guessed CPU choice."""
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": -32601, "message": "Method not found"},
+        {"code": -32000, "message": "Hardware core discovery is not supported for OCD jlink"},
+    ],
+)
+def test_core_inventory_unavailable_disables_selection(error) -> None:
+    """An inventory error disables selection and prevents endless background retries."""
 
     async def exercise():
+        requests = []
+
         async def handler(websocket):
             async for payload in websocket:
                 request = json.loads(payload)
+                requests.append(request["method"])
                 if request["method"] == "target.cores":
                     await websocket.send(
                         json.dumps(
                             {
                                 "jsonrpc": "2.0",
                                 "id": request["id"],
-                                "error": {"code": -32601, "message": "Method not found"},
+                                "error": error,
                             }
                         )
                     )
@@ -603,5 +613,49 @@ def test_core_inventory_unavailable_disables_selection() -> None:
                 await pilot.pause(0.5)
                 assert app.query_one("#core-select", Select).disabled
                 assert "unavailable" in str(app.query_one("#core-current", Static).render())
+                for _ in range(3):
+                    await app._refresh_target_status()
+                assert requests.count("target.cores") == 1
+                assert requests.count("target.status") >= 4
+
+    asyncio.run(exercise())
+
+
+def test_target_status_error_after_svd_read_stops_background_retries() -> None:
+    """Stop status polling on a server that rejects its remote core command."""
+
+    async def exercise():
+        requests = []
+
+        async def handler(websocket):
+            async for payload in websocket:
+                request = json.loads(payload)
+                requests.append(request["method"])
+                if request["method"] == "target.status":
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": request["id"],
+                                "error": {
+                                    "code": -32000,
+                                    "message": 'Unsupported remote command "core"',
+                                },
+                            }
+                        )
+                    )
+                else:
+                    await _respond(websocket, request)
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            app = PyGdbClientApp(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+            async with app.run_test(size=(150, 48)) as pilot:
+                await pilot.pause(0.5)
+                await app.execute_command("svd read device.svd")
+                for _ in range(3):
+                    await app._refresh_target_status()
+                assert requests.count("target.status") == 1
+                assert requests.count("target.cores") >= 4
+                assert "svd.peripherals" in requests
 
     asyncio.run(exercise())

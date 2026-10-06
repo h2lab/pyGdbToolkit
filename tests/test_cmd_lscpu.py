@@ -60,6 +60,35 @@ def _rom_root_values(base: int, pidr: tuple[int, int, int, int, int]) -> dict[in
     return values
 
 
+@pytest.mark.parametrize("code", [0x15, 0x0E])
+def test_command_renders_nxp_vendor_and_cpuid_core_without_signature_reads(
+    fake_gdb: object, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """Render NXP Cortex-M7 identity from CPUID and ROM rather than OCD logs."""
+    stream = StringIO()
+    monkeypatch.setattr(cmd_lscpu, "CONSOLE", Console(file=stream, width=120))
+    values = _rom_root_values(
+        MCU_ROM_TABLE_ADDRESS,
+        (0xC8, ((code & 0xF) << 4) | 4, ((code >> 4) & 7) | 8, 0, 0),
+    )
+    values[0xE000ED00] = _little_endian(0x411FC272, 4)
+    inferior = FakeInferior(values)
+    fake_gdb._inferior = inferior
+
+    cmd_lscpu.LscpuCmd().invoke("", False)
+
+    output = stream.getvalue()
+    assert "NXP Semiconductors" in output
+    assert "Cortex-M7" in output
+    assert "r1p2" in output
+    assert "no documented device profile" in output
+    assert "IMX8MP" not in output
+    assert all(
+        address == 0xE000ED00 or MCU_ROM_TABLE_ADDRESS <= address < 0xE0100000
+        for address, _ in inferior.calls
+    )
+
+
 def test_command_rejects_arguments(fake_gdb: object) -> None:
     """The public command fails clearly when passed any argument."""
     del fake_gdb

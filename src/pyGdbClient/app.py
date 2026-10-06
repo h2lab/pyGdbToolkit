@@ -122,6 +122,8 @@ class PyGdbClientApp(App[None]):
         self._history_draft = ""
         self._core_options: list[tuple[str, int]] = []
         self._core_selecting = False
+        self._core_refresh_failed = False
+        self._target_status_refresh_failed = False
 
     def compose(self) -> ComposeResult:
         """Build the log, output, target, tree, and command-input regions."""
@@ -176,6 +178,8 @@ class PyGdbClientApp(App[None]):
         try:
             await self.client.connect()
             self._connected = True
+            self._core_refresh_failed = False
+            self._target_status_refresh_failed = False
             await self.client.request("logs.subscribe")
             self.run_worker(self._consume_notifications(), group="notifications")
             status = await self.client.request("server.status")
@@ -353,11 +357,12 @@ class PyGdbClientApp(App[None]):
         """Render the discovered cores and their confirmed GDB selection."""
         selector = self.query_one("#core-select", Select)
         current = self.query_one("#core-current", Static)
-        if self._core_selecting:
+        if self._core_selecting or self._core_refresh_failed:
             return
         try:
             response = await self.client.request("target.cores", timeout=5)
         except (RpcError, ConnectionError, TimeoutError):
+            self._core_refresh_failed = True
             selector.disabled = True
             current.update("Active core: unavailable")
             return
@@ -465,9 +470,12 @@ class PyGdbClientApp(App[None]):
             return
         async with self._target_refresh_lock:
             await self._refresh_cores()
+            if self._target_status_refresh_failed:
+                return
             try:
                 data = await self.client.request("target.status", timeout=5)
             except (RpcError, ConnectionError, TimeoutError):
+                self._target_status_refresh_failed = True
                 return
             state = str(data.get("state", "unknown")).lower()
             if state in {"stopped", "break"}:

@@ -39,6 +39,38 @@ def test_unknown_is_not_assumed_to_be_pyocd() -> None:
     assert info.identifier == OcdIdentifier.UNKNOWN
 
 
+def test_jlink_help_identifies_server() -> None:
+    """Identify J-Link using its help banner rather than an unsupported version command."""
+    calls = []
+
+    def execute(command: str) -> str:
+        calls.append(command)
+        if command != "monitor help":
+            raise RuntimeError("Target does not support this command.")
+        return "SEGGER J-Link GDB Server V9.82\n\nAvailable remote commands are:\n"
+
+    info = probe_ocd(execute)
+    assert info.identifier == OcdIdentifier.JLINK
+    assert info.version == "9.82"
+    assert info.evidence.startswith("SEGGER J-Link GDB Server V9.82")
+    assert calls == ["monitor echo [version]", "monitor show aps", "monitor help"]
+
+
+def test_generic_help_is_not_assumed_to_be_jlink() -> None:
+    """Require a SEGGER banner, not merely a list of monitor commands."""
+    info = probe_ocd(lambda command: "Available remote commands are: reset halt go")
+    assert info.identifier == OcdIdentifier.UNKNOWN
+
+
+def test_all_monitor_failures_leave_identity_unknown() -> None:
+    """Keep detection safe when every server probe fails."""
+
+    def execute(command: str) -> str:
+        raise RuntimeError("monitor unavailable")
+
+    assert probe_ocd(execute).identifier == OcdIdentifier.UNKNOWN
+
+
 def test_no_connection_does_not_issue_monitor_requests() -> None:
     def execute(command: str) -> str:
         raise AssertionError(command)
@@ -70,7 +102,7 @@ def test_connection_changes_and_disconnect_invalidate_identity() -> None:
 
 
 def test_unknown_probe_is_retried() -> None:
-    replies = iter(["unsupported", "unsupported", "Open On-Chip Debugger 0.12.0"])
+    replies = iter(["unsupported", "unsupported", "unsupported", "Open On-Chip Debugger 0.12.0"])
     detector = OcdDetector(lambda command: next(replies), lambda: (1, 1))
     assert detector.get().identifier == OcdIdentifier.UNKNOWN
     assert detector.get().identifier == OcdIdentifier.OPENOCD

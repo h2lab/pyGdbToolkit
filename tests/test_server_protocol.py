@@ -9,8 +9,9 @@ import json
 from pathlib import Path
 import shutil
 import socket
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from websockets.asyncio.client import connect
@@ -19,7 +20,12 @@ from websockets.asyncio.server import serve
 from pyGdbClient.app import PyGdbClientApp
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
-from pyGdbServer.server import PyGdbServer, _free_loopback_ports, _ocd_listener_message
+from pyGdbServer.server import (
+    PyGdbServer,
+    _free_loopback_ports,
+    _jlink_core_name,
+    _ocd_listener_message,
+)
 
 
 def test_gdb_and_telnet_ports_are_distinct_and_available() -> None:
@@ -375,7 +381,141 @@ def test_known_ocds_use_passive_listener_readiness() -> None:
     """Known OCDs are recognized by their listener logs, without TCP probes."""
     assert _ocd_listener_message("pyocd", 43123) == "GDB server listening on port 43123"
     assert _ocd_listener_message("openocd", 43123) == "Listening on port 43123 for gdb connections"
+    assert _ocd_listener_message("JLinkGDBServer", 43123) == "Connected to target"
+    assert _ocd_listener_message("/opt/SEGGER/JLinkGDBServerCLExe", 43123) == (
+        "Connected to target"
+    )
     assert _ocd_listener_message("vendor-ocd", 43123) is None
+
+
+def _jlink_startup_server(tmp_path: Path, messages: list[str]) -> PyGdbServer:
+    server, _ = _server(tmp_path)
+    server.config = SimpleNamespace(ocd_path="JLinkGDBServer", startup_timeout=0.01)
+    server.ocd = SimpleNamespace(process=SimpleNamespace(returncode=None))
+    server.gdb_port = 43123
+    for message in messages:
+        server.logs.append("ocd", "stdout", message)
+    return server
+
+
+def test_jlink_readiness_does_not_open_a_test_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the target-ready banner permits starting GDB, without a TCP probe."""
+    probe = AsyncMock(side_effect=AssertionError("Unexpected TCP probe"))
+    monkeypatch.setattr(asyncio, "open_connection", probe)
+    server = _jlink_startup_server(
+        tmp_path,
+        [
+            "Listening on TCP/IP port 43123",
+            "Connected to target",
+        ],
+    )
+    asyncio.run(server._wait_for_ocd())
+    probe.assert_not_called()
+
+
+def test_jlink_listening_port_is_not_target_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The listener opens before J-Link has connected to the target CPU."""
+    probe = AsyncMock(side_effect=AssertionError("Unexpected TCP probe"))
+    monkeypatch.setattr(asyncio, "open_connection", probe)
+    server = _jlink_startup_server(tmp_path, ["Listening on TCP/IP port 43123"])
+    with pytest.raises(TimeoutError, match="did not become ready"):
+        asyncio.run(server._wait_for_ocd())
+    probe.assert_not_called()
+
+
+@pytest.mark.parametrize("returncode", [None, 1])
+def test_jlink_target_failure_reports_the_actual_startup_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int | None
+) -> None:
+    """Reproduce the i.MX8MP failure rather than reporting a later GDB timeout."""
+    probe = AsyncMock(side_effect=AssertionError("Unexpected TCP probe"))
+    monkeypatch.setattr(asyncio, "open_connection", probe)
+    server = _jlink_startup_server(
+        tmp_path,
+        [
+            "Listening on TCP/IP port 43123",
+            "WARNING: Identified core does not match configuration. "
+            "(Found: Cortex-M0, Configured: Cortex-M7)",
+            "ERROR: Failed to halt CPU.",
+            "ERROR: Could not connect to target.",
+        ],
+    )
+    server.ocd.process.returncode = returncode
+    with pytest.raises(RuntimeError, match="J-Link startup failed") as error:
+        asyncio.run(server._wait_for_ocd())
+    assert "Found: Cortex-M0, Configured: Cortex-M7" in str(error.value)
+    assert "Could not connect to target" in str(error.value)
+    probe.assert_not_called()
+
+
+@pytest.mark.parametrize("name", ["Cortex-M0+", "Cortex-M4", "Cortex-M7", "Cortex-M33"])
+def test_jlink_core_identity_parses_detected_names_not_board_devices(name: str) -> None:
+    """The connected CPU is independent of SEGGER's configured device name."""
+    assert (
+        _jlink_core_name(
+            [
+                "Target device: SOME_VENDOR_DEVICE",
+                "Connecting to target...",
+                f"JTAG ID: 0x5BA00477 ({name})",
+                "Connected to target",
+            ]
+        )
+        == name
+    )
+    assert _jlink_core_name([f"Found {name} r1p2", "Connected to target"]) == name
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        ["Target device: Cortex-M7", "Connected to target"],
+        ["JTAG ID: 0x5BA00477 (Cortex-M7)"],
+        ["JTAG ID: 0x5BA00477 (Cortex-A53)", "Connected to target"],
+        ["Found Cortex-R52", "Connected to target"],
+        ["Found Cortex-M4", "Found Cortex-M7", "Connected to target"],
+        ["Found Cortex-M7", "ERROR: Could not connect to target.", "Connected to target"],
+        [
+            "Found Cortex-M0",
+            "WARNING: Identified core does not match configuration.",
+            "Connected to target",
+        ],
+        ["Found Cortex-M7", "Connected to target", "Connecting to target..."],
+    ],
+)
+def test_jlink_core_identity_rejects_incomplete_or_conflicting_logs(messages: list[str]) -> None:
+    """Do not manufacture a CPU identity from configured, failed or ambiguous targets."""
+    assert _jlink_core_name(messages) is None
+
+
+def test_jlink_core_registration_uses_only_the_existing_gdb_session(tmp_path: Path) -> None:
+    """Pass connected identity without monitor queries, AP scans or target-memory access."""
+    server = _jlink_startup_server(
+        tmp_path,
+        [
+            "Connecting to target...",
+            "JTAG ID: 0x5BA00477 (Cortex-M4)",
+            "Connected to target",
+        ],
+    )
+    server._status_core_discovery_failed = True
+    server.mi.console = AsyncMock(return_value=MiResult("done", "done", ()))
+    asyncio.run(server._register_jlink_core())
+    server.mi.console.assert_awaited_once_with(
+        'python from pyGdbToolkit.core_runtime import CORES; CORES.register_jlink_core("Cortex-M4")'
+    )
+    assert not server._status_core_discovery_failed
+
+
+def test_jlink_core_registration_does_not_guess_when_logs_are_missing(tmp_path: Path) -> None:
+    """Ordinary server startup remains usable without a known core-log format."""
+    server = _jlink_startup_server(tmp_path, ["Connected to target"])
+    server.mi.console = AsyncMock()
+    asyncio.run(server._register_jlink_core())
+    server.mi.console.assert_not_called()
 
 
 def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path: Path) -> None:
@@ -392,7 +532,7 @@ def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path:
 
         async def console(self, command: str, timeout: float = 30.0) -> MiResult:
             self.calls.append(("console", command, timeout))
-            return MiResult("done", "done", ("Core 0 (Cortex-M33) is selected\n",))
+            return MiResult("done", "done", ('PYGDBSERVER_CORE_JSON:{"core":{"id":0}}',))
 
     server = object.__new__(PyGdbServer)
     server.logs = LogStore(tmp_path)
@@ -408,6 +548,36 @@ def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path:
         "access_port": "AHB5-AP#0",
         "access_ports": ["AHB5-AP#0"],
     }
+
+
+def test_target_status_stops_failed_discovery_without_monitor_core(tmp_path: Path) -> None:
+    """J-Link state polling does not retry failed core discovery or issue monitor core."""
+
+    class UnsupportedCoreMiSession(FakeMiSession):
+        async def execute(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("mi", command, timeout))
+            return MiResult(
+                "done", 'done,threads=[{id="1",state="stopped"}],current-thread-id="1"', ()
+            )
+
+        async def console(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("console", command, timeout))
+            assert command != "monitor core"
+            raise RuntimeError("Hardware core discovery is not supported for OCD jlink")
+
+    server, _ = _server(tmp_path)
+    server.mi = UnsupportedCoreMiSession()  # type: ignore[assignment]
+
+    async def exercise() -> None:
+        for _ in range(3):
+            status = await server.target_status()
+            assert status["core"] is None
+            assert status["state"] == "stopped"
+            assert status["thread_id"] == "1"
+
+    asyncio.run(exercise())
+    assert len([call for call in server.mi.calls if call[0] == "console"]) == 1
+    assert len([call for call in server.mi.calls if call[0] == "mi"]) == 3
 
 
 def test_svd_peripherals_returns_structured_device_metadata(tmp_path: Path) -> None:

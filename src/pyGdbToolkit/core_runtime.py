@@ -26,6 +26,8 @@ class CoreInfo:
     endpoint: str
     inferior: int | None = None
     thread: int | None = None
+    scope: str = "physical-core-inventory"
+    identity_source: str = "debug-server"
 
     def to_dict(self) -> dict[str, Any]:
         """Return stable command and RPC metadata."""
@@ -49,6 +51,19 @@ class CoreSessionState(SessionSlice):
         self.attachments.clear()
 
 
+@dataclass
+class JLinkCoreState(SessionSlice):
+    """Bind the server-reported attached Cortex-M to one GDB connection."""
+
+    connection_key: tuple[int, int] | None = None
+    name: str = ""
+
+    def reset(self) -> None:
+        """Discard the attached-core identity."""
+        self.connection_key = None
+        self.name = ""
+
+
 class GdbCoreController:
     """Share core discovery and verified selection between CLI and RPC."""
 
@@ -68,7 +83,44 @@ class GdbCoreController:
         backend = self.detector.get().identifier
         if backend == OcdIdentifier.UNKNOWN:
             raise gdb.GdbError("Core selection requires pyOCD or OpenOCD")
+        if backend not in (OcdIdentifier.PYOCD, OcdIdentifier.OPENOCD, OcdIdentifier.JLINK):
+            raise gdb.GdbError(f"Hardware core discovery is not supported for OCD {backend}")
         return backend
+
+    def register_jlink_core(self, name: str) -> None:
+        """Register a Cortex-M identity reported by the connected J-Link server."""
+        if self._backend() != OcdIdentifier.JLINK:
+            raise gdb.GdbError("Attached-core registration requires J-Link")
+        if re.fullmatch(r"Cortex-M\d+(?:\+|P)?", name) is None:
+            raise gdb.GdbError("J-Link attached-core support requires a Cortex-M identity")
+        inferior = gdb.selected_inferior()
+        architecture = str(inferior.architecture().name()).lower()
+        if not architecture.startswith("arm") or architecture.startswith("armv8-a"):
+            raise gdb.GdbError("J-Link attached-core support does not include Cortex-A or Cortex-R")
+        state = self.session.state(JLinkCoreState)
+        state.connection_key = (int(inferior.num), int(self._connection().num))
+        state.name = name
+
+    def _jlink_cores(self) -> tuple[CoreInfo, ...]:
+        inferior = gdb.selected_inferior()
+        connection = self._connection()
+        state = self.session.state(JLinkCoreState)
+        if state.connection_key != (int(inferior.num), int(connection.num)):
+            state.reset()
+            raise gdb.GdbError(
+                "J-Link attached Cortex-M identity is unavailable for this connection"
+            )
+        return (
+            CoreInfo(
+                0,
+                state.name,
+                True,
+                str(connection.details),
+                inferior.num,
+                scope="attached-core-only",
+                identity_source="jlink-server-connection-log",
+            ),
+        )
 
     def _attached(self, state: CoreSessionState) -> dict[int, Any]:
         inferiors = {inferior.num: inferior for inferior in gdb.inferiors()}
@@ -145,7 +197,10 @@ class GdbCoreController:
 
     def list(self) -> tuple[CoreInfo, ...]:
         """Discover CPUs without attaching other sockets or changing selection."""
-        if self._backend() == OcdIdentifier.PYOCD:
+        backend = self._backend()
+        if backend == OcdIdentifier.JLINK:
+            return self._jlink_cores()
+        if backend == OcdIdentifier.PYOCD:
             return self._pyocd_cores()
         return self._openocd_cores()
 
@@ -197,6 +252,8 @@ class GdbCoreController:
         core = next((core for core in self.list() if core.id == core_id), None)
         if core is None:
             raise gdb.GdbError(f"Core {core_id} not discovered; use 'dap core list'")
+        if self._backend() == OcdIdentifier.JLINK:
+            return core
         try:
             if self._backend() == OcdIdentifier.PYOCD:
                 self._select_pyocd(core)

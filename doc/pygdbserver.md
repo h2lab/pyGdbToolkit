@@ -39,8 +39,8 @@ finally the public API. A failed stage stops the complete stack.
 |---|---|
 | `gdb-path` | GDB executable. |
 | `gdb-args` | Extra GDB arguments. They must not establish the target connection. |
-| `ocd-path` | pyOCD, OpenOCD, or another GDB-server executable. |
-| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. pyOCD and OpenOCD receive GDB port arguments automatically when `{gdb_port}` is omitted; Telnet arguments must be supplied explicitly. |
+| `ocd-path` | pyOCD, OpenOCD, SEGGER JLinkGDBServer (including JLinkGDBServerCLExe), or another GDB-server executable. |
+| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. pyOCD, OpenOCD, and J-Link receive GDB port arguments automatically when `{gdb_port}` is omitted; Telnet arguments must be supplied explicitly. |
 | `listen-address` | Public WebSocket address. Port `0` requests a dynamic API port. |
 | `gdb-init` | GDB CLI commands run after connection and toolkit loading. |
 | `log-directory` | Parent of timestamped run-log directories. |
@@ -50,6 +50,37 @@ The OCD GDB endpoint and raw MI adapter always bind to `127.0.0.1` with dynamic
 ports. The raw MI adapter is for local diagnostics; clients should use the API.
 When exposing the public API beyond loopback, place it behind a trusted network
 or a TLS and authentication reverse proxy.
+
+### J-Link
+
+For `JLinkGDBServer` or `JLinkGDBServerCLExe`, pyGdbServer connects using
+`target remote`; other OCDs retain `target extended-remote`. J-Link does not
+support extended-remote mode.
+
+Set `ocd-path` to your SEGGER executable and supply your target-specific
+`-device`, `-if`, probe selection, and speed arguments in `ocd-args`.
+pyGdbServer adds `-localhostonly 1` and `-port` with its allocated GDB port.
+An explicit `-port` (or `-p`) must use `{gdb_port}`; `-localhostonly 0` is rejected.
+For multiple instances, configure `-telnetport {telnet_port}` explicitly and
+allocate separate SWO ports with J-Link's `-swoport` option.
+
+J-Link identification and ADIv5 JTAG-DPv0 AP inspection are supported.
+Successful J-Link connection logs also provide the attached Cortex-M identity
+to `dap core` and the core RPCs. The single local core `0` has scope
+`attached-core-only`; selecting it does not change target state. An unknown
+log format leaves identity unavailable. Discovery of other SoC cores,
+switching to them and J-Link SWD/ADIv6 AP inspection are not implemented.
+AP selection is local to toolkit profiling; it does not reroute GDB memory
+accesses. See [ocd.md](ocd.md).
+
+On complex SoCs such as the **i.MX8M family**, J-Link `dap core` support
+requires **pyGdbServer** to correlate the OCD-reported CPU with the current
+GDB inferior/connection. Supervising OCD and GDB together provides a coherent
+identity and session lifecycle. A standalone GDB/J-Link connection does not
+provide the supported `dap core` workflow for these targets.
+
+An {ref}`i.MX8MP Cortex-M7 J-Link example <imx8mp-m7-jlink>`
+provides the `MIMX8ML6_M7` JTAG configuration, startup commands and port settings.
 
 ### Multiple instances on the same loopback address
 

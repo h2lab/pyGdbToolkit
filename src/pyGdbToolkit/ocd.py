@@ -19,6 +19,7 @@ class OcdIdentifier(StrEnum):
     UNKNOWN = "unknown"
     PYOCD = "pyocd"
     OPENOCD = "openocd"
+    JLINK = "jlink"
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,15 @@ def probe_ocd(execute: Callable[[str], str]) -> OcdInfo:
     else:
         if re.search(r"^\s*\d+ APs:\s*$", output, re.M):
             return OcdInfo(OcdIdentifier.PYOCD, evidence=output.strip())
+        errors.append(output.strip())
+    try:
+        output = execute("monitor help")
+    except Exception as error:
+        errors.append(str(error))
+    else:
+        match = re.search(r"^\s*SEGGER J-Link GDB Server\s+V([^\s]+)", output, re.M | re.I)
+        if match is not None:
+            return OcdInfo(OcdIdentifier.JLINK, match[1], output.strip())
         errors.append(output.strip())
     return OcdInfo(evidence="; ".join(error for error in errors if error) or "OCD unavailable")
 

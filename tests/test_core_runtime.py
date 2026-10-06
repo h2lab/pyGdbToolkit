@@ -143,6 +143,83 @@ def test_openocd_rejects_rtos_threads(runtime, fake_gdb):
         runtime.controller.list()
 
 
+def test_jlink_never_uses_openocd_core_discovery(runtime, fake_gdb):
+    """Do not interpret J-Link threads as OpenOCD physical core names."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    with pytest.raises(fake_gdb.GdbError, match="identity is unavailable"):
+        runtime.controller.list()
+    assert runtime.calls == []
+
+
+@pytest.mark.parametrize(
+    "name", ["Cortex-M0", "Cortex-M0+", "Cortex-M4", "Cortex-M7", "Cortex-M33", "Cortex-M35P"]
+)
+def test_jlink_attached_core_is_board_independent_and_selection_is_a_noop(runtime, name):
+    """Use the reported CPU type without AP discovery, thread switching or memory reads."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    memory = runtime.session.memory
+    runtime.controller.register_jlink_core(name)
+    cores = runtime.controller.list()
+    assert len(cores) == 1
+    core = runtime.controller.current()
+    assert core.id == 0
+    assert core.name == name
+    assert core.selected
+    assert core.thread is None
+    assert core.scope == "attached-core-only"
+    assert core.identity_source == "jlink-server-connection-log"
+    assert runtime.controller.select(0) == core
+    assert runtime.session.memory is memory
+    assert runtime.calls == []
+
+
+def test_jlink_connection_change_invalidates_attached_identity(runtime, fake_gdb):
+    """Never carry a CPU identity to a new connection."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.controller.register_jlink_core("Cortex-M7")
+    runtime.inferiors[0].connection.num += 1
+    with pytest.raises(fake_gdb.GdbError, match="identity is unavailable"):
+        runtime.controller.current()
+    assert runtime.calls == []
+
+
+@pytest.mark.parametrize("name", ["Cortex-A53", "Cortex-R52", "MIMX8ML6_M7", "", "Cortex-M7\n"])
+def test_jlink_registration_rejects_non_cortex_m_identities(runtime, fake_gdb, name):
+    """A configured device or a different CPU family is not a Cortex-M identity."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    with pytest.raises(fake_gdb.GdbError, match="Cortex-M identity"):
+        runtime.controller.register_jlink_core(name)
+
+
+def test_jlink_other_local_core_ids_are_rejected(runtime, fake_gdb):
+    """Do not turn AP indices or RTOS threads into physical CPU identifiers."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.controller.register_jlink_core("Cortex-M4")
+    with pytest.raises(fake_gdb.GdbError, match="not discovered"):
+        runtime.controller.select(1)
+    assert runtime.calls == []
+
+
+@pytest.mark.parametrize("architecture", ["aarch64", "armv8-a", "riscv:rv32"])
+def test_jlink_registration_rejects_out_of_scope_gdb_architecture(runtime, fake_gdb, architecture):
+    """Do not accept Cortex-M metadata on a clearly incompatible GDB connection."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.inferiors[0].architecture = lambda: SimpleNamespace(name=lambda: architecture)
+    with pytest.raises(fake_gdb.GdbError, match="does not include"):
+        runtime.controller.register_jlink_core("Cortex-M7")
+
+
+def test_jlink_identity_survives_svd_cache_invalidation_but_not_reset(runtime, fake_gdb):
+    """The attached identity is connection state, not cached target-memory data."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.controller.register_jlink_core("Cortex-M4")
+    runtime.session.invalidate()
+    assert runtime.controller.current().name == "Cortex-M4"
+    runtime.session.reset()
+    with pytest.raises(fake_gdb.GdbError, match="identity is unavailable"):
+        runtime.controller.current()
+
+
 @pytest.mark.parametrize("core_id", [-1, 2, True, "1"])
 def test_invalid_core_never_changes_context(runtime, fake_gdb, core_id):
     with pytest.raises(fake_gdb.GdbError):

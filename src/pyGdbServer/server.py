@@ -36,6 +36,7 @@ class PyGdbServer:
         self.gdb_port = 0
         self.telnet_port = 0
         self.api_port = 0
+        self._status_core_discovery_failed = False
         self._websocket_server: Server | None = None
         self._shutdown = asyncio.Event()
 
@@ -51,13 +52,15 @@ class PyGdbServer:
         await self.mi.start(self.config.startup_timeout)
         await self.mi.console("set pagination off")
         await self.mi.console("set confirm off")
-        await self.mi.console(f"target extended-remote 127.0.0.1:{self.gdb_port}")
+        connection_type = self.config.gdb_connection_type()
+        await self.mi.console(f"target {connection_type} 127.0.0.1:{self.gdb_port}")
         toolkit_path = json.dumps(str(_toolkit_python_path()))
         await self.mi.console(
             f"python import sys; sys.path.insert(0, {toolkit_path}); import pyGdbToolkit"
         )
         for command in self.config.gdb_init:
             await self.mi.console(command)
+        await self._register_jlink_core()
 
         self._websocket_server = await serve(
             self._handle_connection,
@@ -75,20 +78,54 @@ class PyGdbServer:
             f"JSON-RPC WebSocket listening on {self.config.listen_host}:{self.api_port}",
         )
 
+    async def _register_jlink_core(self) -> None:
+        """Pass the server's connected Cortex-M identity to the existing GDB session."""
+        if "jlinkgdbserver" not in Path(self.config.ocd_path).name.lower():
+            return
+        messages = [str(event["message"]) for event in self.logs.get() if event["source"] == "ocd"]
+        name = _jlink_core_name(messages)
+        if name is None:
+            self.logs.append(
+                "server",
+                "system",
+                "J-Link attached Cortex-M identity unavailable in connection logs",
+            )
+            return
+        await self.mi.console(
+            "python from pyGdbToolkit.core_runtime import CORES; "
+            f"CORES.register_jlink_core({json.dumps(name)})"
+        )
+        self._status_core_discovery_failed = False
+
     async def _wait_for_ocd(self) -> None:
         deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
         listener_message = _ocd_listener_message(self.config.ocd_path, self.gdb_port)
+        is_jlink = "jlinkgdbserver" in Path(self.config.ocd_path).name.lower()
         while asyncio.get_running_loop().time() < deadline:
             if self.ocd is None or self.ocd.process is None:
                 raise RuntimeError("OCD was not started")
+            messages = [
+                str(event["message"]) for event in self.logs.get() if event["source"] == "ocd"
+            ]
+            if is_jlink:
+                failures = [
+                    message
+                    for message in messages
+                    if message.startswith(
+                        ("ERROR:", "Could not connect to target.", "Target connection failed.")
+                    )
+                ]
+                if failures:
+                    warnings = [
+                        message
+                        for message in messages
+                        if "Identified core does not match configuration" in message
+                    ]
+                    raise RuntimeError(f"J-Link startup failed: {'; '.join(warnings + failures)}")
             if self.ocd.process.returncode is not None:
                 raise RuntimeError(f"OCD exited with status {self.ocd.process.returncode}")
             if listener_message is not None:
-                if any(
-                    listener_message in str(event["message"])
-                    for event in self.logs.get()
-                    if event["source"] == "ocd"
-                ):
+                if any(listener_message in message for message in messages):
                     return
             else:
                 try:
@@ -100,7 +137,7 @@ class PyGdbServer:
                     await writer.wait_closed()
                     return
             await asyncio.sleep(0.05)
-        raise TimeoutError(f"OCD did not open GDB port {self.gdb_port}")
+        raise TimeoutError(f"OCD did not become ready on GDB port {self.gdb_port}")
 
     async def _handle_connection(self, websocket: ServerConnection) -> None:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1_000)
@@ -293,20 +330,11 @@ class PyGdbServer:
         thread_match = re.search(r'current-thread-id="([^"]+)"', result.record)
         core_match = re.search(r'\bcore="([^"]+)"', result.record)
         selected_core = None
-        try:
-            selected_core = str((await self.target_cores("target.core"))["core"]["id"])
-        except RuntimeError:
-            pass
-        if selected_core is None and core_match is None:
-            core_result = await self.mi.console("monitor core")
-            core_match = next(
-                (
-                    match
-                    for output in core_result.output
-                    if (match := re.search(r"\bCore\s+(\d+)\b", output, re.IGNORECASE))
-                ),
-                None,
-            )
+        if not getattr(self, "_status_core_discovery_failed", False):
+            try:
+                selected_core = str((await self.target_cores("target.core"))["core"]["id"])
+            except RuntimeError:
+                self._status_core_discovery_failed = True
         ap_names = sorted(
             {
                 match.group(1)
@@ -472,12 +500,37 @@ class RpcMethodNotFound(Exception):
     """Signal a JSON-RPC method lookup failure."""
 
 
+def _jlink_core_name(messages: list[str]) -> str | None:
+    """Parse detected CPU names from a successful J-Link connection, not device settings."""
+    names: set[str] = set()
+    connected = False
+    for message in messages:
+        message = message.strip()
+        if message == "Connecting to target...":
+            names.clear()
+            connected = False
+        if message.startswith(("ERROR:", "Target connection failed.")) or (
+            "Identified core does not match configuration" in message
+        ):
+            return None
+        match = re.fullmatch(r"JTAG ID: 0x[0-9a-fA-F]+ \((Cortex-M\d+(?:\+|P)?)\)", message)
+        if match is None:
+            match = re.fullmatch(r"Found (Cortex-M\d+(?:\+|P)?)(?: r\d+p\d+)?", message)
+        if match is not None:
+            names.add(match[1])
+        if message == "Connected to target":
+            connected = True
+    return next(iter(names)) if connected and len(names) == 1 else None
+
+
 def _ocd_listener_message(executable: str, port: int) -> str | None:
     name = Path(executable).name.lower()
     if "pyocd" in name:
         return f"GDB server listening on port {port}"
     if "openocd" in name:
         return f"Listening on port {port} for gdb connections"
+    if "jlinkgdbserver" in name:
+        return "Connected to target"
     return None
 
 

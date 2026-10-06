@@ -48,3 +48,36 @@ def test_unknown_ocd_never_defaults_to_pyocd() -> None:
     transport = AutoDebugPortTransport(execute, OcdDetector(execute, lambda: (1, 1)))
     with pytest.raises(DebugPortError, match="No supported OCD"):
         transport.list_access_ports()
+
+
+def test_jlink_never_defaults_to_pyocd() -> None:
+    """Use explicitly addressed J-Link reads, not pyOCD-specific commands."""
+    calls = []
+
+    def execute(command: str) -> str:
+        calls.append(command)
+        if command == "monitor help":
+            return "SEGGER J-Link GDB Server V9.82"
+        if command == "monitor ReadDP 0":
+            return "O.K.:0x5BA00477"
+        if command == "monitor ReadDP 2":
+            return "O.K.:0x04000000"
+        if command.startswith("monitor WriteDP 2 "):
+            return "O.K."
+        if command == "monitor ReadAPEx 0x1000000 0xfc":
+            return "O.K.:0x44770002"
+        if command.startswith("monitor ReadAPEx "):
+            return "O.K.:0x00000000"
+        return "Target does not support this command."
+
+    transport = AutoDebugPortTransport(execute, OcdDetector(execute, lambda: (1, 1)))
+    assert [port.index for port in transport.list_access_ports()] == [1]
+    assert transport.backend_name == "JLinkMonitorTransport"
+    assert transport.discovery.startswith("J-Link ADIv5 IDR scan")
+    assert transport.read_ap(1, 0xFC) == 0x44770002
+    assert calls[:4] == [
+        "monitor echo [version]",
+        "monitor show aps",
+        "monitor help",
+        "monitor ReadDP 0",
+    ]

@@ -46,6 +46,80 @@ def test_unknown_ocd_requires_dynamic_port_placeholder(tmp_path: Path) -> None:
         config.ocd_command(43123, 43124)
 
 
+@pytest.mark.parametrize("executable", ["JLinkGDBServer", "/opt/SEGGER/JLinkGDBServerCLExe"])
+def test_jlink_uses_remote_and_dynamic_loopback_port(tmp_path: Path, executable: str) -> None:
+    """J-Link requires remote mode and receives a private dynamic endpoint."""
+    config = load_config(
+        _write_config(
+            tmp_path / "target.json",
+            **{"ocd-path": executable, "ocd-args": ["-device", "Cortex-M7", "-if", "JTAG"]},
+        )
+    )
+    assert config.gdb_connection_type() == "remote"
+    assert config.ocd_command(43123, 43124) == [
+        executable,
+        "-device",
+        "Cortex-M7",
+        "-if",
+        "JTAG",
+        "-localhostonly",
+        "1",
+        "-port",
+        "43123",
+    ]
+
+
+@pytest.mark.parametrize("executable", ["pyocd", "openocd", "vendor-ocd"])
+def test_other_ocds_keep_extended_remote(tmp_path: Path, executable: str) -> None:
+    """Adding J-Link does not change existing debug-server connections."""
+    config = load_config(_write_config(tmp_path / "target.json", **{"ocd-path": executable}))
+    assert config.gdb_connection_type() == "extended-remote"
+
+
+@pytest.mark.parametrize("arguments", [["-port", "2331"], ["-p", "2331"]])
+def test_jlink_rejects_fixed_gdb_port(tmp_path: Path, arguments: list[str]) -> None:
+    """J-Link configurations cannot bypass dynamic GDB port allocation."""
+    config = load_config(
+        _write_config(
+            tmp_path / "target.json", **{"ocd-path": "JLinkGDBServer", "ocd-args": arguments}
+        )
+    )
+    with pytest.raises(ValueError, match="gdb_port"):
+        config.ocd_command(43123, 43124)
+
+
+@pytest.mark.parametrize("arguments", [["-localhostonly", "0"], ["-localhostonly"]])
+def test_jlink_rejects_remote_access(tmp_path: Path, arguments: list[str]) -> None:
+    """J-Link's private GDB port must remain loopback-only."""
+    config = load_config(
+        _write_config(
+            tmp_path / "target.json", **{"ocd-path": "JLinkGDBServer", "ocd-args": arguments}
+        )
+    )
+    with pytest.raises(ValueError, match="localhostonly"):
+        config.ocd_command(43123, 43124)
+
+
+def test_jlink_port_template(tmp_path: Path) -> None:
+    """Explicit J-Link port and loopback settings are preserved."""
+    config = load_config(
+        _write_config(
+            tmp_path / "target.json",
+            **{
+                "ocd-path": "JLinkGDBServer",
+                "ocd-args": ["-port", "{gdb_port}", "-localhostonly", "1"],
+            },
+        )
+    )
+    assert config.ocd_command(43123, 43124) == [
+        "JLinkGDBServer",
+        "-port",
+        "43123",
+        "-localhostonly",
+        "1",
+    ]
+
+
 def test_pyocd_cannot_expose_private_port_remotely(tmp_path: Path) -> None:
     """The private pyOCD GDB endpoint cannot opt into remote access."""
     config = load_config(
@@ -149,3 +223,31 @@ def test_pico2w_openocd_example() -> None:
     assert "gdb_port 43123" in command
     assert "telnet_port 43124" in command
     assert "tcl_port disabled" in command
+
+
+def test_imx8mp_m7_jlink_example() -> None:
+    """The i.MX8MP M7 example uses J-Link's remote mode and initialization syntax."""
+    path = Path(__file__).resolve().parents[1] / "doc/examples/boards/imx8mp-m7-jlink.json"
+    config = load_config(path)
+    assert config.gdb_connection_type() == "remote"
+    assert config.ocd_command(43123, 43124) == [
+        "JLinkGDBServer",
+        "-if",
+        "JTAG",
+        "-device",
+        "MIMX8ML6_M7",
+        "-speed",
+        "1000",
+        "-endian",
+        "little",
+        "-port",
+        "43123",
+        "-swoport",
+        "2332",
+        "-telnetport",
+        "43124",
+        "-localhostonly",
+        "1",
+    ]
+    assert config.gdb_args == ("-ex", "set architecture arm", "-ex", "set endian little")
+    assert config.gdb_init == ("monitor reset", "set mem inaccessible-by-default off")

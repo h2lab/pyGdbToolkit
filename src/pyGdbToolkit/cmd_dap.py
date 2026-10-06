@@ -24,7 +24,7 @@ from .session import SESSION, CommandHelp, CommandUsage, SessionSlice, ToolkitSe
 CONSOLE = Console(force_terminal=True)
 DAP_HELP = CommandHelp(
     "dap",
-    "Inspect debug Access Ports (pyOCD/OpenOCD, APv1/APv2)",
+    "Inspect debug Access Ports (pyOCD/OpenOCD/J-Link)",
     (
         CommandUsage("dap list", "List ports discovered by the connected server"),
         CommandUsage("dap core [list|<id>]", "Show, list or select physical GDB CPU cores"),
@@ -36,7 +36,10 @@ DAP_HELP = CommandHelp(
         CommandUsage("dap help", "Show command reference"),
     ),
     (
-        "Automatically detects pyOCD or OpenOCD over the current GDB connection.",
+        "Automatically detects pyOCD, OpenOCD or J-Link over the current GDB connection.",
+        "J-Link: JTAG-DPv0 APv1 access; selection is local to toolkit profiling.",
+        "J-Link: pyGdbServer registers the reported Cortex-M as local core 0 (attached session only).",
+        "J-Link: core 0 selection is a no-op; other SoC cores are not enumerated.",
         "pyOCD: connect initially to core 0 (lowest TCP port); other cores use port + ID.",
         "OpenOCD: select named hardware-core threads on the existing SMP connection.",
         "Profiling is read-only. Unknown or inaccessible capabilities are not inferred.",
@@ -153,7 +156,15 @@ class DapCmd(gdb.Command):
             elif name == "core":
                 if args == ["list"]:
                     table = Table(title="CPU Cores")
-                    for column in ("Core", "Name", "Endpoint", "Inferior", "Thread", "Selected"):
+                    for column in (
+                        "Core",
+                        "Name",
+                        "Endpoint",
+                        "Inferior",
+                        "Thread",
+                        "Selected",
+                        "Scope",
+                    ):
                         table.add_column(column)
                     for core in self.cores.list():
                         table.add_row(
@@ -163,6 +174,7 @@ class DapCmd(gdb.Command):
                             str(core.inferior) if core.inferior is not None else "-",
                             str(core.thread) if core.thread is not None else "-",
                             "*" if core.selected else "",
+                            core.scope,
                         )
                     CONSOLE.print(table)
                 else:
