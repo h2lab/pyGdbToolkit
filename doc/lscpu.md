@@ -56,38 +56,7 @@ unsupported architecture.
 
 ## Architecture and Internal Workflow
 
-```text
-lscpu
-    |
-    v
-render_report()
-    |
-    v
-match SESSION.architecture
-    |
-    +-- Architecture.ARM
-    |     |
-    |     v
-    |   device_report()
-    |     -> CPUID / Cortex-M identity
-    |     -> CoreSight ROM-table discovery
-    |     -> ProviderRegistry / device profile or generic Cortex-M report
-    |     -> DeviceReport
-    |     -> render_arm_report()
-    |
-    +-- Architecture.AARCH64
-    |     |
-    |     v
-    |   cpu_report()
-    |     -> require AArch64TargetDescription
-    |     -> collect_cpu_report() / GdbCpuRegisterReader
-    |     -> named GDB registers / J-Link aliases / OpenOCD external MIDR
-    |     -> CpuReport / MIDR identity and register availability
-    |     -> render_aarch64_report()
-    |
-    +-- None / unsupported architecture
-                -> gdb.GdbError (no ARM fallback)
-```
+![CPU report collection and architecture dispatch](diagrams/lscpu.png)
 
 ---
 

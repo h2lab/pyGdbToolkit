@@ -14,19 +14,7 @@ interface call probes the connected server.
 
 ## Package Hierarchy
 
-```text
-pyGdbToolkit/
-  core_runtime.py               CLI/RPC orchestration and cache invalidation
-  ocd/
-    __init__.py                 Stable public detection API
-    detection.py                Connection-aware OCD identification
-    base.py                     CoreInfo, attachment state and CoreBackend contract
-    context.py                  Shared GDB inferior lifecycle and rollback
-    registry.py                 Resolution of detected server strategies
-    jlinkgdbserver.py            Attached-core metadata, configured endpoints and identity
-    openocd.py                  Named hardware-thread inventory and selection
-    pyocd.py                    Server inventory and per-core endpoint mapping
-```
+![OCD package hierarchy and shared backend contracts](diagrams/ocd.png)
 
 `CoreBackend` defines the same external CPU interface for all three strategies:
 `list_cores()`, `current_core()`, and `select_core(core)`. Registration methods

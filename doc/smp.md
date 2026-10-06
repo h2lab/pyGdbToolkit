@@ -67,15 +67,7 @@ and extension contract.
 
 ### Selection Lifecycle
 
-```text
-CLI or RPC request
-  -> backend inventory or configured endpoint map
-  -> validate requested core ID
-  -> switch hardware thread OR attach/reuse a GDB inferior
-  -> collect available backend/architecture identity evidence
-  -> verify stable context identity
-  -> return CoreInfo and invalidate target-memory/architecture caches
-```
+![SMP CPU-context selection lifecycle](diagrams/smp.png)
 
 Endpoint attachment copies the active GDB architecture and executable symbols
 to a new inferior. Consequently this path assumes compatible cores and the same

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Render versioned Mermaid sources to PNG before a local documentation build."""
 
 from pathlib import Path

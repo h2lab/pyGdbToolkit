@@ -13,7 +13,10 @@ version = release
 extensions = ["myst_parser"]
 root_doc = "index"
 language = "en"
-exclude_patterns = ["_build", "README.md", "node_modules", "examples/**/.pygdbserver-logs/**"]
+exclude_patterns = [
+    "_build", "README.md", "node_modules", "examples/**/.pygdbserver-logs/**",
+    "diagrams/*.mmd",
+]
 myst_heading_anchors = 4
 myst_enable_extensions = ["colon_fence"]
 

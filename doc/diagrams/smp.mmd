@@ -1,0 +1,11 @@
+flowchart TD
+    Request["CLI or RPC request"] --> Inventory["Backend inventory or configured endpoints"]
+    Inventory --> Validate["Validate requested core ID"]
+    Validate --> Model{"GDB context model"}
+    Model -->|Shared connection| Thread["Switch hardware thread and monitor target"]
+    Model -->|Per-core endpoints| Inferior["Attach or reuse GDB inferior"]
+    Thread --> Evidence["Collect backend and architecture identity evidence"]
+    Inferior --> Evidence
+    Evidence --> Verify{"Verify stable context identity"}
+    Verify -->|Success| Result["Return CoreInfo / invalidate target caches"]
+    Verify -->|Failure| Rollback["Restore previous context / explicit error"]

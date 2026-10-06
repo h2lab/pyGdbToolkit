@@ -150,7 +150,7 @@ See [AArch64 SMP comparison](smp.md) for backend-specific semantics and limits.
 ```
 
 ```{literalinclude} examples/boards/imx8mp-a53-openocd.cfg
-:language: tcl
+:language: text
 ```
 
 ## Pico 2 W

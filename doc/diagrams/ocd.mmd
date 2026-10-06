@@ -1,0 +1,12 @@
+flowchart TD
+    Controller["core_runtime.py / CLI and RPC orchestration"] --> Registry["ocd/registry.py / backend resolution"]
+    Detection["ocd/__init__.py / stable detection API"] --> Detector["ocd/detection.py / connection identity"]
+    Detector --> Registry
+    Registry --> JLink["ocd/jlinkgdbserver.py / configured endpoints and identity"]
+    Registry --> OpenOCD["ocd/openocd.py / hardware threads and monitor target"]
+    Registry --> PyOCD["ocd/pyocd.py / inventory and per-core endpoints"]
+    Base["ocd/base.py / CoreBackend and CoreContextAccess contracts"] -.-> JLink
+    Base -.-> OpenOCD
+    Base -.-> PyOCD
+    JLink --> Context["ocd/context.py / shared inferior lifecycle and rollback"]
+    PyOCD --> Context
