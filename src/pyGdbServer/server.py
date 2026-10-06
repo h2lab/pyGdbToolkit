@@ -60,6 +60,7 @@ class PyGdbServer:
         )
         for command in self.config.gdb_init:
             await self.mi.console(command)
+        await self._register_jlink_core()
 
         self._websocket_server = await serve(
             self._handle_connection,
@@ -76,6 +77,25 @@ class PyGdbServer:
             "system",
             f"JSON-RPC WebSocket listening on {self.config.listen_host}:{self.api_port}",
         )
+
+    async def _register_jlink_core(self) -> None:
+        """Pass the server's connected Cortex-M identity to the existing GDB session."""
+        if "jlinkgdbserver" not in Path(self.config.ocd_path).name.lower():
+            return
+        messages = [str(event["message"]) for event in self.logs.get() if event["source"] == "ocd"]
+        name = _jlink_core_name(messages)
+        if name is None:
+            self.logs.append(
+                "server",
+                "system",
+                "J-Link attached Cortex-M identity unavailable in connection logs",
+            )
+            return
+        await self.mi.console(
+            "python from pyGdbToolkit.core_runtime import CORES; "
+            f"CORES.register_jlink_core({json.dumps(name)})"
+        )
+        self._status_core_discovery_failed = False
 
     async def _wait_for_ocd(self) -> None:
         deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
@@ -478,6 +498,29 @@ def _toolkit_python_path() -> Path:
 
 class RpcMethodNotFound(Exception):
     """Signal a JSON-RPC method lookup failure."""
+
+
+def _jlink_core_name(messages: list[str]) -> str | None:
+    """Parse detected CPU names from a successful J-Link connection, not device settings."""
+    names: set[str] = set()
+    connected = False
+    for message in messages:
+        message = message.strip()
+        if message == "Connecting to target...":
+            names.clear()
+            connected = False
+        if message.startswith(("ERROR:", "Target connection failed.")) or (
+            "Identified core does not match configuration" in message
+        ):
+            return None
+        match = re.fullmatch(r"JTAG ID: 0x[0-9a-fA-F]+ \((Cortex-M\d+(?:\+|P)?)\)", message)
+        if match is None:
+            match = re.fullmatch(r"Found (Cortex-M\d+(?:\+|P)?)(?: r\d+p\d+)?", message)
+        if match is not None:
+            names.add(match[1])
+        if message == "Connected to target":
+            connected = True
+    return next(iter(names)) if connected and len(names) == 1 else None
 
 
 def _ocd_listener_message(executable: str, port: int) -> str | None:

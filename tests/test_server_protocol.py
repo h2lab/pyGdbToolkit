@@ -20,7 +20,12 @@ from websockets.asyncio.server import serve
 from pyGdbClient.app import PyGdbClientApp
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
-from pyGdbServer.server import PyGdbServer, _free_loopback_ports, _ocd_listener_message
+from pyGdbServer.server import (
+    PyGdbServer,
+    _free_loopback_ports,
+    _jlink_core_name,
+    _ocd_listener_message,
+)
 
 
 def test_gdb_and_telnet_ports_are_distinct_and_available() -> None:
@@ -445,6 +450,72 @@ def test_jlink_target_failure_reports_the_actual_startup_error(
     assert "Found: Cortex-M0, Configured: Cortex-M7" in str(error.value)
     assert "Could not connect to target" in str(error.value)
     probe.assert_not_called()
+
+
+@pytest.mark.parametrize("name", ["Cortex-M0+", "Cortex-M4", "Cortex-M7", "Cortex-M33"])
+def test_jlink_core_identity_parses_detected_names_not_board_devices(name: str) -> None:
+    """The connected CPU is independent of SEGGER's configured device name."""
+    assert (
+        _jlink_core_name(
+            [
+                "Target device: SOME_VENDOR_DEVICE",
+                "Connecting to target...",
+                f"JTAG ID: 0x5BA00477 ({name})",
+                "Connected to target",
+            ]
+        )
+        == name
+    )
+    assert _jlink_core_name([f"Found {name} r1p2", "Connected to target"]) == name
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        ["Target device: Cortex-M7", "Connected to target"],
+        ["JTAG ID: 0x5BA00477 (Cortex-M7)"],
+        ["JTAG ID: 0x5BA00477 (Cortex-A53)", "Connected to target"],
+        ["Found Cortex-R52", "Connected to target"],
+        ["Found Cortex-M4", "Found Cortex-M7", "Connected to target"],
+        ["Found Cortex-M7", "ERROR: Could not connect to target.", "Connected to target"],
+        [
+            "Found Cortex-M0",
+            "WARNING: Identified core does not match configuration.",
+            "Connected to target",
+        ],
+        ["Found Cortex-M7", "Connected to target", "Connecting to target..."],
+    ],
+)
+def test_jlink_core_identity_rejects_incomplete_or_conflicting_logs(messages: list[str]) -> None:
+    """Do not manufacture a CPU identity from configured, failed or ambiguous targets."""
+    assert _jlink_core_name(messages) is None
+
+
+def test_jlink_core_registration_uses_only_the_existing_gdb_session(tmp_path: Path) -> None:
+    """Pass connected identity without monitor queries, AP scans or target-memory access."""
+    server = _jlink_startup_server(
+        tmp_path,
+        [
+            "Connecting to target...",
+            "JTAG ID: 0x5BA00477 (Cortex-M4)",
+            "Connected to target",
+        ],
+    )
+    server._status_core_discovery_failed = True
+    server.mi.console = AsyncMock(return_value=MiResult("done", "done", ()))
+    asyncio.run(server._register_jlink_core())
+    server.mi.console.assert_awaited_once_with(
+        'python from pyGdbToolkit.core_runtime import CORES; CORES.register_jlink_core("Cortex-M4")'
+    )
+    assert not server._status_core_discovery_failed
+
+
+def test_jlink_core_registration_does_not_guess_when_logs_are_missing(tmp_path: Path) -> None:
+    """Ordinary server startup remains usable without a known core-log format."""
+    server = _jlink_startup_server(tmp_path, ["Connected to target"])
+    server.mi.console = AsyncMock()
+    asyncio.run(server._register_jlink_core())
+    server.mi.console.assert_not_called()
 
 
 def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path: Path) -> None:

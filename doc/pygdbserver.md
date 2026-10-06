@@ -65,9 +65,19 @@ For multiple instances, configure `-telnetport {telnet_port}` explicitly and
 allocate separate SWO ports with J-Link's `-swoport` option.
 
 J-Link identification and ADIv5 JTAG-DPv0 AP inspection are supported.
-Hardware core selection and J-Link SWD/ADIv6 AP inspection are not implemented.
+Successful J-Link connection logs also provide the attached Cortex-M identity
+to `dap core` and the core RPCs. The single local core `0` has scope
+`attached-core-only`; selecting it does not change target state. An unknown
+log format leaves identity unavailable. Discovery of other SoC cores,
+switching to them and J-Link SWD/ADIv6 AP inspection are not implemented.
 AP selection is local to toolkit profiling; it does not reroute GDB memory
 accesses. See [ocd.md](ocd.md).
+
+On complex SoCs such as the **i.MX8M family**, J-Link `dap core` support
+requires **pyGdbServer** to correlate the OCD-reported CPU with the current
+GDB inferior/connection. Supervising OCD and GDB together provides a coherent
+identity and session lifecycle. A standalone GDB/J-Link connection does not
+provide the supported `dap core` workflow for these targets.
 
 An {ref}`i.MX8MP Cortex-M7 J-Link example <imx8mp-m7-jlink>`
 provides the `MIMX8ML6_M7` JTAG configuration, startup commands and port settings.
