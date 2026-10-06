@@ -35,6 +35,10 @@ class AutoDebugPortTransport:
             self._transport = None
             self._info = None
             raise DebugPortError(f"No supported OCD detected: {info.evidence}")
+        if info.identifier not in (OcdIdentifier.PYOCD, OcdIdentifier.OPENOCD):
+            self._transport = None
+            self._info = None
+            raise DebugPortError(f"DAP transport is not supported for OCD {info.identifier}")
         if info is not self._info or self._transport is None:
             if info.identifier == OcdIdentifier.OPENOCD:
                 self._transport = OpenOcdMonitorTransport(self._execute)

@@ -48,3 +48,19 @@ def test_unknown_ocd_never_defaults_to_pyocd() -> None:
     transport = AutoDebugPortTransport(execute, OcdDetector(execute, lambda: (1, 1)))
     with pytest.raises(DebugPortError, match="No supported OCD"):
         transport.list_access_ports()
+
+
+def test_jlink_never_defaults_to_pyocd() -> None:
+    """Reject J-Link DAP requests instead of sending pyOCD-specific commands."""
+    calls = []
+
+    def execute(command: str) -> str:
+        calls.append(command)
+        if command == "monitor help":
+            return "SEGGER J-Link GDB Server V9.82"
+        return "Target does not support this command."
+
+    transport = AutoDebugPortTransport(execute, OcdDetector(execute, lambda: (1, 1)))
+    with pytest.raises(DebugPortError, match="DAP transport is not supported for OCD jlink"):
+        transport.list_access_ports()
+    assert calls == ["monitor echo [version]", "monitor show aps", "monitor help"]

@@ -26,6 +26,12 @@ class ServerConfig:
     log_directory: Path
     startup_timeout: float
 
+    def gdb_connection_type(self) -> str:
+        """Select the remote protocol supported by the configured debug server."""
+        if "jlinkgdbserver" in Path(self.ocd_path).name.lower():
+            return "remote"
+        return "extended-remote"
+
     def ocd_command(self, gdb_port: int, telnet_port: int) -> list[str]:
         """Build the OCD command line for a loopback-only dynamic GDB port."""
         values = {
@@ -53,6 +59,24 @@ class ServerConfig:
                 if any("gdb_port" in argument.lower() for argument in arguments):
                     raise ValueError("OpenOCD gdb_port must use the {gdb_port} placeholder")
                 arguments.extend(("-c", f"gdb_port {gdb_port}"))
+        elif "jlinkgdbserver" in executable:
+            if "-localhostonly" in arguments:
+                positions = [
+                    index
+                    for index, argument in enumerate(arguments)
+                    if argument == "-localhostonly"
+                ]
+                if any(
+                    index + 1 >= len(arguments) or arguments[index + 1] != "1"
+                    for index in positions
+                ):
+                    raise ValueError("J-Link -localhostonly must be 1")
+            else:
+                arguments.extend(("-localhostonly", "1"))
+            if not has_dynamic_port:
+                if "-port" in arguments or "-p" in arguments:
+                    raise ValueError("J-Link port must use the {gdb_port} placeholder")
+                arguments.extend(("-port", str(gdb_port)))
         else:
             if not has_dynamic_port or not any(
                 "{loopback}" in argument for argument in self.ocd_args

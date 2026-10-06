@@ -39,8 +39,8 @@ finally the public API. A failed stage stops the complete stack.
 |---|---|
 | `gdb-path` | GDB executable. |
 | `gdb-args` | Extra GDB arguments. They must not establish the target connection. |
-| `ocd-path` | pyOCD, OpenOCD, or another GDB-server executable. |
-| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. pyOCD and OpenOCD receive GDB port arguments automatically when `{gdb_port}` is omitted; Telnet arguments must be supplied explicitly. |
+| `ocd-path` | pyOCD, OpenOCD, SEGGER JLinkGDBServer (including JLinkGDBServerCLExe), or another GDB-server executable. |
+| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. pyOCD, OpenOCD, and J-Link receive GDB port arguments automatically when `{gdb_port}` is omitted; Telnet arguments must be supplied explicitly. |
 | `listen-address` | Public WebSocket address. Port `0` requests a dynamic API port. |
 | `gdb-init` | GDB CLI commands run after connection and toolkit loading. |
 | `log-directory` | Parent of timestamped run-log directories. |
@@ -50,6 +50,22 @@ The OCD GDB endpoint and raw MI adapter always bind to `127.0.0.1` with dynamic
 ports. The raw MI adapter is for local diagnostics; clients should use the API.
 When exposing the public API beyond loopback, place it behind a trusted network
 or a TLS and authentication reverse proxy.
+
+### J-Link
+
+For `JLinkGDBServer` or `JLinkGDBServerCLExe`, pyGdbServer connects using
+`target remote`; other OCDs retain `target extended-remote`. J-Link does not
+support extended-remote mode.
+
+Set `ocd-path` to your SEGGER executable and supply your target-specific
+`-device`, `-if`, probe selection, and speed arguments in `ocd-args`.
+pyGdbServer adds `-localhostonly 1` and `-port` with its allocated GDB port.
+An explicit `-port` (or `-p`) must use `{gdb_port}`; `-localhostonly 0` is rejected.
+For multiple instances, configure `-telnetport {telnet_port}` explicitly and
+allocate separate SWO ports with J-Link's `-swoport` option.
+
+J-Link identification is supported, but J-Link DAP transport and hardware
+core selection are not yet implemented. See [ocd.md](ocd.md).
 
 ### Multiple instances on the same loopback address
 

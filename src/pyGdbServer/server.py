@@ -51,7 +51,8 @@ class PyGdbServer:
         await self.mi.start(self.config.startup_timeout)
         await self.mi.console("set pagination off")
         await self.mi.console("set confirm off")
-        await self.mi.console(f"target extended-remote 127.0.0.1:{self.gdb_port}")
+        connection_type = self.config.gdb_connection_type()
+        await self.mi.console(f"target {connection_type} 127.0.0.1:{self.gdb_port}")
         toolkit_path = json.dumps(str(_toolkit_python_path()))
         await self.mi.console(
             f"python import sys; sys.path.insert(0, {toolkit_path}); import pyGdbToolkit"
