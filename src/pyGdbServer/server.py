@@ -79,17 +79,32 @@ class PyGdbServer:
     async def _wait_for_ocd(self) -> None:
         deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
         listener_message = _ocd_listener_message(self.config.ocd_path, self.gdb_port)
+        is_jlink = "jlinkgdbserver" in Path(self.config.ocd_path).name.lower()
         while asyncio.get_running_loop().time() < deadline:
             if self.ocd is None or self.ocd.process is None:
                 raise RuntimeError("OCD was not started")
+            messages = [
+                str(event["message"]) for event in self.logs.get() if event["source"] == "ocd"
+            ]
+            if is_jlink:
+                failures = [
+                    message
+                    for message in messages
+                    if message.startswith(
+                        ("ERROR:", "Could not connect to target.", "Target connection failed.")
+                    )
+                ]
+                if failures:
+                    warnings = [
+                        message
+                        for message in messages
+                        if "Identified core does not match configuration" in message
+                    ]
+                    raise RuntimeError(f"J-Link startup failed: {'; '.join(warnings + failures)}")
             if self.ocd.process.returncode is not None:
                 raise RuntimeError(f"OCD exited with status {self.ocd.process.returncode}")
             if listener_message is not None:
-                if any(
-                    listener_message in str(event["message"])
-                    for event in self.logs.get()
-                    if event["source"] == "ocd"
-                ):
+                if any(listener_message in message for message in messages):
                     return
             else:
                 try:
@@ -101,7 +116,7 @@ class PyGdbServer:
                     await writer.wait_closed()
                     return
             await asyncio.sleep(0.05)
-        raise TimeoutError(f"OCD did not open GDB port {self.gdb_port}")
+        raise TimeoutError(f"OCD did not become ready on GDB port {self.gdb_port}")
 
     async def _handle_connection(self, websocket: ServerConnection) -> None:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1_000)
@@ -479,6 +494,8 @@ def _ocd_listener_message(executable: str, port: int) -> str | None:
         return f"GDB server listening on port {port}"
     if "openocd" in name:
         return f"Listening on port {port} for gdb connections"
+    if "jlinkgdbserver" in name:
+        return "Connected to target"
     return None
 
 

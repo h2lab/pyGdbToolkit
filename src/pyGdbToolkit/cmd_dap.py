@@ -24,7 +24,7 @@ from .session import SESSION, CommandHelp, CommandUsage, SessionSlice, ToolkitSe
 CONSOLE = Console(force_terminal=True)
 DAP_HELP = CommandHelp(
     "dap",
-    "Inspect debug Access Ports (pyOCD/OpenOCD, APv1/APv2)",
+    "Inspect debug Access Ports (pyOCD/OpenOCD/J-Link)",
     (
         CommandUsage("dap list", "List ports discovered by the connected server"),
         CommandUsage("dap core [list|<id>]", "Show, list or select physical GDB CPU cores"),
@@ -36,7 +36,9 @@ DAP_HELP = CommandHelp(
         CommandUsage("dap help", "Show command reference"),
     ),
     (
-        "Automatically detects pyOCD or OpenOCD over the current GDB connection.",
+        "Automatically detects pyOCD, OpenOCD or J-Link over the current GDB connection.",
+        "J-Link: JTAG-DPv0 APv1 access; selection is local to toolkit profiling.",
+        "J-Link hardware core discovery and selection are not supported.",
         "pyOCD: connect initially to core 0 (lowest TCP port); other cores use port + ID.",
         "OpenOCD: select named hardware-core threads on the existing SMP connection.",
         "Profiling is read-only. Unknown or inaccessible capabilities are not inferred.",

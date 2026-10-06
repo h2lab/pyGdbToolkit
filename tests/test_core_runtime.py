@@ -143,6 +143,14 @@ def test_openocd_rejects_rtos_threads(runtime, fake_gdb):
         runtime.controller.list()
 
 
+def test_jlink_never_uses_openocd_core_discovery(runtime, fake_gdb):
+    """Do not interpret J-Link threads as OpenOCD physical core names."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    with pytest.raises(fake_gdb.GdbError, match="core discovery is not supported for OCD jlink"):
+        runtime.controller.list()
+    assert runtime.calls == []
+
+
 @pytest.mark.parametrize("core_id", [-1, 2, True, "1"])
 def test_invalid_core_never_changes_context(runtime, fake_gdb, core_id):
     with pytest.raises(fake_gdb.GdbError):

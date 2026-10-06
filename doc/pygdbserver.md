@@ -64,8 +64,13 @@ An explicit `-port` (or `-p`) must use `{gdb_port}`; `-localhostonly 0` is rejec
 For multiple instances, configure `-telnetport {telnet_port}` explicitly and
 allocate separate SWO ports with J-Link's `-swoport` option.
 
-J-Link identification is supported, but J-Link DAP transport and hardware
-core selection are not yet implemented. See [ocd.md](ocd.md).
+J-Link identification and ADIv5 JTAG-DPv0 AP inspection are supported.
+Hardware core selection and J-Link SWD/ADIv6 AP inspection are not implemented.
+AP selection is local to toolkit profiling; it does not reroute GDB memory
+accesses. See [ocd.md](ocd.md).
+
+An {ref}`i.MX8MP Cortex-M7 J-Link example <imx8mp-m7-jlink>`
+provides the `MIMX8ML6_M7` JTAG configuration, startup commands and port settings.
 
 ### Multiple instances on the same loopback address
 

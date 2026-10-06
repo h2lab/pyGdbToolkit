@@ -68,6 +68,8 @@ class GdbCoreController:
         backend = self.detector.get().identifier
         if backend == OcdIdentifier.UNKNOWN:
             raise gdb.GdbError("Core selection requires pyOCD or OpenOCD")
+        if backend not in (OcdIdentifier.PYOCD, OcdIdentifier.OPENOCD):
+            raise gdb.GdbError(f"Hardware core discovery is not supported for OCD {backend}")
         return backend
 
     def _attached(self, state: CoreSessionState) -> dict[int, Any]:

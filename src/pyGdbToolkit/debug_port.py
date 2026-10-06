@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import re
-from typing import Callable, Protocol
+from typing import Callable, Iterator, Protocol
 
 
 class DebugPortError(RuntimeError):
@@ -117,6 +118,77 @@ class PyOcdMonitorTransport:
     def _check_index(index: int) -> None:
         if not 0 <= index <= 255:
             raise DebugPortError("This backend only supports APv1 indices 0..255")
+
+
+class JLinkMonitorTransport:
+    """Read JTAG-DPv0 AP registers while preserving the probe's DAP selection."""
+
+    discovery = "J-Link ADIv5 IDR scan (APSEL aliases may be present)"
+
+    def __init__(self, execute: Callable[[str], str]) -> None:
+        """Inject monitor execution and keep profiling selection local to the toolkit."""
+        self._execute = execute
+        self._ports: dict[int, AccessPort] = {}
+        self._selected: int | None = None
+
+    def _value(self, command: str) -> int:
+        try:
+            output = self._execute(f"monitor {command}")
+        except Exception as error:
+            raise DebugPortError(f"J-Link monitor: {error}") from error
+        match = re.fullmatch(r"\s*O\.K\.:0x([0-9a-fA-F]{1,8})\s*", output)
+        if match is None:
+            raise DebugPortError(f"Invalid J-Link register response: {output.strip()}")
+        return int(match[1], 16)
+
+    @contextmanager
+    def _preserve_selection(self) -> Iterator[int]:
+        dpidr = self._value("ReadDP 0")
+        if dpidr in (0, 0xFFFFFFFF) or ((dpidr >> 12) & 0xF) != 0:
+            raise DebugPortError(
+                "J-Link AP access requires JTAG-DPv0 with a readable SELECT register"
+            )
+        selected = self._value("ReadDP 2")
+        try:
+            yield selected >> 24
+        finally:
+            try:
+                output = self._execute(f"monitor WriteDP 2 {selected:#x}")
+            except Exception as error:
+                raise DebugPortError(f"J-Link SELECT restoration failed: {error}") from error
+            if output.strip() != "O.K." or self._value("ReadDP 2") != selected:
+                raise DebugPortError("J-Link did not restore the DAP SELECT register")
+
+    def list_access_ports(self) -> tuple[AccessPort, ...]:
+        """Scan the bounded APv1 IDR space without accessing target memory."""
+        ports = []
+        with self._preserve_selection() as server_selected:
+            selected = server_selected if self._selected is None else self._selected
+            for index in range(256):
+                idr = self._value(f"ReadAPEx {index << 24:#x} 0xfc")
+                if idr not in (0, 0xFFFFFFFF):
+                    ports.append(AccessPort(index, "Access Port", index == selected))
+        self._ports = {port.index: port for port in ports}
+        return tuple(ports)
+
+    def select_access_port(self, index: int) -> None:
+        """Select a discovered profiling AP without changing J-Link's GDB memory view."""
+        if not self._ports:
+            self.list_access_ports()
+        if index not in self._ports:
+            raise DebugPortError(f"AP {index} was not discovered")
+        self._selected = index
+        self._ports = {
+            port.index: AccessPort(port.index, port.name, port.index == index)
+            for port in self._ports.values()
+        }
+
+    def read_ap(self, index: int, address: int) -> int:
+        """Encode APSEL separately from the byte offset, not ReadAP's register index."""
+        if not 0 <= index <= 255 or not 0 <= address <= 0xFC or address % 4:
+            raise DebugPortError("Invalid J-Link APv1 index or register offset")
+        with self._preserve_selection():
+            return self._value(f"ReadAPEx {index << 24:#x} {address:#x}")
 
 
 class OpenOcdMonitorTransport:

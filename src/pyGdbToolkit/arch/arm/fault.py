@@ -110,8 +110,12 @@ class StackedFrame:
 
 
 def _is_exc_return(value: int) -> bool:
-    """Return whether a value has the Cortex-M EXC_RETURN high-byte pattern."""
-    return value & _EXC_RETURN_MASK == _EXC_RETURN_MASK
+    """Recognize the EXC_RETURN prefix and non-reserved mode/stack bits."""
+    return (
+        value & _EXC_RETURN_MASK == _EXC_RETURN_MASK
+        and not value & 2
+        and not (value & 4 and not value & 8)
+    )
 
 
 def _stack_register_names(exc_return: int, sp_name: str) -> tuple[str, str]:
@@ -222,7 +226,11 @@ class CortexMFaultCollector:
 
         registers = access.registers if access is not None else None
         symbols = access.symbols if access is not None else None
-        read_register = registers.read_first if registers is not None else lambda names: None
+
+        def read_register(names: tuple[str, ...]) -> int | None:
+            value = registers.read_first(names) if registers is not None else None
+            return value & 0xFFFFFFFF if value is not None else None
+
         pc = read_register(("pc", "r15"))
         lr = read_register(("lr", "r14"))
         xpsr = read_register(("xpsr",))
@@ -230,7 +238,8 @@ class CortexMFaultCollector:
         ipsr = ipsr_value & 0x1FF if ipsr_value is not None else (xpsr or 0) & 0x1FF
         scb = read_scb(reader, target, cpuid_value=target.raw_cpuid)
         stacked_frame: StackedFrame | str | None = None
-        if lr is not None and _is_exc_return(lr):
+        active_or_unknown = ipsr != 0 or (ipsr_value is None and xpsr is None)
+        if active_or_unknown and lr is not None and _is_exc_return(lr):
             uses_psp = bool(lr & (1 << 2))
             sp_name = "PSP" if uses_psp else "MSP"
             sp = read_register(_stack_register_names(lr, sp_name))
@@ -531,6 +540,8 @@ class CortexMFaultCollector:
         bfar, mmfar, cpacr = get("BFAR"), get("MMFAR"), get("CPACR")
         mmfsr, bfsr, ufsr = cfsr & 0xFF, (cfsr >> 8) & 0xFF, (cfsr >> 16) & 0xFFFF
         lines: list[str] = []
+        if get("CFSR") is None or get("HFSR") is None:
+            lines.append("Fault diagnosis incomplete: CFSR or HFSR is unavailable.")
         if hfsr & (1 << 30):
             source = (
                 "BusFault"

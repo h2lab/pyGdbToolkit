@@ -223,3 +223,31 @@ def test_pico2w_openocd_example() -> None:
     assert "gdb_port 43123" in command
     assert "telnet_port 43124" in command
     assert "tcl_port disabled" in command
+
+
+def test_imx8mp_m7_jlink_example() -> None:
+    """The i.MX8MP M7 example uses J-Link's remote mode and initialization syntax."""
+    path = Path(__file__).resolve().parents[1] / "doc/examples/boards/imx8mp-m7-jlink.json"
+    config = load_config(path)
+    assert config.gdb_connection_type() == "remote"
+    assert config.ocd_command(43123, 43124) == [
+        "JLinkGDBServer",
+        "-if",
+        "JTAG",
+        "-device",
+        "MIMX8ML6_M7",
+        "-speed",
+        "1000",
+        "-endian",
+        "little",
+        "-port",
+        "43123",
+        "-swoport",
+        "2332",
+        "-telnetport",
+        "43124",
+        "-localhostonly",
+        "1",
+    ]
+    assert config.gdb_args == ("-ex", "set architecture arm", "-ex", "set endian little")
+    assert config.gdb_init == ("monitor reset", "set mem inaccessible-by-default off")

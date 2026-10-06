@@ -9,8 +9,9 @@ import json
 from pathlib import Path
 import shutil
 import socket
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from websockets.asyncio.client import connect
@@ -375,7 +376,75 @@ def test_known_ocds_use_passive_listener_readiness() -> None:
     """Known OCDs are recognized by their listener logs, without TCP probes."""
     assert _ocd_listener_message("pyocd", 43123) == "GDB server listening on port 43123"
     assert _ocd_listener_message("openocd", 43123) == "Listening on port 43123 for gdb connections"
+    assert _ocd_listener_message("JLinkGDBServer", 43123) == "Connected to target"
+    assert _ocd_listener_message("/opt/SEGGER/JLinkGDBServerCLExe", 43123) == (
+        "Connected to target"
+    )
     assert _ocd_listener_message("vendor-ocd", 43123) is None
+
+
+def _jlink_startup_server(tmp_path: Path, messages: list[str]) -> PyGdbServer:
+    server, _ = _server(tmp_path)
+    server.config = SimpleNamespace(ocd_path="JLinkGDBServer", startup_timeout=0.01)
+    server.ocd = SimpleNamespace(process=SimpleNamespace(returncode=None))
+    server.gdb_port = 43123
+    for message in messages:
+        server.logs.append("ocd", "stdout", message)
+    return server
+
+
+def test_jlink_readiness_does_not_open_a_test_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the target-ready banner permits starting GDB, without a TCP probe."""
+    probe = AsyncMock(side_effect=AssertionError("Unexpected TCP probe"))
+    monkeypatch.setattr(asyncio, "open_connection", probe)
+    server = _jlink_startup_server(
+        tmp_path,
+        [
+            "Listening on TCP/IP port 43123",
+            "Connected to target",
+        ],
+    )
+    asyncio.run(server._wait_for_ocd())
+    probe.assert_not_called()
+
+
+def test_jlink_listening_port_is_not_target_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The listener opens before J-Link has connected to the target CPU."""
+    probe = AsyncMock(side_effect=AssertionError("Unexpected TCP probe"))
+    monkeypatch.setattr(asyncio, "open_connection", probe)
+    server = _jlink_startup_server(tmp_path, ["Listening on TCP/IP port 43123"])
+    with pytest.raises(TimeoutError, match="did not become ready"):
+        asyncio.run(server._wait_for_ocd())
+    probe.assert_not_called()
+
+
+@pytest.mark.parametrize("returncode", [None, 1])
+def test_jlink_target_failure_reports_the_actual_startup_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int | None
+) -> None:
+    """Reproduce the i.MX8MP failure rather than reporting a later GDB timeout."""
+    probe = AsyncMock(side_effect=AssertionError("Unexpected TCP probe"))
+    monkeypatch.setattr(asyncio, "open_connection", probe)
+    server = _jlink_startup_server(
+        tmp_path,
+        [
+            "Listening on TCP/IP port 43123",
+            "WARNING: Identified core does not match configuration. "
+            "(Found: Cortex-M0, Configured: Cortex-M7)",
+            "ERROR: Failed to halt CPU.",
+            "ERROR: Could not connect to target.",
+        ],
+    )
+    server.ocd.process.returncode = returncode
+    with pytest.raises(RuntimeError, match="J-Link startup failed") as error:
+        asyncio.run(server._wait_for_ocd())
+    assert "Found: Cortex-M0, Configured: Cortex-M7" in str(error.value)
+    assert "Could not connect to target" in str(error.value)
+    probe.assert_not_called()
 
 
 def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from .debug_port import (
     AccessPort,
     DebugPortError,
     DebugPortTransport,
+    JLinkMonitorTransport,
     OpenOcdMonitorTransport,
     PyOcdMonitorTransport,
 )
@@ -35,13 +36,15 @@ class AutoDebugPortTransport:
             self._transport = None
             self._info = None
             raise DebugPortError(f"No supported OCD detected: {info.evidence}")
-        if info.identifier not in (OcdIdentifier.PYOCD, OcdIdentifier.OPENOCD):
+        if info.identifier not in (OcdIdentifier.PYOCD, OcdIdentifier.OPENOCD, OcdIdentifier.JLINK):
             self._transport = None
             self._info = None
             raise DebugPortError(f"DAP transport is not supported for OCD {info.identifier}")
         if info is not self._info or self._transport is None:
             if info.identifier == OcdIdentifier.OPENOCD:
                 self._transport = OpenOcdMonitorTransport(self._execute)
+            elif info.identifier == OcdIdentifier.JLINK:
+                self._transport = JLinkMonitorTransport(self._execute)
             else:
                 self._transport = PyOcdMonitorTransport(self._execute)
             self._info = info
@@ -56,7 +59,7 @@ class AutoDebugPortTransport:
     def discovery(self) -> str:
         """Expose the backend-specific discovery method in reports."""
         backend = self._backend()
-        if isinstance(backend, OpenOcdMonitorTransport):
+        if isinstance(backend, (OpenOcdMonitorTransport, JLinkMonitorTransport)):
             return backend.discovery
         return "debug-server inventory"
 

@@ -1,10 +1,11 @@
 # Access Ports
 
 `dap` inspects the Access Ports of the target connected to the current GDB
-inferior. The toolkit automatically detects pyOCD or OpenOCD and uses its public
+inferior. The toolkit automatically detects pyOCD, OpenOCD or J-Link and uses its public
 `monitor` commands over the existing GDB connection. No second probe connection
 is opened. ARM ADIv5/APv1
-and ADIv6/APv2 are supported, independently of JTAG or SWD wiring.
+and ADIv6/APv2 are supported by pyOCD/OpenOCD, independently of JTAG or SWD wiring.
+J-Link AP inspection currently supports the verified ADIv5 JTAG-DPv0 backend.
 
 ## Commands
 
@@ -52,6 +53,10 @@ it does not open another socket. Unidentifiable threads, including RTOS task
 threads that cannot be mapped to physical CPUs, cause an explicit error rather
 than guessing from thread order or GDB thread IDs.
 
+With **J-Link**, physical-core discovery and selection are not implemented.
+The toolkit reports this explicitly instead of treating J-Link's GDB threads
+as an OpenOCD hardware-core inventory.
+
 Selection does not explicitly reset or resume the target, nor change APSEL.
 Attaching a new pyOCD socket can halt its core according to the server's connection
 policy. The active AP is rediscovered on the next AP operation because a server
@@ -80,6 +85,12 @@ The normal test suite skips these six hardware tests: standalone GDB uses both
 
 `list` uses pyOCD's discovered inventory, or OpenOCD's DAP discovery. OpenOCD
 reads the bounded ADIv5 APSEL range 0..255 and traverses the ADIv6 root ROM table.
+J-Link reads the bounded APSEL range 0..255 using `ReadAPEx <APSEL << 24> 0xFC`.
+Only DPv0/JTAG is accepted, where SELECT can be read back safely. SELECT is
+saved before every scan or register read, restored using `WriteDP 2`, and
+verified afterwards, including error paths. No AP CSW/TAR or target-memory
+writes are issued. Responding indices may include aliases; they are not a
+guarantee of distinct physical APs.
 Neither method guarantees discovery of hidden, powered-off or locked APs.
 APv1 identifiers are decimal APSEL indices, while APv2 identifiers are displayed
 as hexadecimal base addresses. Both decimal and `0x` arguments are accepted.
@@ -90,6 +101,10 @@ verifies the server selection. It does **not** change the GDB CPU core or rerout
 GDB's regular memory packets, which remain bound to the server's core. Selecting
 another core in pyOCD can override this selection. Non-memory APs cannot be
 selected by the pyOCD backend, but can be listed and profiled.
+
+For J-Link, `select` changes only the toolkit's profiling selection. Initially
+this is taken from DP SELECT; an explicit selection is kept locally and does
+not change the GDB memory view. No server-side MEM-AP selection is claimed.
 
 `profile` reads the specified AP, or the server's currently selected AP if no
 argument is supplied. It decodes IDR, including JEP106 designer, class, type,

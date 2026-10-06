@@ -50,15 +50,45 @@ target remote localhost:2331
 ```
 
 Identification has been verified with J-Link V9.82 on the i.MX8MP Cortex-M7.
-This adds server identification, not AArch64 target support. Ordinary GDB
-memory and register access remain available. J-Link DAP transport and hardware
-core selection are not implemented; those operations report explicit errors
-instead of falling back to another server's monitor commands.
+No AArch64 target support is added. The J-Link AP transport supports the
+verified ADIv5 JTAG-DPv0 configuration, where DP SELECT can be read back.
+It uses `ReadAPEx` to inspect AP registers, saves SELECT, and restores and
+verifies it even when a read fails. The restoration writes only the debug-port
+selection register, not AP transfer registers or target memory. SWD/other DP
+versions and hardware core selection currently report explicit errors.
+
+`dap select` changes the toolkit's profiling selection only, not the AP used
+by J-Link's ordinary GDB memory accesses. The initial profiling selection is
+obtained from DP SELECT. A responding AP index does not by itself prove a
+distinct physical AP; aliasing is possible.
+
+Target-memory diagnostics still require a working GDB memory view. If both
+`x/1wx 0xE000ED00` and `monitor MemU32 0xE000ED00` fail, CPU identification and
+security audits cannot complete. The toolkit does not silently reset the core,
+clear bus faults, unlock the device or switch to another AP's address space.
+
+The opt-in test uses an already running J-Link server on `localhost:2331`.
+It requires both `PYGDB_JLINK_HARDWARE=1` and explicit risk acknowledgement
+with `PYGDB_JLINK_ALLOW_INTRUSIVE=1`:
+
+```console
+PYGDB_JLINK_HARDWARE=1 PYGDB_JLINK_ALLOW_INTRUSIVE=1 .venv/bin/python -m pytest -q tests/test_jlink_hardware.py
+```
+
+It checks AP profiles, local selection, JSON reports, memory-map commands and
+DP SELECT preservation on the i.MX8MP Cortex-M7. Set `PYGDB_JLINK_ENDPOINT`
+to override the endpoint. It does not reset, resume or write target memory.
+This does not make it harmless: AP scanning and target-memory reads may cause
+bus faults or disturb debug access, and the server's connect/disconnect policy
+can affect execution. On the i.MX8MP M7, diagnostic sessions have been followed
+by loss of memory access and failed reconnection; the triggering operation has
+not been isolated. Do not run this test on a target whose state must be preserved.
 
 ## Automatic AP Transport
 
 `AutoDebugPortTransport` in `ap_runtime.py` consumes the detector and chooses
-`PyOcdMonitorTransport` or `OpenOcdMonitorTransport`. Commands do not perform
+`PyOcdMonitorTransport`, `OpenOcdMonitorTransport` or `JLinkMonitorTransport`.
+Commands do not perform
 OCD detection or contain architecture-specific register decoding.
 
 The OpenOCD adapter obtains the DAP from the currently selected target, uses
