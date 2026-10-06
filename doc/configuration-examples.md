@@ -54,6 +54,40 @@ J-Link's startup reset policy accordingly (for example `-noreset`).
 :language: json
 ```
 
+(imx8mp-a53-jlink)=
+## J-Link with i.MX8MP Cortex-A53
+
+Download {download}`imx8mp-a53.json <examples/boards/imx8mp-a53.json>`.
+This configuration uses `gdb-multiarch` and `JLinkGDBServer` with SEGGER's
+`MIMX8ML6_A53_0` device identifier, JTAG at 1000 kHz, and little-endian access.
+GDB's `aarch64` architecture and 60-second remote timeout are set before
+connecting. pyGdbServer automatically uses `target remote`.
+
+The example selects A53 core 0 only; it does not enable SMP or start secondary
+cores. The toolkit can load on this target and `lscpu` supports AArch64 CPU
+identification; other commands have not gained AArch64 implementations.
+See [AArch64 lscpu](lscpu.md) for available register information
+and J-Link limitations.
+
+`-noreset` and `-noir` disable startup reset and register initialization, and
+`gdb-init` contains no reset command. Connecting can still halt the selected
+CPU. `set mem inaccessible-by-default off` changes GDB's memory-access policy;
+it does not disable CPU caches.
+
+Stop any manually started J-Link GDB Server using the same probe before
+launching this example. GDB and Telnet ports use the dynamic `{gdb_port}` and
+`{telnet_port}` placeholders; SWO remains on port `2332`. The private endpoint
+is localhost-only and the public WebSocket API listens on `localhost:1234`.
+Change conflicting SWO or public API ports before running multiple instances.
+
+```console
+pyGdbServer doc/examples/boards/imx8mp-a53.json
+```
+
+```{literalinclude} examples/boards/imx8mp-a53.json
+:language: json
+```
+
 ## Pico 2 W
 
 Download the board configurations:

@@ -6,11 +6,15 @@
 from __future__ import annotations
 
 from io import StringIO
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
 
 from pyGdbToolkit import cmd_lscpu
+from pyGdbToolkit.arch import Architecture
+from pyGdbToolkit.arch.aarch64.cpu import CPU_REGISTERS, CpuRegister, CpuReport, decode_midr
+from pyGdbToolkit.arch.aarch64.target import AArch64TargetDescription
 from pyGdbToolkit.arch.arm.coresight import MCU_ROM_TABLE_ADDRESS
 
 _CIDR_OFFSETS = (0xFF0, 0xFF4, 0xFF8, 0xFFC)
@@ -83,6 +87,7 @@ def test_command_renders_nxp_vendor_and_cpuid_core_without_signature_reads(
     assert "r1p2" in output
     assert "no documented device profile" in output
     assert "IMX8MP" not in output
+    assert inferior.calls.count((0xE000ED00, 4)) == 2
     assert all(
         address == 0xE000ED00 or MCU_ROM_TABLE_ADDRESS <= address < 0xE0100000
         for address, _ in inferior.calls
@@ -98,6 +103,125 @@ def test_command_rejects_arguments(fake_gdb: object) -> None:
 
     with pytest.raises(gdb.GdbError, match="does not accept arguments"):
         command.invoke("unexpected", False)
+
+
+@pytest.mark.parametrize("architecture", (Architecture.RISCV, Architecture.XTENSA, None))
+def test_unsupported_architecture_never_falls_back_to_arm(
+    monkeypatch: pytest.MonkeyPatch, architecture: Architecture | None
+) -> None:
+    """Unknown and unsupported architectures do not invoke either CPU collector."""
+    import gdb
+
+    command = cmd_lscpu.LscpuCmd()
+    monkeypatch.setattr(
+        cmd_lscpu,
+        "SESSION",
+        SimpleNamespace(
+            architecture=architecture,
+            probe=lambda: SimpleNamespace(unavailable_reason="no recognized architecture"),
+        ),
+    )
+    monkeypatch.setattr(cmd_lscpu, "device_report", lambda: pytest.fail("unexpected ARM collector"))
+    monkeypatch.setattr(
+        cmd_lscpu, "cpu_report", lambda: pytest.fail("unexpected AArch64 collector")
+    )
+
+    message = (
+        "architecture unavailable" if architecture is None else "does not support architecture"
+    )
+    with pytest.raises(gdb.GdbError, match=message):
+        command.invoke("", False)
+
+
+@pytest.mark.parametrize("expose_registers", (True, False))
+def test_aarch64_command_never_reads_cortex_m_memory(
+    fake_gdb: object, monkeypatch: pytest.MonkeyPatch, expose_registers: bool
+) -> None:
+    """AArch64 reports named system registers or unavailability without SoC memory reads."""
+    import gdb
+
+    values = {"midr_el1": 0x410FD034, "mpidr_el1": 0x80000003} if expose_registers else {}
+
+    def read_register(name: str) -> int:
+        if name not in values:
+            raise gdb.error("register not exposed")
+        return values[name]
+
+    stream = StringIO()
+    monkeypatch.setattr(cmd_lscpu, "CONSOLE", Console(file=stream, width=120))
+    fake_gdb._inferior = SimpleNamespace(
+        architecture=lambda: SimpleNamespace(name=lambda: "aarch64")
+    )
+    fake_gdb._frame = SimpleNamespace(read_register=read_register)
+
+    cmd_lscpu.LscpuCmd().invoke("", False)
+
+    output = stream.getvalue()
+    assert "AArch64 CPU report" in output
+    assert "MIDR_EL1" in output
+    assert "not exposed or readable" in output
+    assert "NXP" not in output
+    assert "Cortex-M" not in output
+    if expose_registers:
+        assert "Cortex-A53" in output
+        assert "r0p4" in output
+        assert "0:0:0:3" in output
+    else:
+        assert "Cortex-A53" not in output
+
+
+def test_aarch64_renderer_decodes_architectural_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A complete register server can report features without a SoC-specific provider."""
+    values = {
+        "MIDR_EL1": 0x413FD082,
+        "MPIDR_EL1": 0x1280345678,
+        "ID_AA64PFR0_EL1": (1 << 16) | (1 << 20),
+        "ID_AA64MMFR0_EL1": 2,
+        "CTR_EL0": 0x84448004,
+        "REVIDR_EL1": 0x123456789ABCDEF0,
+        "CurrentEL": 12,
+    }
+    target = AArch64TargetDescription(Architecture.AARCH64, "Arm", "AArch64", "unknown", "aarch64")
+    registers = tuple(CpuRegister(name, width, values.get(name)) for name, width in CPU_REGISTERS)
+    report = CpuReport(target, registers, decode_midr(values["MIDR_EL1"]))
+    stream = StringIO()
+    monkeypatch.setattr(cmd_lscpu, "CONSOLE", Console(file=stream, width=140))
+
+    cmd_lscpu.render_aarch64_report(report)
+
+    output = stream.getvalue()
+    assert "Cortex-A72" in output
+    assert "r3p2" in output
+    assert "18:52:86:120" in output
+    assert "EL3" in output
+    assert "Supported, including FP16" in output
+    assert "40 bits" in output
+    assert output.count("64 bytes") == 2
+    assert "0x123456789ABCDEF0" in output
+    assert "RAM" not in output
+    assert "Vendor" not in output
+
+
+def test_aarch64_renderer_keeps_partial_register_bits_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial J-Link register reads do not silently become complete 64-bit values."""
+    target = AArch64TargetDescription(Architecture.AARCH64, "Arm", "AArch64", "unknown", "aarch64")
+    registers = tuple(
+        (
+            CpuRegister(name, width, 0x84448004, 32, "J-Link CP15")
+            if name == "CTR_EL0"
+            else CpuRegister(name, width, None)
+        )
+        for name, width in CPU_REGISTERS
+    )
+    stream = StringIO()
+    monkeypatch.setattr(cmd_lscpu, "CONSOLE", Console(file=stream, width=140))
+
+    cmd_lscpu.render_aarch64_report(CpuReport(target, registers, None))
+
+    assert "0x????????84448004 (J-Link CP15)" in stream.getvalue()
+    assert "0x0000000084448004" not in stream.getvalue()
 
 
 def test_module_console_is_forced_terminal_and_command_prints_directly(

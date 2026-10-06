@@ -120,10 +120,11 @@ the initial description uses `AArch64` and `unknown`. Ambiguous names such as
 `armv8-a` alone do not establish AArch64 execution state. When needed, select
 `set architecture aarch64` in GDB before initializing the session.
 
-This initial backend allows the toolkit to load and identify the architecture; it
-does not implement AArch64 system-register inspection, diagnostics, or SMP.
-Existing commands are unchanged, and Cortex-M diagnostic services are not
-dispatched for AArch64 targets.
+The architecture probe itself only loads and identifies the architecture without
+system-register access. The `lscpu` command additionally has a dedicated AArch64
+register collector and renderer; see [lscpu.md](lscpu.md). Other commands have
+not gained AArch64 implementations, and Cortex-M diagnostic services are not
+dispatched for AArch64 targets. SMP remains unsupported by this backend.
 
 Architecture-specific caching lives in the architecture package itself. For Arm, the
 [Arm session state](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/arch/arm/session_state.py) module

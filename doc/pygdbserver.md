@@ -81,6 +81,10 @@ provide the supported `dap core` workflow for these targets.
 
 An {ref}`i.MX8MP Cortex-M7 J-Link example <imx8mp-m7-jlink>`
 provides the `MIMX8ML6_M7` JTAG configuration, startup commands and port settings.
+An {ref}`i.MX8MP Cortex-A53 J-Link example <imx8mp-a53-jlink>`
+provides the `MIMX8ML6_A53_0` configuration with AArch64 GDB setup and no startup
+reset. It selects core 0 only, not SMP; see [lscpu.md](lscpu.md) for AArch64
+CPU-report support.
 
 ### Multiple instances on the same loopback address
 
