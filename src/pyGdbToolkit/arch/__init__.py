@@ -7,6 +7,7 @@ from .aarch64.probe import DEFAULT_AARCH64_PROBES
 from .arm.probe import DEFAULT_ARM_PROBES
 from .arm.fault import CortexMFaultCollector
 from .arm.security import CortexMSecurityAuditor
+from .arm.trace import probe_trace_capabilities
 from .base import (
     Architecture,
     ArchitectureProbe,
@@ -37,8 +38,12 @@ from .diagnostics import (
     DiagnosticValue,
 )
 from .registry import ArchitectureRegistry
+from .trace import TraceCapabilities, TraceCapabilityRegistry, TraceComponent, TraceComponentKind
 
 DEFAULT_ARCHITECTURE_REGISTRY = ArchitectureRegistry((*DEFAULT_AARCH64_PROBES, *DEFAULT_ARM_PROBES))
+DEFAULT_TRACE_CAPABILITY_REGISTRY = TraceCapabilityRegistry(
+    {Architecture.ARM: probe_trace_capabilities}
+)
 DEFAULT_DIAGNOSTIC_SERVICE_REGISTRY = DiagnosticServiceRegistry(
     (CortexMSecurityAuditor(), CortexMFaultCollector())
 )
@@ -55,6 +60,7 @@ __all__ = [
     "DEFAULT_ARCHITECTURE_REGISTRY",
     "DEFAULT_DIAGNOSTIC_RUNTIME",
     "DEFAULT_DIAGNOSTIC_SERVICE_REGISTRY",
+    "DEFAULT_TRACE_CAPABILITY_REGISTRY",
     "DiagnosticField",
     "DiagnosticFinding",
     "DiagnosticContent",
@@ -77,4 +83,8 @@ __all__ = [
     "RegisterValue",
     "SystemRegisterSet",
     "TargetDescription",
+    "TraceCapabilities",
+    "TraceCapabilityRegistry",
+    "TraceComponent",
+    "TraceComponentKind",
 ]

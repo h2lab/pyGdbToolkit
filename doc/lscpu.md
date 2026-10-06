@@ -12,6 +12,7 @@ targets in GDB. Each architecture has its own collector, report model, and rende
     and manufacturer identity before device-specific electronic-signature profiles
     are applied. Support is not restricted to STM32; ROM identity can also identify
     manufacturers such as NXP.
+    The command also provides read-only trace capability inspection for ARM Cortex-M
 - **AArch64 / ARMv8-A**: Architected system registers provide CPU identity,
     affinity, available features, and cache information without SoC-specific memory
     addresses or Cortex-M ROM-table discovery.
@@ -29,8 +30,9 @@ When executed, `lscpu`:
 3. `cpu_report()` dispatches explicitly with `match SESSION.architecture`:
     `Architecture.ARM` calls `cpu_arm_report()` and `Architecture.AARCH64`
     calls `cpu_aarch64_report()`.
-4. Collects the architecture-specific report and passes it to its Rich renderer.
-5. Raises `gdb.GdbError` when the architecture is unknown or unsupported. ARM is
+4. Requests trace capability evidence through `SESSION.trace_capabilities()`.
+5. Collects the architecture-specific report and passes it to its Rich renderer.
+6. Raises `gdb.GdbError` when the architecture is unknown or unsupported. ARM is
     not a fallback for other architectures.
 
 | Architecture | Collector | Main evidence | Report | Renderer |
@@ -160,6 +162,36 @@ electronic-signature fields can be decoded. The current STM32 catalog provides:
 (`box.SIMPLE_HEAVY`) titled `Cortex-M CPU report`. Property names are bold;
 unavailable or unreadable fields explicitly display yellow
 `Unavailable: <reason>` status indicators.
+
+### Trace Capabilities
+
+The report includes **ETM**, **ETB**, **MTB**, and **ETF** rows. All recognized
+instances are listed with their base addresses; multiple components of one type
+are retained rather than reduced to the first instance.
+
+| Component | Additional Information |
+|---|---|
+| ETM | Trace architecture version, Secure/non-Secure filtering support, raw `EXLEVEL_S` and `EXLEVEL_NS` masks when available |
+| ETB | Embedded buffer capacity in bytes when readable |
+| MTB | Detected component address |
+| ETF | Embedded FIFO capacity in bytes when readable, kept separate from ETB |
+
+For example, the STM32N6 hardware inspection reports an ETM v4.5 at
+`0xE0041000` and an ETF with a 4,096-byte buffer at `0xE0082000`.
+
+- **Detected at ...** means the component was positively identified.
+- **Not detected** means no recognized component of that type was found in the
+    accessible topology; it does not prove physical absence.
+- **Unknown** applies to an unreadable or undecoded optional property, without
+    erasing component presence. Register access errors are included in the cell.
+- **Unavailable: ...** means trace probing could not inspect the topology, for
+    example because the ROM table was inaccessible.
+
+Secure/non-Secure filtering describes the capability decoder's result, not current
+debug authentication or authorization. `lscpu` does not enable tracing, clear locks,
+power components, or consume trace data. The capability models and architecture
+dispatch are described in [the session documentation](session.md#read-only-trace-capabilities).
+The trace result is cached by the session and cleared on invalidation or reset.
 
 ---
 

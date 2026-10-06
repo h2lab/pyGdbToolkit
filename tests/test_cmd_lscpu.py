@@ -16,6 +16,8 @@ from pyGdbToolkit.arch import Architecture
 from pyGdbToolkit.arch.aarch64.cpu import CPU_REGISTERS, CpuRegister, CpuReport, decode_midr
 from pyGdbToolkit.arch.aarch64.target import AArch64TargetDescription
 from pyGdbToolkit.arch.arm.coresight import MCU_ROM_TABLE_ADDRESS
+from pyGdbToolkit.arch.base import RegisterValue
+from pyGdbToolkit.arch.trace import TraceCapabilities, TraceComponent, TraceComponentKind
 
 _CIDR_OFFSETS = (0xFF0, 0xFF4, 0xFF8, 0xFFC)
 _PIDR_OFFSETS = (0xFE0, 0xFE4, 0xFE8, 0xFEC, 0xFD0)
@@ -286,4 +288,95 @@ def test_module_console_is_forced_terminal_and_command_prints_directly(
     assert "bank 0, code 0x20" in output
     assert "STM32N6 product line" in output
     assert "IDCODE" not in output
+    assert "ETM" in output and "MTB" in output and "ETB" in output and "ETF" in output
+    assert "Not detected" in output
     assert all(address not in _FORBIDDEN_LEGACY_ADDRESSES for address, _ in inferior.calls)
+
+    trace = TraceCapabilities(
+        (
+            TraceComponent(
+                TraceComponentKind.ETM, 0xE0041000, version="4.5", security_filtering=False
+            ),
+            TraceComponent(TraceComponentKind.ETF, 0xE0082000, buffer_size_bytes=4096),
+        )
+    )
+    monkeypatch.setattr(cmd_lscpu.SESSION, "trace_capabilities", lambda: trace)
+    stream.seek(0)
+    stream.truncate()
+    cmd_lscpu.LscpuCmd().invoke("", False)
+    output = stream.getvalue()
+    assert "0xE0041000" in output
+    assert "Architecture version: 4.5" in output
+    assert "Secure/non-Secure filtering: Not supported" in output
+    assert "Buffer size: 4,096 bytes" in output
+
+
+def test_trace_rendering_lists_all_components_and_properties(monkeypatch):
+    """Trace output retains multiple instances, version, security masks, and buffer sizes."""
+    capabilities = TraceCapabilities(
+        (
+            TraceComponent(
+                TraceComponentKind.ETM,
+                0xE0041000,
+                version="4.5",
+                security_filtering=True,
+                secure_exception_levels=9,
+                nonsecure_exception_levels=9,
+            ),
+            TraceComponent(
+                TraceComponentKind.ETM, 0xE0043000, version="3.4", security_filtering=False
+            ),
+            TraceComponent(TraceComponentKind.ETB, 0xE0081000, buffer_size_bytes=8192),
+            TraceComponent(TraceComponentKind.ETF, 0xE0082000, buffer_size_bytes=4096),
+            TraceComponent(TraceComponentKind.MTB, 0xE0040000),
+        )
+    )
+    stream = StringIO()
+    console = Console(file=stream, force_terminal=False, width=100)
+    monkeypatch.setattr(cmd_lscpu, "CONSOLE", console)
+    for kind in TraceComponentKind:
+        console.print(cmd_lscpu._trace_text(capabilities, kind))
+    output = stream.getvalue()
+    assert "Detected at 0xE0041000" in output
+    assert "Detected at 0xE0043000" in output
+    assert "Architecture version: 4.5" in output
+    assert "Architecture version: 3.4" in output
+    assert "Secure/non-Secure filtering: Supported" in output
+    assert "Secure/non-Secure filtering: Not supported" in output
+    assert "EXLEVEL_S mask: 0x9" in output
+    assert "EXLEVEL_NS mask: 0x9" in output
+    assert "Buffer size: 8,192 bytes" in output
+    assert "Buffer size: 4,096 bytes" in output
+    assert "Detected at 0xE0040000" in output
+
+
+def test_trace_rendering_preserves_unavailable_topology():
+    """An inaccessible ROM table is never rendered as absent hardware."""
+    capabilities = TraceCapabilities(unavailable_reason="ROM table inaccessible")
+    for kind in TraceComponentKind:
+        output = cmd_lscpu._trace_text(capabilities, kind)
+        assert output.plain == "Unavailable: ROM table inaccessible"
+        assert output.style == "yellow"
+
+
+def test_trace_rendering_preserves_unknown_properties_and_read_errors():
+    """Detected hardware remains visible even when optional registers fault."""
+    capabilities = TraceCapabilities(
+        (
+            TraceComponent(
+                TraceComponentKind.ETM,
+                0xE0041000,
+                registers=(RegisterValue.unavailable("TRCIDR3", 0xE00411EC, 32, "access denied"),),
+            ),
+            TraceComponent(TraceComponentKind.ETB, 0xE0081000),
+        )
+    )
+    output = cmd_lscpu._trace_text(capabilities, TraceComponentKind.ETM).plain
+    assert "Detected" in output
+    assert "Architecture version: Unknown" in output
+    assert "Secure/non-Secure filtering: Unknown" in output
+    assert "TRCIDR3 unavailable: access denied" in output
+    assert "EXLEVEL" not in output
+    assert (
+        "Buffer size: Unknown" in cmd_lscpu._trace_text(capabilities, TraceComponentKind.ETB).plain
+    )

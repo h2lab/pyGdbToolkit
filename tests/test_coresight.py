@@ -19,6 +19,10 @@ from pyGdbToolkit.arch.arm.coresight import (
     walk_rom_table,
 )
 from pyGdbToolkit.target_memory import TargetReadError
+from pyGdbToolkit.arch.arm.trace import discover_trace_capabilities
+from pyGdbToolkit.arch.arm.trace import probe_trace_capabilities
+from pyGdbToolkit.arch.arm.cortex_m import decode_cpuid
+from pyGdbToolkit.arch.trace import TraceComponentKind
 
 _CIDR_OFFSETS = (0xFF0, 0xFF4, 0xFF8, 0xFFC)
 _PIDR_OFFSETS = (0xFE0, 0xFE4, 0xFE8, 0xFEC, 0xFD0)
@@ -92,6 +96,191 @@ def _write_component(
         strict=True,
     ):
         memory.uint32[base + offset] = value
+
+
+def test_detects_trace_components_in_nested_rom_table() -> None:
+    """Trace discovery follows nested entries and reads only capability registers."""
+    memory = FakeTargetMemory()
+    root = MCU_ROM_TABLE_ADDRESS
+    nested = root - 0x1000
+    _write_component(memory, root, component_class=1)
+    _write_component(memory, nested, component_class=1)
+    memory.uint32[root] = 0xFFFFF003
+    memory.uint32[root + 4] = 0
+    for index, part in enumerate((0xD21, 0x907, 0x932)):
+        base = nested - (index + 1) * 0x1000
+        _write_component(memory, base, component_class=9, part_number=part, bank=4, code=0x3B)
+        memory.uint32[nested + index * 4] = ((base - nested) & 0xFFFFF000) | 3
+    memory.uint32[nested + 12] = 0
+    etm_base = nested - 0x1000
+    memory.uint32[etm_base + 0xFBC] = 0x47734A13
+    memory.uint32[etm_base + 0x1EC] = 0x00330000
+    memory.uint32[nested - 0x2000 + 4] = 2048
+    capabilities = discover_trace_capabilities(memory)
+
+    assert capabilities.is_available
+    assert capabilities.has_etm() and capabilities.has_etb() and capabilities.has_mtb()
+    assert not capabilities.has_etf()
+    etm, etb, mtb = capabilities.components
+    assert etm.version == "4.3"
+    assert etm.security_filtering is True
+    assert etm.secure_exception_levels == 3
+    assert etm.nonsecure_exception_levels == 3
+    assert etb.buffer_size_bytes == 8192
+    assert mtb.kind == TraceComponentKind.MTB
+    assert (etm_base + 0x1E4, 4) not in memory.calls
+
+
+@pytest.mark.parametrize("security", (False, True))
+def test_legacy_etm_version_and_security(security: bool) -> None:
+    """ETMIDR uses the legacy architecture encoding, not PIDR revision."""
+    memory = FakeTargetMemory()
+    root = MCU_ROM_TABLE_ADDRESS
+    base = root - 0x1000
+    _write_component(memory, root, component_class=1)
+    _write_component(memory, base, component_class=9, part_number=0x925, bank=4, code=0x3B)
+    memory.uint32[root] = 0xFFFFF003
+    memory.uint32[root + 4] = 0
+    memory.uint32[base + 0x1E4] = 0x240 | (int(security) << 12)
+
+    capabilities = discover_trace_capabilities(memory)
+
+    assert capabilities.has_etm()
+    assert capabilities.components[0].version == "3.4"
+    assert capabilities.components[0].security_filtering is security
+
+
+def test_trace_optional_faults_do_not_erase_presence() -> None:
+    """Missing capability registers remain unknown without disabling discovery."""
+    memory = FakeTargetMemory()
+    root = MCU_ROM_TABLE_ADDRESS
+    base = root - 0x1000
+    _write_component(memory, root, component_class=1)
+    _write_component(memory, base, component_class=9, part_number=0x907, bank=4, code=0x3B)
+    memory.uint32[root] = 0xFFFFF003
+    memory.uint32[root + 4] = 0
+
+    capabilities = discover_trace_capabilities(memory)
+
+    assert capabilities.has_etb()
+    assert capabilities.components[0].buffer_size_bytes is None
+    assert capabilities.components[0].registers[-1].unavailable_reason is not None
+
+
+def test_trace_probe_accepts_real_cortex_m_description() -> None:
+    """The registered backend accepts the actual decoded processor model."""
+    memory = FakeTargetMemory()
+    _write_component(memory, MCU_ROM_TABLE_ADDRESS, component_class=1)
+    memory.uint32[MCU_ROM_TABLE_ADDRESS] = 0
+    result = probe_trace_capabilities(memory, decode_cpuid(0x410FC241))
+    assert result.is_available
+    assert result.components == ()
+
+
+@pytest.mark.parametrize(
+    ("part", "bank", "code", "devarch", "expected"),
+    (
+        (0x907, 0, 0x20, 0, None),
+        (0x907, 4, 0x3B, 0x47701A14, None),
+        (0x123, 0, 0x20, 0x47700A31, TraceComponentKind.MTB),
+        (0x925, 4, 0x3B, 0x12304A13, None),
+        (0x932, 4, 0x3B, 0, TraceComponentKind.MTB),
+    ),
+)
+def test_trace_identity_prevents_false_positives(part, bank, code, devarch, expected):
+    """DEVARCH owns identification; PIDR fallbacks require the full Arm designer."""
+    memory = FakeTargetMemory()
+    root = MCU_ROM_TABLE_ADDRESS
+    base = root - 0x1000
+    _write_component(memory, root, component_class=1)
+    _write_component(memory, base, component_class=9, part_number=part, bank=bank, code=code)
+    memory.uint32[root] = 0xFFFFF003
+    memory.uint32[root + 4] = 0
+    memory.uint32[base + 0xFBC] = devarch
+    result = discover_trace_capabilities(memory)
+    assert [component.kind for component in result.components] == (
+        [] if expected is None else [expected]
+    )
+
+
+@pytest.mark.parametrize("idr3, security", ((0x00300000, False), (0x00330000, True), (None, None)))
+def test_etm4_security_is_false_or_unknown_as_advertised(idr3, security):
+    """An unreadable IDR3 is not proof of absent Secure/non-Secure filtering."""
+    memory = FakeTargetMemory()
+    root = MCU_ROM_TABLE_ADDRESS
+    base = root - 0x1000
+    _write_component(memory, root, component_class=1)
+    _write_component(memory, base, component_class=9)
+    memory.uint32[root] = 0xFFFFF003
+    memory.uint32[root + 4] = 0
+    memory.uint32[base + 0xFBC] = 0x47704A13
+    if idr3 is not None:
+        memory.uint32[base + 0x1EC] = idr3
+    result = discover_trace_capabilities(memory)
+    assert result.has_etm()
+    assert result.components[0].version == "4.0"
+    assert result.components[0].security_filtering is security
+
+
+@pytest.mark.parametrize("configuration", (0, 1, 2, 3))
+def test_tmc_configuration_distinguishes_embedded_from_external_buffers(configuration):
+    """TMC ETR/ETS are not ETBs; RSZ is read only for embedded buffers."""
+    memory = FakeTargetMemory()
+    root = MCU_ROM_TABLE_ADDRESS
+    base = root - 0x1000
+    _write_component(memory, root, component_class=1)
+    _write_component(memory, base, component_class=9, part_number=0x961, bank=4, code=0x3B)
+    memory.uint32[root] = 0xFFFFF003
+    memory.uint32[root + 4] = 0
+    memory.uint32[base + 0xFC8] = configuration << 6
+    memory.uint32[base + 4] = 1024
+    result = discover_trace_capabilities(memory)
+    assert result.has_etb() is (configuration == 0)
+    assert result.has_etf() is (configuration == 2)
+    if configuration in (0, 2):
+        assert result.components[0].buffer_size_bytes == 4096
+    else:
+        assert (base + 4, 4) not in memory.calls
+
+
+def test_unreadable_rom_is_not_reported_as_confirmed_absence():
+    """An inaccessible topology retains its reason and cannot establish absence."""
+    result = discover_trace_capabilities(FakeTargetMemory())
+    assert not result.is_available
+    assert result.unavailable_reason
+    assert not result.has_etm()
+
+
+@pytest.mark.parametrize("idr", (None, 0, 0x410))
+def test_etm4_part_fallback_keeps_unknown_versions_unknown(idr):
+    """An identified ETM stays present when its optional version register is unreadable."""
+    memory = FakeTargetMemory()
+    root = MCU_ROM_TABLE_ADDRESS
+    base = root - 0x1000
+    _write_component(memory, root, component_class=1)
+    _write_component(memory, base, component_class=9, part_number=0x975, bank=4, code=0x3B)
+    memory.uint32[root] = 0xFFFFF003
+    memory.uint32[root + 4] = 0
+    if idr is not None:
+        memory.uint32[base + 0x1E4] = idr
+    result = discover_trace_capabilities(memory)
+    assert result.has_etm()
+    assert result.components[0].version == ("4.1" if idr == 0x410 else None)
+    assert result.components[0].security_filtering is None
+
+
+def test_generic_class_components_are_not_probed_for_trace_registers():
+    """CoreSight-only registers are never read on generic-class peripherals."""
+    memory = FakeTargetMemory()
+    root = MCU_ROM_TABLE_ADDRESS
+    base = root - 0x1000
+    _write_component(memory, root, component_class=1)
+    _write_component(memory, base, component_class=0xE, part_number=0x925, bank=4, code=0x3B)
+    memory.uint32[root] = 0xFFFFF003
+    memory.uint32[root + 4] = 0
+    result = discover_trace_capabilities(memory)
+    assert result.components == ()
+    assert (base + 0xFBC, 4) not in memory.calls
 
 
 def test_decodes_st_jep106_identity_and_component_part() -> None:
