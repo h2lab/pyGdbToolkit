@@ -115,6 +115,25 @@ Removing the mapping keeps the ordinary single-server configuration.
 This is not an atomic all-core halt/resume interface; see [dap.md](dap.md) for
 SMP limitations and [lscpu.md](lscpu.md) for AArch64 CPU-report support.
 
+### OpenOCD AArch64 SMP
+
+The {ref}`i.MX8MP Cortex-A53 OpenOCD example <imx8mp-a53-openocd>` uses the
+same physical J-Link probe through OpenOCD's `jlink` adapter. Declare
+`ocd-identifier: openocd`, select an executable built with `jlink` and `aarch64`
+support, and supply the target Tcl file. Do not add `jlink-core-devices`;
+OpenOCD owns the SMP group and exposes named hardware-core threads on one GDB
+endpoint. pyGdbServer uses `extended-remote`, and no extra GDB inferiors or
+per-core server processes are created.
+
+The toolkit's OpenOCD backend synchronizes the selected GDB thread and monitor
+target before subsequent CPU/AP operations. `dap core`, the core RPCs, GDB
+register/breakpoint commands and AArch64 `lscpu` use the same public interface
+as the JLinkGDBServer mode, but register availability and halt/resume behavior
+remain backend-specific. See [SMP support](smp.md) for a side-by-side comparison.
+The example starts with `init; halt`, not reset; connecting still halts the
+running cluster. Its explicit APB debug view allows external MIDR reading without
+creating a fifth GDB CPU context or examining the auxiliary M7.
+
 ### Multiple instances on the same loopback address
 
 Use a different public `listen-address` port in each instance's JSON file.

@@ -23,6 +23,22 @@ def test_named_gdb_register_has_priority(fake_gdb: object, monkeypatch: pytest.M
     assert register.source == "GDB register"
 
 
+def test_openocd_external_midr_is_tagged_and_does_not_use_cp15(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The external 32-bit MIDR maps low bits and has architecturally zero high bits."""
+    monkeypatch.setattr(session_state, "get_ocd", lambda: OcdInfo(OcdIdentifier.OPENOCD))
+    monkeypatch.setattr(
+        session_state,
+        "read_external_debug_word",
+        lambda offset: 0x410FD034 if offset == 0xD00 else pytest.fail("wrong offset"),
+    )
+    register = session_state.GdbCpuRegisterReader().read_register("MIDR_EL1", 64)
+    assert register.value == 0x410FD034
+    assert register.valid_bits == 64
+    assert register.source == "OpenOCD external debug MIDR"
+
+
 @pytest.mark.parametrize(
     "name,encoding,value,valid_bits",
     (

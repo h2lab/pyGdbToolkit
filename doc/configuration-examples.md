@@ -104,6 +104,55 @@ pyGdbServer doc/examples/boards/imx8mp-a53.json
 :language: json
 ```
 
+(imx8mp-a53-openocd)=
+## OpenOCD with i.MX8MP Cortex-A53 and J-Link
+
+Download the {download}`server configuration <examples/boards/imx8mp-a53-openocd.json>`
+and {download}`OpenOCD target script <examples/boards/imx8mp-a53-openocd.cfg>`.
+The probe is still SEGGER J-Link, but the GDB server is **OpenOCD**, not
+JLinkGDBServer. Stop other processes using the probe before launching this example.
+Run from the repository root so the target-script path resolves correctly:
+
+```console
+pyGdbServer doc/examples/boards/imx8mp-a53-openocd.json
+```
+
+The tested executable is `/usr/bin/openocd` 0.12.0, with scripts under
+`/usr/share/openocd/scripts`. Adapt these paths to your installation and confirm
+that your build includes both the `jlink` adapter and the `aarch64` target.
+On the validation host, the default PATH resolved to a ST fork without J-Link,
+and `/usr/local/bin/openocd` also lacked that driver. A version banner alone
+does not establish adapter support.
+
+The target configuration follows the debug/CTI addresses declared in OpenOCD's
+`target/imx8m.cfg` and `target/imx8mp.cfg`: APB-AP 1, debug bases
+`0x80410000` through `0x80710000`, and corresponding CTI bases
+`0x80420000` through `0x80720000`. Board-specific addresses stay in this file,
+not the toolkit backend. It declares only the four A53 CPU targets, with
+`-coreid`, `-rtos hwthread`, and one `target smp` group. No M7 or system-memory
+target is examined. An additional `mem_ap` view of APB-AP 1 has its GDB port
+disabled and supplies external CPU identification registers to `lscpu`.
+
+`reset_config none` and startup `init; halt` attach without issuing a reset.
+This still halts the running SMP cluster and can affect its OS and watchdogs.
+The example does not power up secondary cores or change board clocks. It
+requires all four A53 debug interfaces to be accessible. The debugger's own
+connect, halt and disconnect actions are not guaranteed to preserve execution.
+
+GDB and Telnet use `{gdb_port}` and `{telnet_port}`; TCL is disabled. There is
+one GDB SMP endpoint, not one port per core, and no `jlink-core-devices` node.
+`dap core list`, `dap core N`, normal GDB register/breakpoint commands and
+`lscpu` use the same interface as the adjacent JLinkGDBServer example.
+See [AArch64 SMP comparison](smp.md) for backend-specific semantics and limits.
+
+```{literalinclude} examples/boards/imx8mp-a53-openocd.json
+:language: json
+```
+
+```{literalinclude} examples/boards/imx8mp-a53-openocd.cfg
+:language: tcl
+```
+
 ## Pico 2 W
 
 Download the board configurations:

@@ -112,6 +112,54 @@ from thread enumeration order or mistake RTOS task threads for CPUs. Ambiguous
 or unrecognized names fail explicitly. Group creation and all-stop behavior
 remain responsibilities of the OpenOCD target configuration.
 
+Selection synchronizes two distinct contexts: the GDB hardware thread and
+OpenOCD's monitor target (`targets <name>`). The backend verifies
+`echo [target current]` after selection and restores the previous thread and
+target if verification fails. A GDB thread switch alone is insufficient for
+subsequent monitor commands, including AP inspection and CPU identity access.
+
+### AArch64 SMP: OpenOCD and JLinkGDBServer
+
+The [configuration catalogue](configuration-examples.md) supplies both server
+choices for the same i.MX8MP A53 fixture and physical J-Link probe. Their common
+CLI/RPC interface is deliberately independent of the server representation:
+
+| Behavior | OpenOCD | JLinkGDBServer |
+|---|---|---|
+| Backend identifier | `openocd` | `jlinkgdbserver` |
+| Processes | One OpenOCD process | One server per configured CPU selector |
+| GDB connection | `extended-remote`, one SMP endpoint | `remote`, separate endpoints |
+| GDB contexts | Hardware-core threads in one inferior | One inferior per attached endpoint |
+| Inventory | Named `hwthread` cores from the SMP group | Explicit `jlink-core-devices` mapping |
+| Pivot | GDB thread plus verified monitor target | Attach/reuse inferior plus identity evidence |
+| CPU identity in tested versions | External debug MIDR through a configured APB `mem_ap` view | Verified CP15 monitor MIDR read |
+| Other CPU registers | Named GDB values when exposed; otherwise unavailable | Named GDB values or the limited verified monitor aliases |
+| Halt/resume scope | Governed by OpenOCD SMP configuration | Governed by independent per-core connections |
+| Port isolation | Dynamic GDB/Telnet; TCL disabled in example | Dynamic GDB/Telnet/SWO per instance |
+
+Neither toolkit path promises atomic cluster-wide stop/resume or scheduler
+awareness. OpenOCD's AArch64 SMP handling halted all four CPUs in the tested
+configuration, but synchronized resume and breakpoint hits under running SMP
+have not been qualified. A thread-local breakpoint request does not guarantee
+that only that CPU receives a breakpoint in an all-stop SMP server.
+
+For direct GDB with the OpenOCD example, start the target script and then:
+
+```gdb
+set architecture aarch64
+target extended-remote localhost:3333
+python import pyGdbToolkit
+dap core list
+dap core 2
+info registers pc
+lscpu
+```
+
+Use the package installation or Python path setup from the getting-started
+guide. `dap core` is preferable to a bare `thread` command when subsequent
+monitor operations must refer to the same CPU. Without a configured SMP
+`hwthread` inventory, the toolkit will not turn OS task threads into CPUs.
+
 ### pyOCD
 
 pyOCD inventory comes from `monitor show cores`. The initial connection must
@@ -214,9 +262,27 @@ non-contiguous IDs, full/partial affinity evidence, reuse, rollback, and cleanup
 They do not establish hardware support for every possible selector.
 
 Hardware validation currently includes RP2350 contexts through OpenOCD/pyOCD
-and an i.MX8MP A53 cluster through J-Link V9.82 with gdb-multiarch 16.3. The
+and an i.MX8MP A53 cluster through both OpenOCD 0.12.0 (J-Link adapter, JTAG
+1000 kHz) and J-Link GDB Server V9.82 with gdb-multiarch 16.3. The
 J-Link test verified four distinct affinities, repeated CLI/RPC pivots, halted
 state and hardware breakpoint insertion/removal, not breakpoint hits under
 resumed SMP execution. Board-specific fixtures stay in examples and hardware
 tests, not in the portable SMP model. These tests require explicit permission
 because even debug reads and attachments can affect a running target.
+
+On 2026-10-06, OpenOCD validation covered standalone GDB and a real supervised
+pyGdbServer/WebSocket session: four hardware-core threads, repeated CLI/RPC
+pivots, monitor-target correlation, Cortex-A53 r0p4 from external MIDR
+`0x410FD034`, EL1 from PSTATE, and hardware breakpoint insertion/removal on
+each selected CPU. It did not scan APs, reset or explicitly resume the cluster.
+The opt-in test cleans up GDB and OpenOCD even on failure:
+
+```console
+PYGDB_OPENOCD_SMP_HARDWARE=1 PYGDB_OPENOCD_ALLOW_INTRUSIVE=1 .venv/bin/python -m pytest -q tests/test_openocd_smp_hardware.py
+```
+
+The existing JLinkGDBServer fixture remains separate:
+
+```console
+PYGDB_JLINK_SMP_HARDWARE=1 PYGDB_JLINK_ALLOW_INTRUSIVE=1 .venv/bin/python -m pytest -q tests/test_jlink_smp_hardware.py
+```

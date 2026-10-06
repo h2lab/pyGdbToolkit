@@ -11,8 +11,9 @@ import gdb
 
 from ...diagnostic_runtime import GdbDiagnosticRegisterReader
 from ...ocd import OcdIdentifier, get_ocd
+from ...ocd.openocd import read_external_debug_word
 from ...session import SESSION, ToolkitSession
-from .cpu import CpuRegister, CpuReport, collect_cpu_report
+from .cpu import EXTERNAL_MIDR_OFFSET, CpuRegister, CpuReport, collect_cpu_report
 from .target import AArch64TargetDescription
 
 _JLINK_CP15_READS = {
@@ -23,7 +24,7 @@ _JLINK_CP15_READS = {
 
 
 class GdbCpuRegisterReader(GdbDiagnosticRegisterReader):
-    """Prefer named GDB registers and use only verified J-Link read-only aliases."""
+    """Prefer named GDB registers and use verified backend-specific identity access."""
 
     def read_register(self, name: str, width_bits: int) -> CpuRegister:
         """Retain partial CP15 results instead of fabricating the high 32 bits."""
@@ -34,6 +35,10 @@ class GdbCpuRegisterReader(GdbDiagnosticRegisterReader):
             pstate = self.read_first(("pstate", "cpsr"))
             if pstate is not None and not pstate & 0x10:
                 return CpuRegister(name, width_bits, pstate & 0xC, source="GDB PSTATE")
+        if name == "MIDR_EL1" and get_ocd().identifier is OcdIdentifier.OPENOCD:
+            value = read_external_debug_word(EXTERNAL_MIDR_OFFSET)
+            if value is not None:
+                return CpuRegister(name, width_bits, value, source="OpenOCD external debug MIDR")
         alias = _JLINK_CP15_READS.get(name)
         if alias is not None and get_ocd().identifier is OcdIdentifier.JLINK:
             encoding, valid_bits = alias

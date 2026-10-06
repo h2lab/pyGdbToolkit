@@ -1,3 +1,8 @@
+<!--
+SPDX-FileType: DOCUMENTATION
+SPDX-FileCopyrightText: 2026 H2Lab Development Team
+SPDX-License-Identifier: Apache-2.0
+-->
 # `lscpu` Command Technical Documentation
 
 The `lscpu` command provides CPU identification for ARM Cortex-M and AArch64
@@ -29,7 +34,7 @@ When executed, `lscpu`:
 | Architecture | Collector | Main evidence | Report | Renderer |
 |---|---|---|---|---|
 | ARM / Cortex-M | `device_report()` | CPUID, validated ROM identities, device profiles | `DeviceReport` | `render_arm_report()` |
-| AArch64 / ARMv8-A | `cpu_report()` | Named system registers, limited verified J-Link reads | `CpuReport` | `render_aarch64_report()` |
+| AArch64 / ARMv8-A | `cpu_report()` | Named system registers, verified J-Link aliases or OpenOCD external MIDR | `CpuReport` | `render_aarch64_report()` |
 
 The generic Cortex-M device report is a fallback **within the ARM provider
 registry** when no detailed device profile matches. It is not an architecture
@@ -76,7 +81,7 @@ match SESSION.architecture
     |   cpu_report()
     |     -> require AArch64TargetDescription
     |     -> collect_cpu_report() / GdbCpuRegisterReader
-    |     -> named GDB system registers / limited J-Link CP15 reads
+    |     -> named GDB registers / J-Link aliases / OpenOCD external MIDR
     |     -> CpuReport / MIDR identity and register availability
     |     -> render_aarch64_report()
     |
@@ -197,8 +202,9 @@ If the server advertises an ambiguous name such as `armv8-a`, configure
 2. `cpu_report()` requires the session's `AArch64TargetDescription` and creates a
     `GdbCpuRegisterReader`. It does not invoke the ARM device-provider registry.
 3. `collect_cpu_report()` requests the standard named registers through the GDB
-    adapter. Named access is preferred; only positively identified J-Link servers
-    can use the limited CP15 reads described below. `CurrentEL` can also be derived
+    adapter. Named access is preferred; a positively identified backend can use
+    the verified J-Link aliases or OpenOCD external MIDR access described below.
+    `CurrentEL` can also be derived
     from GDB PSTATE when its execution-state bit confirms AArch64.
 4. The collector preserves each register's value, access source, valid bit width,
     and availability in a `CpuReport`. It decodes CPU identity from `MIDR_EL1`
@@ -261,6 +267,34 @@ The toolkit does not inject instructions, change cache selectors, reset the
 target, or scan memory to obtain the report. The debug server may halt the CPU
 and perform its own internal register-access sequence.
 
+### OpenOCD external CPU identification
+
+OpenOCD 0.12.0 exposes the A53 general registers and PSTATE to GDB, but not
+MIDR as a named GDB register. Its `aarch64 mrc` command rejects an AArch64
+execution state; the toolkit does not use it or inject its own MRS sequence.
+Instead, MIDR can be read from the architectural external debug interface:
+`Debug base + 0xD00` contains the low 32 bits of `MIDR_EL1`, whose high bits
+are architectural `RES0`. The offset belongs to the AArch64 model, not a SoC
+address table.
+
+The OpenOCD adapter requires the selected GDB hardware-thread name to match
+`target current`. It queries the CPU's configured `-type`, `-dbgbase`, `-dap`
+and `-ap-num`, then looks for exactly one configured `mem_ap` target on the same
+DAP and AP. Only target metadata is enumerated; no AP or ROM-table scan occurs.
+It reads one 32-bit word with the target-specific `read_memory` command and
+retains the source `OpenOCD external debug MIDR`. The
+[OpenOCD A53 example](configuration-examples.md) provides the required APB
+view with its GDB port disabled.
+
+Missing/ambiguous views, unsafe names, a mismatched monitor context, read errors
+or malformed results leave MIDR unavailable. No target is created dynamically,
+no debug base is guessed, and no virtual or physical system-memory read is
+used as a substitute. The MEM-AP read still changes debug transfer registers
+internally and is not guaranteed harmless on powered-down or locked components.
+MPIDR, REVIDR, CTR and AA64 feature registers not exposed by this OpenOCD build
+remain unavailable; external feature registers are not treated as identical
+full `ID_AA64*` values.
+
 ### Hardware verification
 
 On 2026-10-06, the attached i.MX8MP A53 was tested with J-Link V9.82 and
@@ -271,9 +305,18 @@ EL1 from PSTATE, and 64-byte minimum instruction/data cache lines from
 MPIDR and the AA64 feature registers remained unavailable through that server.
 This is CPU-report validation, not SMP or SoC-signature validation.
 
+The same four A53s were verified through OpenOCD 0.12.0 using the J-Link JTAG
+adapter at 1000 kHz. `lscpu` identified Cortex-A53 r0p4 from external MIDR
+`0x410FD034` and EL1 from PSTATE after repeated core pivots, in standalone GDB
+and through the real pyGdbServer WebSocket API. Unlike the tested SEGGER path,
+cache-line and implementation revision fields remained unavailable. See
+[SMP support](smp.md) for the parallel context models and validation limits.
+
 Register field definitions follow the Arm A-profile system-register specification:
 [MIDR_EL1](https://df.lth.se/~getz/ARM/SysReg/AArch64-midr_el1.html),
 [MPIDR_EL1](https://df.lth.se/~getz/ARM/SysReg/AArch64-mpidr_el1.html),
 [ID_AA64PFR0_EL1](https://df.lth.se/~getz/ARM/SysReg/AArch64-id_aa64pfr0_el1.html),
 [ID_AA64MMFR0_EL1](https://df.lth.se/~getz/ARM/SysReg/AArch64-id_aa64mmfr0_el1.html),
 [CTR_EL0](https://df.lth.se/~getz/ARM/SysReg/AArch64-ctr_el0.html).
+The [external MIDR definition](https://df.lth.se/~getz/ARM/SysReg/ext-midr_el1.html)
+specifies the `0xD00` debug-component offset used by the OpenOCD identity path.

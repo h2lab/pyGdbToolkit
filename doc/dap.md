@@ -57,6 +57,12 @@ hardware threads on one SMP connection. The RP2350 configuration exposes
 it does not open another socket. Unidentifiable threads, including RTOS task
 threads that cannot be mapped to physical CPUs, cause an explicit error rather
 than guessing from thread order or GDB thread IDs.
+After switching the GDB thread, the backend also selects and verifies OpenOCD's
+monitor target. Both contexts must agree for subsequent target-specific monitor
+commands. A failed verification restores the previous thread and target.
+The [AArch64 SMP examples](configuration-examples.md) include an OpenOCD/J-Link
+adapter configuration beside the JLinkGDBServer configuration; see
+[SMP support](smp.md) for their parallel mechanics and limits.
 
 With **J-Link Cortex-M**, pyGdbServer registers the server-reported Cortex-M attached
 to the current connection. `dap core list` shows one selected entry with

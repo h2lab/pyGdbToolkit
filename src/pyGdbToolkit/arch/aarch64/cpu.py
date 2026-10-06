@@ -23,6 +23,8 @@ CPU_REGISTERS = (
     ("CurrentEL", 64),
 )
 
+EXTERNAL_MIDR_OFFSET = 0xD00
+
 _ARM_CORES = {
     0xD03: "Cortex-A53",
     0xD07: "Cortex-A57",

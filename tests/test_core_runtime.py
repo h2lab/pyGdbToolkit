@@ -41,11 +41,16 @@ def runtime(fake_gdb, monkeypatch):
     original, threads = make_inferior(1, "localhost:3333")
     fake_gdb._inferior = original
     selected_thread = []
+    monitor_target = []
 
     def execute(command, to_string=True):
         calls.append(command)
         if command == "monitor show cores":
             return " Number Name Type\n *0 Cortex-M33 Cortex-M33\n  1 Cortex-M33 Cortex-M33\n"
+        if command.startswith("monitor targets "):
+            monitor_target[:] = [command.removeprefix("monitor targets ")]
+        elif command == "monitor echo [target current]":
+            return monitor_target[0] if monitor_target else ""
         if command == "add-inferior -no-connection":
             make_inferior(max(item.num for item in inferiors) + 1, None)
         elif command.startswith("inferior "):
@@ -248,7 +253,7 @@ def test_openocd_switch_uses_physical_names_not_thread_order(runtime):
     assert selected.id == 1
     assert selected.thread == 17
     assert len(runtime.inferiors) == 1
-    assert runtime.calls == []
+    assert runtime.calls == ["monitor targets rp2350.cm1", "monitor echo [target current]"]
 
 
 def test_openocd_rejects_rtos_threads(runtime, fake_gdb):
@@ -256,6 +261,32 @@ def test_openocd_rejects_rtos_threads(runtime, fake_gdb):
     runtime.threads.append(SimpleNamespace(name="worker", global_num=1))
     with pytest.raises(fake_gdb.GdbError, match="hardware-core"):
         runtime.controller.list()
+
+
+def test_openocd_monitor_selection_failure_restores_hardware_thread(runtime, fake_gdb, monkeypatch):
+    """Monitor-target verification failure restores both CPU contexts and invalidates caches."""
+    runtime.backend.identifier = OcdIdentifier.OPENOCD
+    for core in (0, 1):
+        thread = SimpleNamespace(name=f"soc.cpu{core}", global_num=core + 1)
+        thread.switch = lambda thread=thread: runtime.selected_thread.__setitem__(
+            slice(None), [thread]
+        )
+        runtime.threads.append(thread)
+    runtime.selected_thread[:] = [runtime.threads[0]]
+    execute = fake_gdb.execute
+
+    def incorrect_monitor(command, to_string=True):
+        if command == "monitor echo [target current]":
+            return "soc.cpu0"
+        return execute(command, to_string)
+
+    monkeypatch.setattr(fake_gdb, "execute", incorrect_monitor)
+    memory = runtime.session.memory
+    with pytest.raises(fake_gdb.GdbError, match="did not select monitor target"):
+        runtime.controller.select(1)
+    assert runtime.controller.current().id == 0
+    assert runtime.calls[-1] == "monitor targets soc.cpu0"
+    assert runtime.session.memory is not memory
 
 
 def test_jlink_never_uses_openocd_core_discovery(runtime, fake_gdb):
