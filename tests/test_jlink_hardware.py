@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
 """Potentially intrusive J-Link validation requiring explicit risk acknowledgement."""
 
 import json
