@@ -2,6 +2,7 @@
     "gdb-path": "gdb-multiarch",
     "gdb-args": [],
     "ocd-path": "pyocd",
+    "ocd-identifier": "pyocd",
     "ocd-args": [
         "gdbserver",
         "--port", "{gdb_port}",

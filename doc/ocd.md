@@ -1,10 +1,72 @@
-# OCD Identification
+<!--
+SPDX-FileType: DOCUMENTATION
+SPDX-FileCopyrightText: 2026 H2Lab Development Team
+SPDX-License-Identifier: Apache-2.0
+-->
+# OCD Backends and Identification
 
-The `pyGdbToolkit.ocd` module identifies the on-chip debugger connected to GDB.
+The `pyGdbToolkit.ocd` package identifies the on-chip debugger connected to GDB
+and owns the debug-server-specific CPU selection strategies.
 It does not register a command and does not open a second probe connection.
 Toolkit startup attempts a read-only probe. Loading the package without a
 remote connection is supported: the identity remains `unknown`, and a later
 interface call probes the connected server.
+
+## Package Hierarchy
+
+```text
+pyGdbToolkit/
+  core_runtime.py               CLI/RPC orchestration and cache invalidation
+  ocd/
+    __init__.py                 Stable public detection API
+    detection.py                Connection-aware OCD identification
+    base.py                     CoreInfo, attachment state and CoreBackend contract
+    context.py                  Shared GDB inferior lifecycle and rollback
+    registry.py                 Resolution of detected server strategies
+    jlinkgdbserver.py            Attached-core metadata, configured endpoints and identity
+    openocd.py                  Named hardware-thread inventory and selection
+    pyocd.py                    Server inventory and per-core endpoint mapping
+```
+
+`CoreBackend` defines the same external CPU interface for all three strategies:
+`list_cores()`, `current_core()`, and `select_core(core)`. Registration methods
+are explicit capabilities: a backend that does not accept configured cluster
+or attached-core metadata rejects them rather than inventing an inventory.
+`invalidates_selection` lets an attached-core no-op preserve cached inspection,
+while context-changing selection attempts invalidate it.
+
+`GdbCoreController` resolves the backend through `CoreBackendRegistry`, validates
+the requested ID, delegates selection, verifies the selected ID and invalidates
+the shared toolkit session. It contains no server-specific inventory parser,
+monitor command, affinity interpretation or selection branch. Existing
+`CORES.register_jlink_core()` and `CORES.register_jlink_cluster()` entry points
+remain thin compatibility delegations for pyGdbServer.
+
+Each backend receives `CoreContextAccess`, a protocol exposing the session,
+current remote connection, valid attachment lookup and `select_endpoint()`.
+`GdbCoreContext` implements those common GDB operations: create an inferior,
+copy architecture and symbols, connect, reuse verified attachments, and restore
+the prior context if a new attachment fails. Backends supply their connection
+mode and optional verification callback; this shared layer does not identify
+the server or decode architecture registers.
+
+Backend-specific state lives alongside its strategy. The shared `CoreInfo`
+and `CoreSessionState` models live in `ocd/base.py`; J-Link connection and cluster
+states live in `ocd/jlinkgdbserver.py`. Their historical imports from
+`core_runtime.py` remain aliases to the same classes, not duplicate state types.
+The former `core_jlink.py` helper has been merged into the J-Link backend.
+
+The package root exports detection only, keeping session initialization free of
+eager backend imports and circular dependencies. Backend strategies are composed
+when the core controller is created. Lower modules do not import `core_runtime`.
+Adding a server strategy requires implementing `CoreBackend` and registering it
+in `ocd/registry.py`, not adding branches to the controller or DAP command.
+
+CPU selection is separate from AP transport: the existing `DebugPortTransport`
+interface still owns AP transactions and architectural AP decoding stays in
+the `arch` package. pyGdbServer retains executable argument generation, port
+allocation and process supervision because they precede GDB-side detection.
+See [SMP support](smp.md) for runtime behavior and configuration.
 
 ## Interface
 
@@ -49,13 +111,14 @@ not `extended-remote`. For an already running server on the default port:
 target remote localhost:2331
 ```
 
-Identification has been verified with J-Link V9.82 on the i.MX8MP Cortex-M7.
-No AArch64 target support is added. The J-Link AP transport supports the
+Identification has been verified with J-Link V9.82 on the i.MX8MP Cortex-M7
+and AArch64 contexts. The J-Link AP transport supports the
 verified ADIv5 JTAG-DPv0 configuration, where DP SELECT can be read back.
 It uses `ReadAPEx` to inspect AP registers, saves SELECT, and restores and
 verifies it even when a read fails. The restoration writes only the debug-port
 selection register, not AP transfer registers or target memory. SWD/other DP
-versions and switching to other physical cores currently report explicit errors.
+versions report explicit errors. CPU context switching uses the separate core
+backend contract, not AP selection.
 
 ### Attached Cortex-M Identity
 
@@ -74,8 +137,7 @@ SEGGER physical CPU identifier. Selecting it has no side effects; other IDs
 are rejected. No AP or target-memory operation is needed. This works with
 recognized Cortex-M names independently of the board's device identifier.
 
-For complex targets such as the **i.MX8M family**, J-Link `dap core` is
-supported **only through pyGdbServer**. Correct identification requires
+J-Link attached-core registration is managed by **pyGdbServer**. Correct identification requires
 correlating the OCD's connected CPU with GDB's actual inferior/connection,
 not merely recognizing the probe or reading the configured device name.
 pyGdbServer supervises both OCD and GDB, captures the connection evidence,
@@ -85,7 +147,11 @@ Standalone GDB does not automatically receive this correlated information.
 The low-level registration API does not, by itself, establish that correlation
 and is not a substitute for pyGdbServer's supported workflow on these targets.
 The declaration is scoped to the current inferior/connection, not transferable
-to a later connection. Neither AArch64 nor Cortex-R support is added.
+to a later connection. This connection-log parser remains Cortex-M-specific;
+configured multicore endpoints use `JLinkCoreBackend`'s cluster mode instead.
+Architecture-dependent identity evidence belongs to that backend, not to
+the common controller. See [SMP support](smp.md) for full and partial affinity
+evidence and its limitations.
 
 `dap select` changes the toolkit's profiling selection only, not the AP used
 by J-Link's ordinary GDB memory accesses. The initial profiling selection is

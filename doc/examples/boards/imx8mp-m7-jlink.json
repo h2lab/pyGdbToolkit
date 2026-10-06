@@ -5,13 +5,14 @@
         "-ex", "set endian little"
     ],
     "ocd-path": "JLinkGDBServer",
+    "ocd-identifier": "jlinkgdbserver",
     "ocd-args": [
         "-if", "JTAG",
         "-device", "MIMX8ML6_M7",
         "-speed", "1000",
         "-endian", "little",
         "-port", "{gdb_port}",
-        "-swoport", "2332",
+        "-swoport", "{swo_port}",
         "-telnetport", "{telnet_port}",
         "-localhostonly", "1"
     ],

@@ -27,6 +27,7 @@ finally the public API. A failed stage stops the complete stack.
   "gdb-path": "gdb-multiarch",
   "gdb-args": [],
   "ocd-path": "pyocd",
+  "ocd-identifier": "pyocd",
   "ocd-args": ["gdbserver", "--port", "{gdb_port}", "-T", "{telnet_port}"],
   "listen-address": "127.0.0.1:1234",
   "gdb-init": ["monitor reset halt"],
@@ -40,11 +41,13 @@ finally the public API. A failed stage stops the complete stack.
 | `gdb-path` | GDB executable. |
 | `gdb-args` | Extra GDB arguments. They must not establish the target connection. |
 | `ocd-path` | pyOCD, OpenOCD, SEGGER JLinkGDBServer (including JLinkGDBServerCLExe), or another GDB-server executable. |
-| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. pyOCD, OpenOCD, and J-Link receive GDB port arguments automatically when `{gdb_port}` is omitted; Telnet arguments must be supplied explicitly. |
+| `ocd-identifier` | Backend protocol: `jlinkgdbserver`, `openocd`, or `pyocd`. Overrides executable-name inference, including for wrappers. Legacy files may omit it. |
+| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. J-Link also supports `{swo_port}`. pyOCD, OpenOCD, and J-Link receive GDB port arguments automatically when `{gdb_port}` is omitted; Telnet and SWO arguments must be supplied explicitly outside cluster mode. |
 | `listen-address` | Public WebSocket address. Port `0` requests a dynamic API port. |
 | `gdb-init` | GDB CLI commands run after connection and toolkit loading. |
 | `log-directory` | Parent of timestamped run-log directories. |
 | `startup-timeout` | Per-stage timeout in seconds. |
+| `jlink-core-devices` | Optional mapping of non-negative core IDs to unique SEGGER device selectors. Allowed only for `ocd-identifier: jlinkgdbserver` (or a legacy inferred J-Link backend). The initial `-device` must belong to the mapping. |
 
 The OCD GDB endpoint and raw MI adapter always bind to `127.0.0.1` with dynamic
 ports. The raw MI adapter is for local diagnostics; clients should use the API.
@@ -62,36 +65,63 @@ Set `ocd-path` to your SEGGER executable and supply your target-specific
 pyGdbServer adds `-localhostonly 1` and `-port` with its allocated GDB port.
 An explicit `-port` (or `-p`) must use `{gdb_port}`; `-localhostonly 0` is rejected.
 For multiple instances, configure `-telnetport {telnet_port}` explicitly and
-allocate separate SWO ports with J-Link's `-swoport` option.
+use `-swoport {swo_port}`. In `jlinkgdbserver` mode, pyGdbServer allocates three
+distinct loopback ports together for GDB, Telnet and SWO, including single-core
+sessions. The SWO placeholder is not supported for other backend identifiers.
+Explicit fixed SWO ports remain supported, but can conflict across instances.
+
+```json
+{
+  "ocd-identifier": "jlinkgdbserver",
+  "ocd-path": "JLinkGDBServer",
+  "ocd-args": [
+    "-device", "YOUR_DEVICE", "-if", "JTAG",
+    "-port", "{gdb_port}",
+    "-telnetport", "{telnet_port}",
+    "-swoport", "{swo_port}"
+  ]
+}
+```
+
+This fragment only illustrates the port settings. Complete the target-specific
+arguments and other fields using the [configuration examples](configuration-examples.md).
 
 J-Link identification and ADIv5 JTAG-DPv0 AP inspection are supported.
 Successful J-Link connection logs also provide the attached Cortex-M identity
 to `dap core` and the core RPCs. The single local core `0` has scope
 `attached-core-only`; selecting it does not change target state. An unknown
 log format leaves identity unavailable. Discovery of other SoC cores,
-switching to them and J-Link SWD/ADIv6 AP inspection are not implemented.
+switching to unconfigured cores and J-Link SWD/ADIv6 AP inspection are not implemented.
 AP selection is local to toolkit profiling; it does not reroute GDB memory
 accesses. See [ocd.md](ocd.md).
 
-On complex SoCs such as the **i.MX8M family**, J-Link `dap core` support
-requires **pyGdbServer** to correlate the OCD-reported CPU with the current
-GDB inferior/connection. Supervising OCD and GDB together provides a coherent
-identity and session lifecycle. A standalone GDB/J-Link connection does not
-provide the supported `dap core` workflow for these targets.
+Configured J-Link multicore sessions require **pyGdbServer** to supervise
+per-core servers and register their endpoints with GDB. This mechanism is
+independent of device spelling and CPU model; actual identity evidence depends
+on the architecture-specific reader. See [SMP support](smp.md) for context
+models, generic configuration, supervision, and safety limitations.
 
 An {ref}`i.MX8MP Cortex-M7 J-Link example <imx8mp-m7-jlink>`
 provides the `MIMX8ML6_M7` JTAG configuration, startup commands and port settings.
 An {ref}`i.MX8MP Cortex-A53 J-Link example <imx8mp-a53-jlink>`
 provides the `MIMX8ML6_A53_0` configuration with AArch64 GDB setup and no startup
-reset. It selects core 0 only, not SMP; see [lscpu.md](lscpu.md) for AArch64
-CPU-report support.
+reset. Its `jlink-core-devices` mapping enables per-core cluster pivots using
+`dap core` and the core RPCs. pyGdbServer supervises one J-Link process per
+configured core and allocates distinct GDB, Telnet and SWO ports for each.
+Additional GDB inferiors are attached lazily and available architectural
+identity is checked after selection. Startup normally halts every configured core; shared-target
+reset/load initialization is rejected and `-noreset -noir` is enforced.
+Removing the mapping keeps the ordinary single-server configuration.
+This is not an atomic all-core halt/resume interface; see [dap.md](dap.md) for
+SMP limitations and [lscpu.md](lscpu.md) for AArch64 CPU-report support.
 
 ### Multiple instances on the same loopback address
 
 Use a different public `listen-address` port in each instance's JSON file.
 pyGdbServer selects distinct free GDB and Telnet ports on `127.0.0.1` using the
 operating system's port-`0` allocation and substitutes them for `{gdb_port}` and
-`{telnet_port}` in `ocd-args`. Both sockets are held during allocation to ensure
+`{telnet_port}` in `ocd-args`. J-Link additionally allocates `{swo_port}` in the
+same operation. The sockets are held during allocation to ensure
 the ports differ, then released before OCD starts. Another process could still
 claim a port between allocation and OCD startup.
 

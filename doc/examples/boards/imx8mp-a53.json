@@ -6,6 +6,7 @@
         "-ex", "set remotetimeout 60"
     ],
     "ocd-path": "JLinkGDBServer",
+    "ocd-identifier": "jlinkgdbserver",
     "ocd-args": [
         "-if", "JTAG",
         "-device", "MIMX8ML6_A53_0",
@@ -14,11 +15,17 @@
         "-noreset",
         "-noir",
         "-port", "{gdb_port}",
-        "-swoport", "2332",
+        "-swoport", "{swo_port}",
         "-telnetport", "{telnet_port}",
         "-localhostonly", "1"
     ],
     "listen-address": "localhost:1234",
+    "jlink-core-devices": {
+        "0": "MIMX8ML6_A53_0",
+        "1": "MIMX8ML6_A53_1",
+        "2": "MIMX8ML6_A53_2",
+        "3": "MIMX8ML6_A53_3"
+    },
     "gdb-init": [
         "set mem inaccessible-by-default off"
     ],

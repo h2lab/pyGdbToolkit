@@ -1,9 +1,17 @@
+<!--
+SPDX-FileCopyrightText: 2026 H2Lab Development Team
+SPDX-License-Identifier: Apache-2.0
+-->
 # Configuration examples
 
 These files are starting points, not universal board configurations. Replace
 executable paths, target names, probe serial numbers and board scripts with
 values matching your installation. Initialization can reset the target and
 load an SVD over the network.
+
+All examples declare `ocd-identifier` separately from the executable path.
+Backend values are `jlinkgdbserver`, `openocd`, and `pyocd`. Multicore context
+models and the generic J-Link core mapping are described in [SMP support](smp.md).
 
 ## OpenOCD with STM32U5
 
@@ -33,9 +41,9 @@ little-endian. GDB's ARM architecture is set before connecting; pyGdbServer
 automatically uses `target remote`, not `extended-remote`.
 
 Stop any manually started J-Link GDB Server using the same probe before
-launching pyGdbServer. The SWO port remains `2332`; change it when that port
-is already in use. GDB and Telnet ports are allocated dynamically using
-`{gdb_port}` and `{telnet_port}` instead of fixed ports `2331` and `2333`.
+launching pyGdbServer. GDB, Telnet and SWO ports are allocated dynamically using
+`{gdb_port}`, `{telnet_port}` and `{swo_port}` instead of fixed ports
+`2331`, `2333` and `2332`.
 
 The private J-Link endpoint uses `-localhostonly 1`, not `-nolocalhostonly`.
 Remote clients connect to pyGdbServer's WebSocket API, not directly to J-Link.
@@ -63,9 +71,15 @@ This configuration uses `gdb-multiarch` and `JLinkGDBServer` with SEGGER's
 GDB's `aarch64` architecture and 60-second remote timeout are set before
 connecting. pyGdbServer automatically uses `target remote`.
 
-The example selects A53 core 0 only; it does not enable SMP or start secondary
-cores. The toolkit can load on this target and `lscpu` supports AArch64 CPU
-identification; other commands have not gained AArch64 implementations.
+The initial `-device` matches ID `0` in the explicit `jlink-core-devices` mapping,
+which declares all four
+A53 devices and enables `dap core` pivots through one supervised J-Link server
+per core. All four cores must already be accessible and powered; the configuration
+does not start secondary cores. Startup normally halts the whole configured
+cluster sequentially, not atomically. Remove the mapping for single-core operation.
+See [SMP support](smp.md) for per-core halt/breakpoint behavior and SMP
+limitations. `lscpu` also supports AArch64 CPU identification; other diagnostic
+commands have not gained AArch64 implementations.
 See [AArch64 lscpu](lscpu.md) for available register information
 and J-Link limitations.
 
@@ -75,10 +89,12 @@ CPU. `set mem inaccessible-by-default off` changes GDB's memory-access policy;
 it does not disable CPU caches.
 
 Stop any manually started J-Link GDB Server using the same probe before
-launching this example. GDB and Telnet ports use the dynamic `{gdb_port}` and
-`{telnet_port}` placeholders; SWO remains on port `2332`. The private endpoint
+launching this example. GDB, Telnet and SWO ports use the dynamic `{gdb_port}`,
+`{telnet_port}` and `{swo_port}` placeholders. In cluster mode, each core receives
+its own distinct allocated ports; single-core operation also uses dynamic SWO.
+The private endpoint
 is localhost-only and the public WebSocket API listens on `localhost:1234`.
-Change conflicting SWO or public API ports before running multiple instances.
+Change conflicting public API ports before running multiple instances.
 
 ```console
 pyGdbServer doc/examples/boards/imx8mp-a53.json

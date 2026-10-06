@@ -1,9 +1,14 @@
+<!--
+SPDX-FileCopyrightText: 2026 H2Lab Development Team
+SPDX-License-Identifier: Apache-2.0
+-->
 # Access Ports
 
 `dap` inspects the Access Ports of the target connected to the current GDB
 inferior. The toolkit automatically detects pyOCD, OpenOCD or J-Link and uses its public
-`monitor` commands over the existing GDB connection. No second probe connection
-is opened. ARM ADIv5/APv1
+`monitor` commands over the existing GDB connection. AP inspection opens no
+additional probe connection. A configured multicore system uses separate supervised
+J-Link sessions for CPU contexts, as described below. ARM ADIv5/APv1
 and ADIv6/APv2 are supported by pyOCD/OpenOCD, independently of JTAG or SWD wiring.
 J-Link AP inspection currently supports the verified ADIv5 JTAG-DPv0 backend.
 
@@ -53,26 +58,78 @@ it does not open another socket. Unidentifiable threads, including RTOS task
 threads that cannot be mapped to physical CPUs, cause an explicit error rather
 than guessing from thread order or GDB thread IDs.
 
-With **J-Link**, pyGdbServer registers the server-reported Cortex-M attached
+With **J-Link Cortex-M**, pyGdbServer registers the server-reported Cortex-M attached
 to the current connection. `dap core list` shows one selected entry with
 `scope: attached-core-only`; `dap core` reports it, and `dap core 0` is a no-op.
 The ID `0` is local to this session, not an APSEL or a SEGGER physical-core ID.
 Other IDs are rejected. No RTOS thread switching, AP scanning, memory reads,
 reset or additional probe connection is performed by these core operations.
 
-On complex targets such as the **i.MX8M family**, reliable J-Link `dap core`
-support requires **pyGdbServer**. It correlates the CPU reported by the OCD
-with the actual GDB inferior/connection and manages both processes as one
-coherent debug session. A standalone GDB connection or a configured device
-name alone cannot provide this correlation; standalone J-Link `dap core`
-operation is not supported for these targets.
+J-Link endpoint registration is managed by **pyGdbServer**, which associates
+the detected attached-core identity or configured multicore inventory with the
+actual GDB inferior/connection. A device selector alone is not physical CPU
+identity evidence. See [SMP support](smp.md) for the generic context model.
 
 The identity comes from successful JLinkGDBServer connection logs, not a
 board-name table or the configured `-device` alone. Missing, conflicting or
 unrecognized log formats leave it unavailable. The declaration is bound to
 the GDB inferior/connection pair and becomes invalid after reconnection.
-Cortex-A/AArch64 and Cortex-R are outside this implementation's scope.
-This does not discover all physical CPUs in a multicore SoC.
+This attached-Cortex-M mode does not discover all physical CPUs in a multicore
+SoC. Other CPU families use configured endpoints rather than this Cortex-M-only
+connection-log parser.
+
+### Configured J-Link Multicore Sessions
+
+Declare `ocd-identifier: jlinkgdbserver` and an explicit `jlink-core-devices`
+mapping of core IDs to SEGGER device selectors. The initial attached core is
+the mapping entry matching `-device`, independent of device spelling, CPU
+model, and ID order. The controller accepts non-contiguous IDs and does not
+assume a fixed core count or equate IDs with architectural affinity values.
+
+pyGdbServer starts one JLinkGDBServer per configured core, sharing the physical
+probe but using distinct dynamically allocated GDB, Telnet and SWO ports.
+Each session uses `-noreset -noir`; cluster `gdb-init` must not reset or load the
+shared target. All configured cores are contacted and normally halted during
+startup. Declare only accessible, powered cores; the toolkit does not power up
+secondary cores or scan unclocked CoreSight components.
+
+`dap core list` lists the **configured** multicore inventory, not a hardware-discovered
+inventory. Entries have `scope: configured-core-cluster`; additional GDB
+inferiors are attached lazily by `dap core N` and then reused. Identity evidence
+is recorded by the backend adapter: full or partial architectural affinity when
+implemented and readable, otherwise the configured endpoint. Repeated pivots
+require stable observations; duplicate affinities and inconsistent identities
+fail explicitly. Endpoint evidence alone does not prove distinct physical CPUs.
+Session memory and architecture caches are invalidated after selection.
+
+The same CLI and RPC interfaces are used across supported backends:
+
+```gdb
+dap core list
+dap core 1
+monitor halt
+monitor IsHalted
+info registers pc
+hbreak *0xADDRESS
+dap core 0
+```
+
+Replace `0xADDRESS` with an executable address in the selected core's context.
+Ordinary GDB breakpoint commands apply through that core's remote connection;
+use explicit GDB inferior restrictions when a breakpoint must remain local to
+one core. Software breakpoints can modify memory shared by other cores.
+
+This provides per-core debugging of a running SMP system, **not** atomic
+all-core halt/resume, CTI cross-trigger configuration or Linux task awareness.
+The selected core can be halted with `monitor halt` or interrupted while its GDB
+connection is running; other cores are not implicitly synchronized. The target
+OS can stall or trigger watchdogs when individual cores are halted.
+An unconfigured standalone J-Link session still does not discover the cluster.
+
+The dedicated [SMP chapter](smp.md) documents backend configuration, identity
+evidence, architecture/backend boundaries, and the current hardware validation
+scope. Board-specific selectors remain in the
+[configuration examples](configuration-examples.md), not in the common model.
 
 SEGGER's [UM08036 protocol extensions manual](https://www.segger.com/downloads/jlink/UM08036)
 (V1.00) documents trace/SWO queries, not a core-inventory query or a physical
@@ -80,7 +137,7 @@ CPU-number query. Consequently no undocumented remote packet or `monitor core`
 fallback is used. See [ocd.md](ocd.md) for identity registration details.
 
 Selection does not explicitly reset or resume the target, nor change APSEL.
-Attaching a new pyOCD socket can halt its core according to the server's connection
+Attaching a new pyOCD or J-Link socket can halt its core according to the server's connection
 policy. The active AP is rediscovered on the next AP operation because a server
 can change its monitor MEM-AP when the CPU context changes. `dap select` retains
 its AP-only semantics.
@@ -197,12 +254,15 @@ server/GDB can halt execution according to their configuration.
   `DebugPortTransport` without adding register decoding to the command.
 - `arch/dap.py`: portable profile model and architecture provider registry.
 - `arch/arm/dap.py`: ARM AP register layout, identity and capability decoding.
-- `ocd.py`: startup OCD detection and a connection-aware identity interface;
+- `ocd/`: connection-aware detection and uniform CPU backends in
+  `jlinkgdbserver.py`, `openocd.py` and `pyocd.py`;
     see [ocd.md](ocd.md).
 - `ap_runtime.py`: architecture provider composition and automatic OCD transport.
 - `cmd_dap.py`: argument handling, rendering, JSON export and session state.
-- `core_runtime.py`: physical core discovery and GDB context selection shared
-  by `dap core` and the server RPCs.
+- `core_runtime.py`: backend-neutral request validation, selection orchestration
+  and cache invalidation shared by `dap core` and the server RPCs.
+- `ocd/context.py`: common GDB inferior attachment, reuse and rollback, injected
+  into CPU backends through the `CoreContextAccess` protocol.
 
 Other GDB servers, multi-DP addressing, JTAG chain configuration, downstream
 JTAG-AP operations and COM-AP transactions are not implemented. Unsupported

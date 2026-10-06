@@ -52,6 +52,11 @@ def runtime(fake_gdb, monkeypatch):
             fake_gdb._inferior = next(
                 item for item in inferiors if item.num == int(command.split()[1])
             )
+        elif command.startswith("set architecture "):
+            architecture_name = command.removeprefix("set architecture ")
+            fake_gdb._inferior.architecture = lambda: SimpleNamespace(
+                name=lambda: architecture_name
+            )
         elif command.startswith("target "):
             if fail:
                 raise fake_gdb.GdbError("connection refused")
@@ -92,6 +97,29 @@ def test_pyocd_list_does_not_connect(runtime):
     assert not any(command.startswith("target ") for command in runtime.calls)
 
 
+def test_controller_uses_only_the_common_backend_interface(runtime, monkeypatch):
+    """A strategy not known by controller conditionals can own selection and inventory."""
+    from pyGdbToolkit.ocd.base import CoreInfo
+
+    calls = []
+    core = CoreInfo(7, "Injected CPU", True, "configured endpoint")
+    backend = SimpleNamespace(
+        invalidates_selection=True,
+        list_cores=lambda: (core,),
+        current_core=lambda: core,
+        select_core=lambda selected: calls.append(selected.id),
+    )
+    monkeypatch.setattr(runtime.controller._backends, "resolve", lambda identifier: backend)
+    memory = runtime.session.memory
+
+    assert runtime.controller.list() == (core,)
+    assert runtime.controller.current() == core
+    assert runtime.controller.select(7) == core
+    assert calls == [7]
+    assert runtime.session.memory is not memory
+    assert runtime.calls == []
+
+
 def test_pyocd_switch_reuses_inferiors_and_invalidates_memory(runtime):
     previous_memory = runtime.session.memory
     assert runtime.controller.select(1).id == 1
@@ -100,6 +128,93 @@ def test_pyocd_switch_reuses_inferiors_and_invalidates_memory(runtime):
     assert runtime.calls.count("target extended-remote localhost:3334") == 1
     assert len(runtime.inferiors) == 2
     assert runtime.session.memory is not previous_memory
+
+
+def test_jlink_cluster_pivots_verified_endpoints(runtime, fake_gdb, monkeypatch):
+    """Preserve the initial nonzero core ID and verify each selected endpoint."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.inferiors[0].architecture = lambda: SimpleNamespace(name=lambda: "aarch64")
+    execute = fake_gdb.execute
+
+    def cluster_execute(command, to_string=True):
+        if command == "monitor cp15 0,0,0,5":
+            endpoint = fake_gdb._inferior.connection.details
+            core = 2 if endpoint == "localhost:3333" else int(endpoint.rsplit(":", 1)[1]) - 4000
+            return f"Reading CP15 register (0,0,0,5 = 0x{0x80000000 | core:08X})"
+        return execute(command, to_string)
+
+    monkeypatch.setattr(fake_gdb, "execute", cluster_execute)
+    runtime.controller.register_jlink_cluster({0: "127.0.0.1:4000", 2: "127.0.0.1:4002"}, 2)
+    assert runtime.controller.current().id == 2
+    assert runtime.controller.list()[0].scope == "configured-core-cluster"
+    assert runtime.controller.select(0).id == 0
+    assert runtime.controller.select(2).id == 2
+    assert runtime.controller.select(0).id == 0
+    assert runtime.calls.count("target remote 127.0.0.1:4000") == 1
+
+
+def test_jlink_cluster_failed_affinity_restores_original(runtime, fake_gdb, monkeypatch):
+    """A wrong endpoint must not become the requested physical CPU."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.inferiors[0].architecture = lambda: SimpleNamespace(name=lambda: "aarch64")
+    execute = fake_gdb.execute
+
+    def cluster_execute(command, to_string=True):
+        if command == "monitor cp15 0,0,0,5":
+            return "Reading CP15 register (0,0,0,5 = 0x80000000)"
+        return execute(command, to_string)
+
+    monkeypatch.setattr(fake_gdb, "execute", cluster_execute)
+    runtime.controller.register_jlink_cluster({0: "127.0.0.1:4000", 1: "127.0.0.1:4001"}, 0)
+    with pytest.raises(fake_gdb.GdbError, match="did not confirm"):
+        runtime.controller.select(1)
+    assert runtime.controller.current().id == 0
+    assert len(runtime.inferiors) == 1
+
+
+def test_jlink_cluster_ids_are_not_architectural_affinity(runtime, fake_gdb, monkeypatch):
+    """Non-contiguous application IDs work with affinity values unrelated to those IDs."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.inferiors[0].architecture = lambda: SimpleNamespace(name=lambda: "aarch64")
+    execute = fake_gdb.execute
+
+    def cluster_execute(command, to_string=True):
+        if command == "monitor cp15 0,0,0,5":
+            affinity = 0x80010203 if fake_gdb._inferior.num == 1 else 0x80040506
+            return f"Reading CP15 register (0,0,0,5 = 0x{affinity:08X})"
+        return execute(command, to_string)
+
+    monkeypatch.setattr(fake_gdb, "execute", cluster_execute)
+    runtime.controller.register_jlink_cluster(
+        {7: "127.0.0.1:4000", 12: "127.0.0.1:4001"},
+        12,
+        {7: "VendorPrimaryCPU", 12: "VendorSecondaryCPU"},
+    )
+    assert runtime.controller.current().id == 12
+    assert runtime.controller.current().name == "VendorSecondaryCPU"
+    assert runtime.controller.select(7).id == 7
+    assert runtime.controller.select(12).id == 12
+
+
+def test_jlink_generic_cpu_endpoints_do_not_read_arm_registers(runtime):
+    """Non-Arm cores retain configured endpoint evidence without sending CP15 commands."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.controller.register_jlink_cluster({9: "127.0.0.1:4000"}, 9)
+    assert runtime.controller.current().id == 9
+    assert runtime.controller.current().identity_source == "configuration+configured-endpoint"
+    assert runtime.calls == []
+
+
+def test_jlink_full_mpidr_distinguishes_aff3(runtime, fake_gdb):
+    """Architectural affinity includes the high Aff3 level when GDB exposes all 64 bits."""
+    runtime.backend.identifier = OcdIdentifier.JLINK
+    runtime.inferiors[0].architecture = lambda: SimpleNamespace(name=lambda: "aarch64")
+    fake_gdb._frame = SimpleNamespace(read_register=lambda name: 0x1280000003)
+    runtime.controller.register_jlink_cluster({8: "127.0.0.1:4000"}, 8)
+    from pyGdbToolkit.core_runtime import JLinkClusterState
+
+    assert runtime.session.state(JLinkClusterState).identities[8] == ("mpidr:1200000003", "mpidr")
+    assert runtime.calls == []
 
 
 def test_pyocd_failed_connection_restores_original(runtime, fake_gdb):

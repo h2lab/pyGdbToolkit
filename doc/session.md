@@ -123,8 +123,11 @@ the initial description uses `AArch64` and `unknown`. Ambiguous names such as
 The architecture probe itself only loads and identifies the architecture without
 system-register access. The `lscpu` command additionally has a dedicated AArch64
 register collector and renderer; see [lscpu.md](lscpu.md). Other commands have
-not gained AArch64 implementations, and Cortex-M diagnostic services are not
-dispatched for AArch64 targets. SMP remains unsupported by this backend.
+not gained AArch64 diagnostic implementations, and Cortex-M services are not
+dispatched for AArch64 targets. Independently, the core controller supports
+configured multicore systems through supervised J-Link endpoints; see
+[SMP support](smp.md). The portable controller does not interpret architecture
+affinity values as configured core IDs or provide atomic all-core halt/resume.
 
 Architecture-specific caching lives in the architecture package itself. For Arm, the
 [Arm session state](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/arch/arm/session_state.py) module
