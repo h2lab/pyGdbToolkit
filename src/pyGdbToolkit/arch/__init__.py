@@ -3,6 +3,7 @@
 
 """Portable architecture detection, inspection, and diagnostic APIs."""
 
+from .aarch64.probe import DEFAULT_AARCH64_PROBES
 from .arm.probe import DEFAULT_ARM_PROBES
 from .arm.fault import CortexMFaultCollector
 from .arm.security import CortexMSecurityAuditor
@@ -37,7 +38,7 @@ from .diagnostics import (
 )
 from .registry import ArchitectureRegistry
 
-DEFAULT_ARCHITECTURE_REGISTRY = ArchitectureRegistry(DEFAULT_ARM_PROBES)
+DEFAULT_ARCHITECTURE_REGISTRY = ArchitectureRegistry((*DEFAULT_AARCH64_PROBES, *DEFAULT_ARM_PROBES))
 DEFAULT_DIAGNOSTIC_SERVICE_REGISTRY = DiagnosticServiceRegistry(
     (CortexMSecurityAuditor(), CortexMFaultCollector())
 )

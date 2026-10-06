@@ -107,6 +107,28 @@ the [`arch`](https://github.com/h2lab/pyGdbToolkit/tree/main/src/pyGdbToolkit/ar
 change in the session module: registering an `ArchitectureProbe` in `DEFAULT_ARCHITECTURE_REGISTRY`
 is enough for `SESSION.probe()` to recognize its targets.
 
+### Initial AArch64 support
+
+The `arch.aarch64` package is separate from `arch.arm`. Its probe runs before the Arm
+probes and recognizes explicit GDB architecture names such as `aarch64` and
+`aarch64:ilp32`, obtained from the memory reader's bound inferior. Recognition does
+not read target memory, including the Cortex-M CPUID address.
+
+An AArch64 session exposes `Architecture.AARCH64` and an `AArch64TargetDescription`
+containing the GDB architecture name. The CPU model and revision are not inferred:
+the initial description uses `AArch64` and `unknown`. Ambiguous names such as
+`armv8-a` alone do not establish AArch64 execution state. When needed, select
+`set architecture aarch64` in GDB before initializing the session.
+
+The architecture probe itself only loads and identifies the architecture without
+system-register access. The `lscpu` command additionally has a dedicated AArch64
+register collector and renderer; see [lscpu.md](lscpu.md). Other commands have
+not gained AArch64 diagnostic implementations, and Cortex-M services are not
+dispatched for AArch64 targets. Independently, the core controller supports
+configured multicore systems through supervised J-Link endpoints; see
+[SMP support](smp.md). The portable controller does not interpret architecture
+affinity values as configured core IDs or provide atomic all-core halt/resume.
+
 Architecture-specific caching lives in the architecture package itself. For Arm, the
 [Arm session state](https://github.com/h2lab/pyGdbToolkit/blob/main/src/pyGdbToolkit/arch/arm/session_state.py) module
 defines `ArmInspectionState` and mutualizes:

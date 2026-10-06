@@ -78,6 +78,14 @@ commands and publish `_build/html/` and the PDF as artifacts. Read the Docs runs
 Sphinx directly using the committed PNG images: it needs neither Node.js,
 Mermaid CLI nor Chromium.
 
+Read the Docs does not invoke tox or `render_diagrams.py`. Its Sphinx build
+depends only on the committed PNG assets, never on `diagrams/*.mmd`. A direct
+offline HTML build uses the same path without regenerating diagrams:
+
+```console
+python -m sphinx -b html -n -W --keep-going doc doc/_build/html
+```
+
 For optional ZIP archives and a PDF copy directly under `_build/`, install the
 `dev` extra in your active environment and use the packaging target:
 
@@ -101,6 +109,9 @@ before opening `index.html`.
     `tox -e docs-pdf` to regenerate every PNG through `render_diagrams.py`.
 - Commit each changed Mermaid source together with its regenerated PNG.
     Markdown chapters reference `diagrams/*.png` directly; Sphinx does not render Mermaid.
+- Use PNG for every illustration and workflow diagram in Markdown. Do not embed
+    Mermaid fences, include `.mmd` sources, or use SVG diagrams. Command examples
+    and literal terminal output remain text, not images.
 - Prefer prerequisites, commands, expected results and limitations before implementation details.
 
 The document version is read from installed package metadata, falling back to

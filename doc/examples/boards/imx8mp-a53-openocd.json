@@ -1,0 +1,24 @@
+{
+    "gdb-path": "gdb-multiarch",
+    "gdb-args": [
+        "-ex", "set architecture aarch64",
+        "-ex", "set endian little",
+        "-ex", "set remotetimeout 60"
+    ],
+    "ocd-path": "/usr/bin/openocd",
+    "ocd-identifier": "openocd",
+    "ocd-args": [
+        "-s", "/usr/share/openocd/scripts",
+        "-f", "doc/examples/boards/imx8mp-a53-openocd.cfg",
+        "-c", "bindto 127.0.0.1",
+        "-c", "gdb_port {gdb_port}",
+        "-c", "telnet_port {telnet_port}",
+        "-c", "tcl_port disabled",
+        "-c", "init",
+        "-c", "halt"
+    ],
+    "listen-address": "localhost:1234",
+    "gdb-init": ["set mem inaccessible-by-default off"],
+    "log-directory": ".pygdbserver-logs",
+    "startup-timeout": 30
+}

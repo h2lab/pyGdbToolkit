@@ -2,6 +2,7 @@
     "gdb-path": "gdb-multiarch",
     "gdb-args": [],
     "ocd-path": "openocd",
+    "ocd-identifier": "openocd",
     "ocd-args": [
         "-c", "bindto {loopback}",
         "-c", "gdb_port {gdb_port}",

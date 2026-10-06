@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``lscpu`` GDB command for Cortex-M targets."""
+"""The ``lscpu`` GDB command for Cortex-M and AArch64 targets."""
 
 from __future__ import annotations
 
@@ -11,9 +11,12 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from .arch import Architecture
+from .arch.aarch64.cpu import CpuReport, affinity, physical_address_bits, simd_support
+from .arch.aarch64.session_state import cpu_aarch64_report
 from .arch.arm.coresight import RomTableDiscovery
 from .arch.arm.models import DeviceReport, FieldValue
-from .arch.arm.session_state import device_report
+from .arch.arm.session_state import cpu_arm_report
 from .session import SESSION, CommandHelp, CommandUsage
 from .target_memory import TargetReadError
 
@@ -21,11 +24,11 @@ CONSOLE = Console(force_terminal=True)
 
 
 class LscpuCmd(gdb.Command):
-    """Display CPU and electronic-signature information for a Cortex-M target."""
+    """Display architectural CPU identity and available device information."""
 
     HELP = CommandHelp(
         name="lscpu",
-        summary="Identify the Cortex-M core, vendor, product family, memory, and UID.",
+        summary="Identify the CPU and report available architectural or device information.",
         usage=(CommandUsage("lscpu", "Display the CPU and electronic-signature report"),),
     )
 
@@ -54,14 +57,94 @@ class LscpuCmd(gdb.Command):
             raise gdb.GdbError("lscpu does not accept arguments")
 
         try:
-            report = device_report()
+            render_report()
         except TargetReadError as error:
             raise gdb.GdbError(str(error)) from error
 
-        render_report(report)
+
+def cpu_report() -> DeviceReport | CpuReport:
+    """Collect the CPU report through the implementation for the session architecture."""
+    match SESSION.architecture:
+        case Architecture.ARM:
+            return cpu_arm_report()
+        case Architecture.AARCH64:
+            return cpu_aarch64_report()
+        case None:
+            reason = SESSION.probe().unavailable_reason or "target architecture unavailable"
+            raise gdb.GdbError(f"lscpu: target architecture unavailable: {reason}")
+        case unsupported_architecture:
+            raise gdb.GdbError(f"lscpu does not support architecture '{unsupported_architecture}'")
 
 
-def render_report(report: DeviceReport) -> None:
+def render_report() -> None:
+    """Render the architecture-specific result of the common CPU collection API."""
+    report = cpu_report()
+    if isinstance(report, DeviceReport):
+        render_arm_report(report)
+    else:
+        render_aarch64_report(report)
+
+
+def render_aarch64_report(report: CpuReport) -> None:
+    """Render architected CPU identity without inferring SoC signatures or topology."""
+    table = Table(
+        title="AArch64 CPU report",
+        box=box.SIMPLE_HEAVY,
+        header_style="bold cyan",
+        show_header=True,
+    )
+    table.add_column("Property", style="bold", no_wrap=True)
+    table.add_column("Value")
+    table.add_row("Architecture", report.target.gdb_architecture)
+    identity = report.identity
+    midr = report.register("MIDR_EL1")
+    missing_identity = Text(f"Unavailable: {midr.unavailable_reason}", style="yellow")
+    table.add_row("Core type", missing_identity if identity is None else identity.core_name)
+    table.add_row("Core revision", missing_identity if identity is None else identity.rnp_revision)
+    table.add_row(
+        "Implementer", missing_identity if identity is None else identity.implementer_name
+    )
+    table.add_row(
+        "CPU part number", missing_identity if identity is None else f"0x{identity.part_number:03X}"
+    )
+    mpidr = report.register("MPIDR_EL1").value
+    if mpidr is not None:
+        table.add_row(
+            "Affinity (Aff3:Aff2:Aff1:Aff0)", ":".join(str(part) for part in affinity(mpidr))
+        )
+        table.add_row("MPIDR MT / U", f"{(mpidr >> 24) & 1} / {(mpidr >> 30) & 1}")
+    current_el = report.register("CurrentEL").value
+    if current_el is not None:
+        table.add_row("Current exception level", f"EL{(current_el >> 2) & 3}")
+    pfr0 = report.register("ID_AA64PFR0_EL1").value
+    if pfr0 is not None:
+        table.add_row("Floating point", simd_support(pfr0, 16))
+        table.add_row("Advanced SIMD", simd_support(pfr0, 20))
+    mmfr0 = report.register("ID_AA64MMFR0_EL1").value
+    if mmfr0 is not None:
+        bits = physical_address_bits(mmfr0)
+        table.add_row(
+            "Physical address width", "Unknown encoding" if bits is None else f"{bits} bits"
+        )
+    ctr = report.register("CTR_EL0").value
+    if ctr is not None:
+        table.add_row("Minimum instruction cache line", f"{4 << (ctr & 0xF)} bytes")
+        table.add_row("Minimum data cache line", f"{4 << ((ctr >> 16) & 0xF)} bytes")
+    for register in report.registers:
+        value: str | Text
+        if register.value is None:
+            value = Text(f"Unavailable: {register.unavailable_reason}", style="yellow")
+        else:
+            unknown_digits = "?" * ((register.width_bits - register.valid_bits) // 4)
+            value = (
+                f"0x{unknown_digits}{register.value:0{register.valid_bits // 4}X}"
+                f" ({register.source})"
+            )
+        table.add_row(register.name, value)
+    CONSOLE.print(table)
+
+
+def render_arm_report(report: DeviceReport) -> None:
     """Render a stable device report through the shared Rich console.
 
     Parameters

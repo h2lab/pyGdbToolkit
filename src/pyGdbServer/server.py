@@ -32,9 +32,12 @@ class PyGdbServer:
         self.workspace = Path.cwd().resolve()
         self.logs = LogStore(config.log_directory)
         self.ocd: ManagedProcess | None = None
+        self.core_ocds: dict[int, ManagedProcess] = {}
+        self.core_endpoints: dict[int, str] = {}
         self.mi = MiSession(config.gdb_path, config.gdb_args, self.logs)
         self.gdb_port = 0
         self.telnet_port = 0
+        self.swo_port = 0
         self.api_port = 0
         self._status_core_discovery_failed = False
         self._websocket_server: Server | None = None
@@ -42,12 +45,39 @@ class PyGdbServer:
 
     async def start(self) -> None:
         """Start OCD and GDB, connect the target, and load pyGdbToolkit."""
-        self.gdb_port, self.telnet_port = _free_loopback_ports()
-        self.ocd = ManagedProcess(
-            "ocd", self.config.ocd_command(self.gdb_port, self.telnet_port), self.logs
+        if self.config.backend_identifier == "jlinkgdbserver":
+            self.gdb_port, self.telnet_port, self.swo_port = _free_jlink_ports()
+        else:
+            self.gdb_port, self.telnet_port = _free_loopback_ports()
+        cluster = self.config.jlink_cluster()
+        ocd_command = self.config.ocd_command(
+            self.gdb_port, self.telnet_port, self.swo_port or None
         )
+        if cluster:
+            initial_device = self.config.ocd_args[self.config.ocd_args.index("-device") + 1]
+            initial_core = next(
+                core for core, device in cluster.items() if device == initial_device
+            )
+            ocd_command = self.config.jlink_core_command(
+                initial_device, self.gdb_port, self.telnet_port, self.swo_port
+            )
+            self.core_endpoints[initial_core] = f"127.0.0.1:{self.gdb_port}"
+        self.ocd = ManagedProcess("ocd", ocd_command, self.logs)
         await self.ocd.start()
         await self._wait_for_ocd()
+        for core, device in cluster.items():
+            if core in self.core_endpoints:
+                continue
+            port, telnet, swo = _free_jlink_ports()
+            process = ManagedProcess(
+                f"ocd-core-{core}",
+                self.config.jlink_core_command(device, port, telnet, swo),
+                self.logs,
+            )
+            self.core_ocds[core] = process
+            await process.start()
+            await self._wait_for_ocd(process, port)
+            self.core_endpoints[core] = f"127.0.0.1:{port}"
 
         await self.mi.start(self.config.startup_timeout)
         await self.mi.console("set pagination off")
@@ -79,8 +109,18 @@ class PyGdbServer:
         )
 
     async def _register_jlink_core(self) -> None:
-        """Pass the server's connected Cortex-M identity to the existing GDB session."""
-        if "jlinkgdbserver" not in Path(self.config.ocd_path).name.lower():
+        """Register supervised endpoint metadata or a detected attached-core identity."""
+        if self.config.backend_identifier != "jlinkgdbserver":
+            return
+        if self.config.jlink_core_devices:
+            device = self.config.ocd_args[self.config.ocd_args.index("-device") + 1]
+            devices = self.config.jlink_cluster()
+            initial = next(core for core, name in devices.items() if name == device)
+            await self.mi.console(
+                "python from pyGdbToolkit.core_runtime import CORES; "
+                f"CORES.register_jlink_cluster({self.core_endpoints!r}, {initial}, {devices!r})"
+            )
+            self._status_core_discovery_failed = False
             return
         messages = [str(event["message"]) for event in self.logs.get() if event["source"] == "ocd"]
         name = _jlink_core_name(messages)
@@ -97,15 +137,20 @@ class PyGdbServer:
         )
         self._status_core_discovery_failed = False
 
-    async def _wait_for_ocd(self) -> None:
+    async def _wait_for_ocd(
+        self, process: ManagedProcess | None = None, port: int | None = None
+    ) -> None:
+        process = self.ocd if process is None else process
+        port = self.gdb_port if port is None else port
+        source = "ocd" if process is self.ocd else process.name if process is not None else "ocd"
         deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
-        listener_message = _ocd_listener_message(self.config.ocd_path, self.gdb_port)
-        is_jlink = "jlinkgdbserver" in Path(self.config.ocd_path).name.lower()
+        listener_message = _ocd_listener_message(self.config.backend_identifier, port)
+        is_jlink = self.config.backend_identifier == "jlinkgdbserver"
         while asyncio.get_running_loop().time() < deadline:
-            if self.ocd is None or self.ocd.process is None:
+            if process is None or process.process is None:
                 raise RuntimeError("OCD was not started")
             messages = [
-                str(event["message"]) for event in self.logs.get() if event["source"] == "ocd"
+                str(event["message"]) for event in self.logs.get() if event["source"] == source
             ]
             if is_jlink:
                 failures = [
@@ -122,14 +167,14 @@ class PyGdbServer:
                         if "Identified core does not match configuration" in message
                     ]
                     raise RuntimeError(f"J-Link startup failed: {'; '.join(warnings + failures)}")
-            if self.ocd.process.returncode is not None:
-                raise RuntimeError(f"OCD exited with status {self.ocd.process.returncode}")
+            if process.process.returncode is not None:
+                raise RuntimeError(f"OCD exited with status {process.process.returncode}")
             if listener_message is not None:
                 if any(listener_message in message for message in messages):
                     return
             else:
                 try:
-                    _, writer = await asyncio.open_connection("127.0.0.1", self.gdb_port)
+                    _, writer = await asyncio.open_connection("127.0.0.1", port)
                 except OSError:
                     pass
                 else:
@@ -137,7 +182,7 @@ class PyGdbServer:
                     await writer.wait_closed()
                     return
             await asyncio.sleep(0.05)
-        raise TimeoutError(f"OCD did not become ready on GDB port {self.gdb_port}")
+        raise TimeoutError(f"OCD did not become ready on GDB port {port}")
 
     async def _handle_connection(self, websocket: ServerConnection) -> None:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1_000)
@@ -464,6 +509,8 @@ class PyGdbServer:
             self._websocket_server.close()
             await self._websocket_server.wait_closed()
         await self.mi.stop()
+        for process in reversed(tuple(self.core_ocds.values())):
+            await process.stop()
         if self.ocd is not None:
             await self.ocd.stop()
 
@@ -477,6 +524,22 @@ def _timeout(params: dict[str, Any]) -> float:
 
 def _rpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def _free_jlink_ports() -> tuple[int, int, int]:
+    """Reserve all three per-core ports simultaneously to prevent internal collisions."""
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gdb_socket,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as telnet_socket,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as swo_socket,
+    ):
+        for listener in (gdb_socket, telnet_socket, swo_socket):
+            listener.bind(("127.0.0.1", 0))
+        return (
+            int(gdb_socket.getsockname()[1]),
+            int(telnet_socket.getsockname()[1]),
+            int(swo_socket.getsockname()[1]),
+        )
 
 
 def _free_loopback_ports() -> tuple[int, int]:

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""Identify the connected on-chip debugger without registering a GDB command."""
+"""Identify and cache the connected debug server independently of CPU selection."""
 
 from __future__ import annotations
 

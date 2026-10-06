@@ -1,3 +1,7 @@
+<!--
+SPDX-FileCopyrightText: 2026 H2Lab Development Team
+SPDX-License-Identifier: Apache-2.0
+-->
 # pyGdbToolkit User Guide
 
 pyGdbToolkit provides GDB commands for inspecting embedded targets, a supervised
@@ -22,6 +26,7 @@ configuration-examples
 
 lscpu
 dap
+smp
 memmap
 svd
 fault_info

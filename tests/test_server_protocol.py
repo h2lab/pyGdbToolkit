@@ -22,6 +22,7 @@ from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
 from pyGdbServer.server import (
     PyGdbServer,
+    _free_jlink_ports,
     _free_loopback_ports,
     _jlink_core_name,
     _ocd_listener_message,
@@ -41,6 +42,53 @@ def test_gdb_and_telnet_ports_are_distinct_and_available() -> None:
     ):
         gdb_socket.bind(("127.0.0.1", gdb_port))
         telnet_socket.bind(("127.0.0.1", telnet_port))
+
+
+def test_jlink_gdb_telnet_and_swo_ports_are_distinct() -> None:
+    """Every cluster session receives three distinct loopback ports."""
+    ports = _free_jlink_ports()
+    assert len(set(ports)) == 3
+    assert all(0 < port <= 65535 for port in ports)
+    for port in ports:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", port))
+
+
+def test_single_core_jlink_start_expands_each_instances_swo_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Single-core startup passes the allocated SWO port without opening any probe."""
+    from dataclasses import replace
+
+    from pyGdbServer.config import load_config
+    import pyGdbServer.server as server_module
+
+    config = replace(
+        load_config(
+            Path(__file__).resolve().parents[1] / "doc/examples/boards/imx8mp-m7-jlink.json"
+        ),
+        log_directory=tmp_path,
+    )
+    allocations = iter(((4000, 4001, 4002), (5000, 5001, 5002)))
+    monkeypatch.setattr(server_module, "_free_jlink_ports", lambda: next(allocations))
+    monkeypatch.setattr(server_module.ManagedProcess, "start", AsyncMock())
+
+    async def exercise() -> None:
+        for expected in (4002, 5002):
+            server = PyGdbServer(config)
+            monkeypatch.setattr(
+                server, "_wait_for_ocd", AsyncMock(side_effect=RuntimeError("stop before GDB"))
+            )
+            with pytest.raises(RuntimeError, match="stop before GDB"):
+                await server.start()
+            assert server.swo_port == expected
+            assert server.ocd is not None
+            command = server.ocd.command
+            assert command[command.index("-swoport") + 1] == str(expected)
+            assert command[command.index("-port") + 1] == str(expected - 2)
+            assert command[command.index("-telnetport") + 1] == str(expected - 1)
+
+    asyncio.run(exercise())
 
 
 class FakeMiSession:
@@ -390,7 +438,12 @@ def test_known_ocds_use_passive_listener_readiness() -> None:
 
 def _jlink_startup_server(tmp_path: Path, messages: list[str]) -> PyGdbServer:
     server, _ = _server(tmp_path)
-    server.config = SimpleNamespace(ocd_path="JLinkGDBServer", startup_timeout=0.01)
+    server.config = SimpleNamespace(
+        ocd_path="JLinkGDBServer",
+        backend_identifier="jlinkgdbserver",
+        startup_timeout=0.01,
+        jlink_core_devices=(),
+    )
     server.ocd = SimpleNamespace(process=SimpleNamespace(returncode=None))
     server.gdb_port = 43123
     for message in messages:
@@ -516,6 +569,30 @@ def test_jlink_core_registration_does_not_guess_when_logs_are_missing(tmp_path: 
     server.mi.console = AsyncMock()
     asyncio.run(server._register_jlink_core())
     server.mi.console.assert_not_called()
+
+
+def test_jlink_cluster_registration_preserves_initial_ocd_index(tmp_path: Path) -> None:
+    """The initial core is the mapped device ID, not spelling, order or inferior number."""
+    server = _jlink_startup_server(tmp_path, ["Connected to target"])
+    server.config.jlink_core_devices = ("VendorPrimaryCPU", "VendorSecondaryCPU")
+    server.config.ocd_args = ("-device", "VendorSecondaryCPU")
+    server.config.jlink_cluster = lambda: {7: "VendorPrimaryCPU", 12: "VendorSecondaryCPU"}
+    server.core_endpoints = {7: "127.0.0.1:4000", 12: "127.0.0.1:4002"}
+    server.mi.console = AsyncMock(return_value=MiResult("done", "done", ()))
+    asyncio.run(server._register_jlink_core())
+    server.mi.console.assert_awaited_once_with(
+        "python from pyGdbToolkit.core_runtime import CORES; "
+        "CORES.register_jlink_cluster({7: '127.0.0.1:4000', 12: '127.0.0.1:4002'}, 12, {7: 'VendorPrimaryCPU', 12: 'VendorSecondaryCPU'})"
+    )
+
+
+def test_secondary_jlink_readiness_uses_its_own_log_source(tmp_path: Path) -> None:
+    """A ready primary server cannot hide a failed secondary attachment."""
+    server = _jlink_startup_server(tmp_path, ["Connected to target"])
+    process = SimpleNamespace(name="ocd-core-1", process=SimpleNamespace(returncode=None))
+    server.logs.append("ocd-core-1", "stderr", "ERROR: Target connection failed.")
+    with pytest.raises(RuntimeError, match="startup failed"):
+        asyncio.run(server._wait_for_ocd(process, 4001))
 
 
 def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path: Path) -> None:
@@ -765,6 +842,7 @@ def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> No
         stopped: list[str] = []
         server.mi = ManagedStop("gdb", stopped)  # type: ignore[assignment]
         server.ocd = ManagedStop("ocd", stopped)  # type: ignore[assignment]
+        server.core_ocds = {1: ManagedStop("ocd-core-1", stopped)}
 
         async with serve(server._handle_connection, "127.0.0.1", 0) as listener:
             port = listener.sockets[0].getsockname()[1]
@@ -780,7 +858,7 @@ def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> No
     response, stopped = asyncio.run(exercise())
 
     assert response["result"] == {"stopping": True}
-    assert stopped == ["gdb", "ocd"]
+    assert stopped == ["gdb", "ocd-core-1", "ocd"]
 
 
 @pytest.mark.skipif(shutil.which("gdb-multiarch") is None, reason="gdb-multiarch is unavailable")

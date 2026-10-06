@@ -1,24 +1,32 @@
 {
     "gdb-path": "gdb-multiarch",
     "gdb-args": [
-        "-ex", "set architecture arm",
-        "-ex", "set endian little"
+        "-ex", "set architecture aarch64",
+        "-ex", "set endian little",
+        "-ex", "set remotetimeout 60"
     ],
     "ocd-path": "JLinkGDBServer",
     "ocd-identifier": "jlinkgdbserver",
     "ocd-args": [
         "-if", "JTAG",
-        "-device", "MIMX8ML6_M7",
+        "-device", "MIMX8ML6_A53_0",
         "-speed", "1000",
         "-endian", "little",
+        "-noreset",
+        "-noir",
         "-port", "{gdb_port}",
         "-swoport", "{swo_port}",
         "-telnetport", "{telnet_port}",
         "-localhostonly", "1"
     ],
     "listen-address": "localhost:1234",
+    "jlink-core-devices": {
+        "0": "MIMX8ML6_A53_0",
+        "1": "MIMX8ML6_A53_1",
+        "2": "MIMX8ML6_A53_2",
+        "3": "MIMX8ML6_A53_3"
+    },
     "gdb-init": [
-        "monitor reset",
         "set mem inaccessible-by-default off"
     ],
     "log-directory": ".pygdbserver-logs",

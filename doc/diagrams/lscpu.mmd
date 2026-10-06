@@ -1,0 +1,14 @@
+flowchart TD
+    Command["lscpu"] --> Render["render_report()"]
+    Render --> Report["cpu_report() / common collection API"]
+    Report --> Architecture{"SESSION.architecture"}
+    Architecture -->|ARM| Device["cpu_arm_report() / cached device_report()"]
+    Device --> CPUID["CPUID / Cortex-M identity"]
+    CPUID --> ROM["CoreSight ROM discovery"]
+    ROM --> Provider["ProviderRegistry / device profile or generic report"]
+    Provider --> ArmReport["DeviceReport / render_arm_report()"]
+    Architecture -->|AARCH64| CPU["cpu_aarch64_report() / AArch64TargetDescription"]
+    CPU --> Collect["collect_cpu_report() / GdbCpuRegisterReader"]
+    Collect --> Registers["GDB registers / J-Link aliases / OpenOCD external MIDR"]
+    Registers --> CPUReport["CpuReport / render_aarch64_report()"]
+    Architecture -->|Unknown or unsupported| Error["gdb.GdbError / no ARM fallback"]

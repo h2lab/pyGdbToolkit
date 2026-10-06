@@ -17,6 +17,7 @@ class Architecture(StrEnum):
     """Architectures supported by the target-description registry."""
 
     ARM = "arm"
+    AARCH64 = "aarch64"
     RISCV = "riscv"
     XTENSA = "xtensa"
 
