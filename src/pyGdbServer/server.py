@@ -36,6 +36,7 @@ class PyGdbServer:
         self.gdb_port = 0
         self.telnet_port = 0
         self.api_port = 0
+        self._status_core_discovery_failed = False
         self._websocket_server: Server | None = None
         self._shutdown = asyncio.Event()
 
@@ -309,20 +310,11 @@ class PyGdbServer:
         thread_match = re.search(r'current-thread-id="([^"]+)"', result.record)
         core_match = re.search(r'\bcore="([^"]+)"', result.record)
         selected_core = None
-        try:
-            selected_core = str((await self.target_cores("target.core"))["core"]["id"])
-        except RuntimeError:
-            pass
-        if selected_core is None and core_match is None:
-            core_result = await self.mi.console("monitor core")
-            core_match = next(
-                (
-                    match
-                    for output in core_result.output
-                    if (match := re.search(r"\bCore\s+(\d+)\b", output, re.IGNORECASE))
-                ),
-                None,
-            )
+        if not getattr(self, "_status_core_discovery_failed", False):
+            try:
+                selected_core = str((await self.target_cores("target.core"))["core"]["id"])
+            except RuntimeError:
+                self._status_core_discovery_failed = True
         ap_names = sorted(
             {
                 match.group(1)

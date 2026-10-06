@@ -461,7 +461,7 @@ def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path:
 
         async def console(self, command: str, timeout: float = 30.0) -> MiResult:
             self.calls.append(("console", command, timeout))
-            return MiResult("done", "done", ("Core 0 (Cortex-M33) is selected\n",))
+            return MiResult("done", "done", ('PYGDBSERVER_CORE_JSON:{"core":{"id":0}}',))
 
     server = object.__new__(PyGdbServer)
     server.logs = LogStore(tmp_path)
@@ -477,6 +477,36 @@ def test_target_status_reports_thread_state_and_discovered_access_port(tmp_path:
         "access_port": "AHB5-AP#0",
         "access_ports": ["AHB5-AP#0"],
     }
+
+
+def test_target_status_stops_failed_discovery_without_monitor_core(tmp_path: Path) -> None:
+    """J-Link state polling does not retry failed core discovery or issue monitor core."""
+
+    class UnsupportedCoreMiSession(FakeMiSession):
+        async def execute(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("mi", command, timeout))
+            return MiResult(
+                "done", 'done,threads=[{id="1",state="stopped"}],current-thread-id="1"', ()
+            )
+
+        async def console(self, command: str, timeout: float = 30.0) -> MiResult:
+            self.calls.append(("console", command, timeout))
+            assert command != "monitor core"
+            raise RuntimeError("Hardware core discovery is not supported for OCD jlink")
+
+    server, _ = _server(tmp_path)
+    server.mi = UnsupportedCoreMiSession()  # type: ignore[assignment]
+
+    async def exercise() -> None:
+        for _ in range(3):
+            status = await server.target_status()
+            assert status["core"] is None
+            assert status["state"] == "stopped"
+            assert status["thread_id"] == "1"
+
+    asyncio.run(exercise())
+    assert len([call for call in server.mi.calls if call[0] == "console"]) == 1
+    assert len([call for call in server.mi.calls if call[0] == "mi"]) == 3
 
 
 def test_svd_peripherals_returns_structured_device_metadata(tmp_path: Path) -> None:
