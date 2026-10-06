@@ -4,13 +4,15 @@
 """Arm device-provider registry and manufacturer implementations."""
 
 from .base import DeviceProvider, ProviderRegistry
+from .manufacturers.nxp import NxpProvider
 from .manufacturers.stm32 import Stm32Provider
 
-DEFAULT_PROVIDER_REGISTRY = ProviderRegistry((Stm32Provider(),))
+DEFAULT_PROVIDER_REGISTRY = ProviderRegistry((Stm32Provider(), NxpProvider()))
 
 __all__ = [
     "DEFAULT_PROVIDER_REGISTRY",
     "DeviceProvider",
     "ProviderRegistry",
+    "NxpProvider",
     "Stm32Provider",
 ]

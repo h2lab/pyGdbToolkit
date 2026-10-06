@@ -17,6 +17,7 @@ from pyGdbToolkit.arch.arm.coresight import (
 from pyGdbToolkit.arch.arm.cortex_m import CortexMTargetDescription, decode_cpuid
 from pyGdbToolkit.arch.arm.models import DeviceReport, FieldValue
 from pyGdbToolkit.arch.arm.providers import DEFAULT_PROVIDER_REGISTRY, ProviderRegistry
+from pyGdbToolkit.arch.arm.providers.manufacturers.nxp import NxpProvider
 from pyGdbToolkit.arch.arm.providers.manufacturers.stm32 import (
     ST_JEP106_IDENTITY,
     STM32_PROFILES,
@@ -208,6 +209,76 @@ def test_unknown_manufacturer_strictly_uses_generic_fallback() -> None:
     assert report.vendor == "Generic Cortex-M"
     assert "code 0x21" in report.product_line.unavailable_reason
     assert all(address not in _FORBIDDEN_LEGACY_ADDRESSES for address, _ in memory.calls)
+
+
+@pytest.mark.parametrize("code", [0x15, 0x0E])
+@pytest.mark.parametrize("cpuid", [0x413FC241, 0x411FC272, 0x410FD213])
+def test_nxp_rom_identity_preserves_cpuid_without_extra_reads(code: int, cpuid: int) -> None:
+    """Recognize NXP and legacy Freescale without inferring a product from its CPU."""
+    memory = FakeTargetMemory()
+    _write_mcu_rom_root(memory, bank=0, code=code, part_number=0x4C8)
+    discovery = discover_rom_tables(memory)
+    target = decode_cpuid(cpuid)
+    calls_before = list(memory.calls)
+
+    report = DEFAULT_PROVIDER_REGISTRY.inspect(memory, target, discovery)
+
+    assert report.vendor == "NXP Semiconductors"
+    assert report.target == target
+    assert report.discovery is discovery
+    assert memory.calls == calls_before
+    for field in (
+        report.product_line,
+        report.part_number,
+        report.ram,
+        report.flash,
+        report.package,
+        report.serial_number,
+    ):
+        assert not field.is_available
+        assert "part 0x4C8" in field.unavailable_reason
+        assert "no documented device profile" in field.unavailable_reason
+
+
+@pytest.mark.parametrize(
+    "bank,code,jedec",
+    [
+        (1, 0x15, True),
+        (1, 0x0E, True),
+        (4, 0x3B, True),
+        (0, 0x20, True),
+        (0, 0x15, False),
+    ],
+)
+def test_nxp_provider_requires_full_mcu_jep106_identity(bank: int, code: int, jedec: bool) -> None:
+    """Arm's ROM part or a code in another bank cannot identify an NXP SoC."""
+    memory = FakeTargetMemory()
+    _write_mcu_rom_root(memory, bank=bank, code=code, jedec_present=jedec, part_number=0x4C8)
+    discovery = discover_rom_tables(memory)
+    calls_before = list(memory.calls)
+
+    assert NxpProvider().inspect(memory, CPUID_M4, discovery) is None
+    assert memory.calls == calls_before
+
+
+def test_nxp_provider_rejects_missing_mcu_rom() -> None:
+    """Missing ROM evidence does not trigger signature or peripheral fallback reads."""
+    memory = FakeTargetMemory()
+    discovery = discover_rom_tables(memory)
+    calls_before = list(memory.calls)
+    assert NxpProvider().inspect(memory, CPUID_M4, discovery) is None
+    assert memory.calls == calls_before
+
+
+def test_processor_rom_identity_does_not_identify_nxp_soc() -> None:
+    """An NXP component outside the MCU root is not SoC manufacturer evidence."""
+    memory = FakeTargetMemory()
+    _write_mcu_rom_root(memory, bank=0, code=0x15)
+    memory.uint32 = {address + 0x1000: value for address, value in memory.uint32.items()}
+    discovery = discover_rom_tables(memory)
+    calls_before = list(memory.calls)
+    assert NxpProvider().inspect(memory, CPUID_M4, discovery) is None
+    assert memory.calls == calls_before
 
 
 def test_unavailable_mcu_rom_strictly_uses_generic_fallback() -> None:

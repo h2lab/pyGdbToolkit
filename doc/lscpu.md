@@ -82,14 +82,32 @@ includes NXP MCU and application-processor candidate memory-map profiles; see
 [memmap.md](memmap.md). These are distinct from detailed `lscpu` device profiles
 and are not proof of a particular chip model or physical memory capacity.
 
-In the current provider registry, `Stm32Provider` supplies the detailed product
-and electronic-signature decoding. A target without a matching registered
-profile, including an NXP device not covered by such a profile, still receives
-the generic Cortex-M report and its raw MCU ROM JEP106 identity. The `Vendor`
-field then remains `Generic Cortex-M`; product line, RAM, Flash, package and
-serial number are explicitly unavailable, not inferred from the CPU or ROM
-part number. Additional manufacturer providers can consume the same validated
-discovery data without changing the command.
+The provider registry includes `Stm32Provider` for detailed product/signature
+decoding and `NxpProvider` for manufacturer recognition without additional
+target reads. NXP identification requires a valid MCU ROM root at `0xE00FE000`
+with JEP106 bank `0`, code `0x15` (NXP/Philips) or code `0x0E`
+(legacy Freescale/Motorola). The latter is normalized to `NXP Semiconductors`,
+while the original ROM identity remains in the report. A processor ROM used
+as a discovery fallback is not accepted as SoC manufacturer evidence.
+
+`NxpProvider` sets `Vendor` to `NXP Semiconductors` but leaves product line,
+ordering code, RAM, Flash, package and serial number unavailable: no documented
+NXP device-specific signature profile is currently registered. It does not read
+OTP, peripheral registers or factory signatures. A ROM component part number
+is not treated as a unique chip model.
+
+For the i.MX8MP companion M7, CPUID identifies Cortex-M7 independently of the
+OCD logs. However, a ROM identity of bank `4`, code `0x3B` identifies **Arm**,
+not NXP; this evidence alone cannot identify the i.MX8MP SoC. Such a target
+still uses the generic report unless it exposes a recognized manufacturer ROM.
+The provider does not infer NXP from a configured J-Link device or from the CPU
+type. Manufacturer recognition and J-Link `dap core` connection correlation
+are separate concerns; see [dap.md](dap.md).
+
+Other unmatched identities retain the generic Cortex-M report and raw ROM
+identity, with unavailable fields rather than guessed capacities. Additional
+manufacturer providers can consume the validated discovery without changing
+the command.
 
 #### STM32 Device Catalog (`Stm32Provider`)
 
