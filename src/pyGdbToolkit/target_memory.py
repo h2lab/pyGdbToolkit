@@ -96,6 +96,17 @@ class TargetMemoryReader:
         except gdb.error as error:
             raise TargetReadError(0, 0, f"could not select inferior: {error}") from error
 
+    @property
+    def architecture_name(self) -> str | None:
+        """Return the bound inferior's GDB architecture without accessing memory."""
+        architecture = getattr(self._inferior, "architecture", None)
+        if architecture is None:
+            return None
+        try:
+            return str(architecture().name())
+        except gdb.error:
+            return None
+
     def read_bytes(self, address: int, size: int) -> bytes:
         """Read an exact byte range from the target.
 
