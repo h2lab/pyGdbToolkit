@@ -80,6 +80,41 @@ lscpu
 Replace `3333` with the port used by your OCD. The reset command is OCD-dependent
 and resets the target; omit it if the current target state must be preserved.
 
+## Discover a target without an SVD
+
+Memory discovery does not require a loaded SVD or firmware ELF. In a connected,
+stopped GDB session:
+
+```gdb
+memmap discover --verify
+memmap show
+memmap report mapping.json
+```
+
+The output shows manufacturer/SoC-family identity when available, its confidence
+and provenance, regions declared by the server, and point-access results.
+PC/SP and supported ARM VTOR/handler pointers identify code, stack and vector
+locations even after startup. On ARMv8-M, a ROM/Flash candidate at `0x18000000`
+can be supported by these runtime addresses even if the server omits the zone.
+It remains a hypothesis, not an automatically discovered physical capacity.
+Runtime pointers alone do not establish memory technology or physical sizes.
+Hardware-confirmed identity and memory evidence are shared in `SESSION`.
+An exact part name supplied by the server remains labelled as server metadata.
+
+Manufacturer windows provide hypotheses when metadata is incomplete:
+
+```gdb
+memmap bases st
+memmap discover --vendor st
+```
+
+These broad windows are not device capacities and are not automatically scanned.
+`--verify` samples declared-region endpoints under a global budget; errors do
+not prove protection, and successful points do not establish continuous access.
+For reviewed explicit ranges omitted from GDB's map, `--ignore-memory-map` can
+temporarily relax GDB's local policy; target security remains unchanged.
+See [memory mapping](memmap.md) for consent requirements and limitations.
+
 ## Inspect a peripheral
 
 Halt the target before an inspection that requires a consistent snapshot. Load
@@ -109,7 +144,7 @@ See the [SVD command reference](svd.md) for syntax and limitations.
 | GDB cannot import `pyGdbToolkit` | Embedded Python version and `sys.path`; activate the correct environment before starting the server. |
 | OCD fails to start | Executable path, board scripts, probe identifier, USB permissions and other processes using the probe. |
 | Client cannot connect | Server startup completed, configured WebSocket host and port, and firewall rules. |
-| SVD loading fails | Network access, supported target identity, or use `svd read` with a local file. |
+| SVD loading fails | Network access, supported target identity, or use `svd read` with a local file; `memmap discover` works independently of SVD loading. |
 | A command cannot read target memory | Target connection, selected core, halt state and debug-access restrictions. |
 
 Keep the API on loopback for local sessions. Remote access requires a trusted

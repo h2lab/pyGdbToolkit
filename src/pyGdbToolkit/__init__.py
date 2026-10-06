@@ -6,6 +6,7 @@
 from .cmd_dap import DapCmd, DapSubcommand
 from .cmd_faultinfo import FaultInfoCmd
 from .cmd_lscpu import LscpuCmd
+from .cmd_memmap import MemmapCmd, MemmapSubcommand
 from . import cmd_rtos
 from .cmd_rtos import RtosCmd
 from . import cmd_secscan
@@ -28,6 +29,10 @@ initialize_ocd()
 _DAP_COMMAND = DapCmd()
 for _dap_name in ("list", "core", "select", "profile", "report", "help"):
     DapSubcommand(_DAP_COMMAND, _dap_name)
+
+_MEMMAP_COMMAND = MemmapCmd(dap=_DAP_COMMAND)
+for _memmap_name in ("discover", "show", "bases", "probe", "report", "help"):
+    MemmapSubcommand(_MEMMAP_COMMAND, _memmap_name)
 
 LscpuCmd()
 FaultInfoCmd()
@@ -64,6 +69,7 @@ __all__ = [
     "CommandUsage",
     "FaultInfoCmd",
     "LscpuCmd",
+    "MemmapCmd",
     "RtosCmd",
     "SecscanCmd",
     "SessionSlice",

@@ -69,13 +69,13 @@ class PyOcdMonitorTransport:
             raise DebugPortError("Expected pyOCD 'show aps' output; backend unsupported")
         ports = tuple(
             AccessPort(
-                int(match[1][1:], 16) if match[1].startswith("@") else int(match[1]),
+                int(match[1][1:], 16) if match[1].startswith("@") else int(match[1].lstrip("#")),
                 match[2].strip(),
                 bool(match[3]),
                 2 if match[1].startswith("@") else 1,
             )
             for match in re.finditer(
-                r"^\s*(@0x[0-9a-fA-F]+|\d+):\s*(.+?)(\s+\(selected\))?\s*$", output, re.M
+                r"^\s*(@0x[0-9a-fA-F]+|#?\d+):\s*(.+?)(\s+\(selected\))?\s*$", output, re.M
             )
         )
         if len(ports) != int(count[1]):

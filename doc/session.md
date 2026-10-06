@@ -27,6 +27,8 @@ The module provides:
    unique instance through `SESSION.state()`.
 5. **Coherence maintenance**: GDB events that change the target invalidate the volatile caches
    without destroying user-visible command state.
+6. **Confirmed discovery metadata**: `memmap discover` supplements architectural identity with
+  a hardware-backed vendor/SoC-family fingerprint, source-declared regions, candidates and samples.
 
 ---
 
@@ -68,7 +70,20 @@ Owner of the session context.
   using the shared memory accessor, and returns the resulting `DiagnosticResult`.
 - **`state(slice_type)`**: Returns the unique instance of a `SessionSlice` subclass, creating and
   registering it on first request.
-- **`invalidate()`**: Drops the cached memory accessor and probe result, leaving command state
+- **`publish_discovery(report, context)`**: Publishes a `MemoryMapReport` only if its fingerprint
+  is `hardware-confirmed` and its access context matches the current context. Returns a boolean;
+  uncertain or conflicting identity clears the previous shared discovery.
+- **`discovery`**: Returns the current confirmed `MemoryMapReport` or `None`. Its context callback
+  is checked on access, preventing stale data after core, connection, object-file or SVD changes.
+- **`target_info`**: Returns the confirmed `TargetFingerprint` or `None`; includes vendor, SoC
+  family, architecture, confidence, evidence and a separately labelled server ordering code.
+- **`memory_regions`**: Returns a tuple of declared `MemoryRegion` records, or an empty tuple.
+  Declaration is not proof of accessibility, and candidate windows are never merged into it.
+  `discovery.execution_hints` and `execution_assessments()` retain PC/SP and
+  architecture-specific vector/handler associations without inferred capacities.
+  Architecture candidates, including the ARMv8-M ROM/Flash window at `0x18000000`,
+  stay in `discovery.candidates` and are never injected into `memory_regions`.
+- **`invalidate()`**: Drops the cached memory accessor, probe result and shared discovery, leaving command state
   untouched.
 - **`reset()`**: Invalidates the caches, then calls `reset()` on every registered slice.
 
@@ -114,6 +129,7 @@ that `arch` stays usable, and testable, without any session or GDB concern.
 | `RtosSessionState` | `cmd_rtos` | Selected RTOS module, project path, decoded task list, scheduler trace | Deletes the scheduler trace, drops the project and the selection |
 | `ShowstackSessionState` | `cmd_showstack` | Stack selected by the user (`msp` / `psp` / auto) | Restores automatic stack selection |
 | `ArmInspectionState` | `arch.arm.session_state` | CPUID identity, ROM-table discovery, device report | Drops every cached inspection result |
+| `MemoryMapSessionState` | `cmd_memmap` | Latest command report and SVD identity used for discovery | Drops the snapshot; shared discovery is also cleared by session invalidation |
 
 ---
 
@@ -123,17 +139,45 @@ Two levels of clearing are distinguished, because target-derived data and user-s
 have the same lifetime:
 
 - **`invalidate()`** drops only what is re-derivable from the target: the memory accessor and the
-  probe result. It is what GDB event hooks call, so reconnecting a probe or loading new symbols
+  probe result, plus the confirmed discovery metadata. It is what GDB event hooks call, so reconnecting a probe or loading new symbols
   never discards user work such as a loaded SVD file or an RTOS project.
 - **`reset()`** additionally clears every registered slice. It is the full session teardown, used
   when the whole context must return to its initial state.
 
 Note that `ArmInspectionState` holds target-derived data but lives in a slice, so it survives
 `invalidate()` and is cleared by `reset()`.
+The confirmed shared `discovery` does not survive invalidation. The memory-map
+command snapshot may still be exported with its original context; it cannot be
+silently republished or probed for another core. A fresh `memmap discover` is required.
 
 ---
 
 ## Usage
+
+### Consuming confirmed discovery metadata
+
+Run `memmap discover` or `memmap discover --verify` in the GDB CLI first. No SVD
+or firmware ELF is required when the server and hardware supply enough evidence.
+
+```python
+from pyGdbToolkit.session import SESSION
+
+identity = SESSION.target_info
+if identity is not None:
+  print(identity.vendor, identity.soc, identity.confidence)
+  for region in SESSION.memory_regions:
+    print(hex(region.start), hex(region.end), region.kind, region.source)
+
+report = SESSION.discovery
+if report is not None:
+  print(report.candidate_assessments())
+  print(report.observations)
+```
+
+The portable models live in `arch/memmap.py`. Hardware decoding lives in the
+architecture provider (`arch/arm/memmap.py` for Cortex-M); GDB adapters live in
+`memmap_runtime.py`. Neither the session nor the command contains SoC address
+tables. See [memory mapping](memmap.md) for confidence levels and CLI behavior.
 
 ### Reading target memory from a command
 
