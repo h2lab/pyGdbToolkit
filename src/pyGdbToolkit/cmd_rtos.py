@@ -63,9 +63,7 @@ class RtosCmd(gdb.Command):
             CommandUsage("rtos show task <taskname>", "Inspect a task on the stopped target"),
             CommandUsage("rtos showsched <num>", "Trace the next num scheduler elections"),
         ),
-        notes=(
-            "<path> is resolved by GDB: with pyGdbServer it must exist on the server host.",
-        ),
+        notes=("<path> is resolved by GDB: with pyGdbServer it must exist on the server host.",),
     )
 
     def __init__(self) -> None:
