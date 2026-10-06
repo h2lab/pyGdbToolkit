@@ -13,10 +13,10 @@ from rich.text import Text
 
 from .arch import Architecture
 from .arch.aarch64.cpu import CpuReport, affinity, physical_address_bits, simd_support
-from .arch.aarch64.session_state import cpu_report
+from .arch.aarch64.session_state import cpu_aarch64_report
 from .arch.arm.coresight import RomTableDiscovery
 from .arch.arm.models import DeviceReport, FieldValue
-from .arch.arm.session_state import device_report
+from .arch.arm.session_state import cpu_arm_report
 from .session import SESSION, CommandHelp, CommandUsage
 from .target_memory import TargetReadError
 
@@ -62,18 +62,27 @@ class LscpuCmd(gdb.Command):
             raise gdb.GdbError(str(error)) from error
 
 
-def render_report() -> None:
-    """Dispatch CPU collection and rendering using the session architecture."""
+def cpu_report() -> DeviceReport | CpuReport:
+    """Collect the CPU report through the implementation for the session architecture."""
     match SESSION.architecture:
         case Architecture.ARM:
-            render_arm_report(device_report())
+            return cpu_arm_report()
         case Architecture.AARCH64:
-            render_aarch64_report(cpu_report())
+            return cpu_aarch64_report()
         case None:
             reason = SESSION.probe().unavailable_reason or "target architecture unavailable"
             raise gdb.GdbError(f"lscpu: target architecture unavailable: {reason}")
         case unsupported_architecture:
             raise gdb.GdbError(f"lscpu does not support architecture '{unsupported_architecture}'")
+
+
+def render_report() -> None:
+    """Render the architecture-specific result of the common CPU collection API."""
+    report = cpu_report()
+    if isinstance(report, DeviceReport):
+        render_arm_report(report)
+    else:
+        render_aarch64_report(report)
 
 
 def render_aarch64_report(report: CpuReport) -> None:

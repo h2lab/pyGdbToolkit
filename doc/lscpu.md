@@ -22,19 +22,26 @@ targets in GDB. Each architecture has its own collector, report model, and rende
 
 When executed, `lscpu`:
 1. Rejects arguments and calls the common `render_report()` entry point.
-2. Obtains `SESSION.architecture` from the session's cached architecture probe.
+2. Calls the common `cpu_report()` collection API, which obtains
+    `SESSION.architecture` from the session's cached architecture probe.
     AArch64 detection uses the bound inferior's GDB architecture metadata;
     Cortex-M detection uses CPUID through `TargetMemoryReader`.
-3. Dispatches explicitly with `match SESSION.architecture`: `Architecture.ARM`
-    selects the Cortex-M path and `Architecture.AARCH64` selects the AArch64 path.
+3. `cpu_report()` dispatches explicitly with `match SESSION.architecture`:
+    `Architecture.ARM` calls `cpu_arm_report()` and `Architecture.AARCH64`
+    calls `cpu_aarch64_report()`.
 4. Collects the architecture-specific report and passes it to its Rich renderer.
 5. Raises `gdb.GdbError` when the architecture is unknown or unsupported. ARM is
     not a fallback for other architectures.
 
 | Architecture | Collector | Main evidence | Report | Renderer |
 |---|---|---|---|---|
-| ARM / Cortex-M | `device_report()` | CPUID, validated ROM identities, device profiles | `DeviceReport` | `render_arm_report()` |
-| AArch64 / ARMv8-A | `cpu_report()` | Named system registers, verified J-Link aliases or OpenOCD external MIDR | `CpuReport` | `render_aarch64_report()` |
+| ARM / Cortex-M | `cpu_arm_report()` | CPUID, validated ROM identities, device profiles | `DeviceReport` | `render_arm_report()` |
+| AArch64 / ARMv8-A | `cpu_aarch64_report()` | Named system registers, verified J-Link aliases or OpenOCD external MIDR | `CpuReport` | `render_aarch64_report()` |
+
+Both collectors are accessed through `cpu_report()` in `cmd_lscpu`.
+`render_report()` invokes this common API and selects the renderer for the
+returned report model. The ARM collector reuses the existing cached
+`device_report()` implementation; other consumers of that implementation are unchanged.
 
 The generic Cortex-M device report is a fallback **within the ARM provider
 registry** when no detailed device profile matches. It is not an architecture
@@ -166,9 +173,9 @@ If the server advertises an ambiguous name such as `armv8-a`, configure
 
 ### Execution workflow
 
-1. The common `render_report()` dispatcher selects `Architecture.AARCH64` from
-    `SESSION.architecture` and calls `cpu_report()`.
-2. `cpu_report()` requires the session's `AArch64TargetDescription` and creates a
+1. `render_report()` calls the common `cpu_report()` dispatcher, which selects
+    `Architecture.AARCH64` from `SESSION.architecture` and calls `cpu_aarch64_report()`.
+2. `cpu_aarch64_report()` requires the session's `AArch64TargetDescription` and creates a
     `GdbCpuRegisterReader`. It does not invoke the ARM device-provider registry.
 3. `collect_cpu_report()` requests the standard named registers through the GDB
     adapter. Named access is preferred; a positively identified backend can use

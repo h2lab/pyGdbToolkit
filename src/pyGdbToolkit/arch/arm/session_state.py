@@ -73,6 +73,11 @@ def rom_table_discovery(session: ToolkitSession = SESSION) -> CoreSightDiscovery
     return state.discovery
 
 
+def cpu_arm_report(session: ToolkitSession = SESSION) -> DeviceReport:
+    """Collect the Cortex-M CPU report using the cached manufacturer inspection."""
+    return device_report(session)
+
+
 def device_report(session: ToolkitSession = SESSION) -> DeviceReport:
     """Return the manufacturer device report of the session target.
 

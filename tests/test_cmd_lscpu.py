@@ -105,6 +105,32 @@ def test_command_rejects_arguments(fake_gdb: object) -> None:
         command.invoke("unexpected", False)
 
 
+@pytest.mark.parametrize(
+    "architecture,collector",
+    ((Architecture.ARM, "cpu_arm_report"), (Architecture.AARCH64, "cpu_aarch64_report")),
+)
+def test_cpu_report_dispatches_only_the_matching_collector(
+    monkeypatch: pytest.MonkeyPatch, architecture: Architecture, collector: str
+) -> None:
+    """The common CPU API preserves the report returned by exactly one architecture collector."""
+    report = object()
+    calls = []
+    monkeypatch.setattr(cmd_lscpu, "SESSION", SimpleNamespace(architecture=architecture))
+
+    def collect():
+        calls.append(collector)
+        return report
+
+    for name in ("cpu_arm_report", "cpu_aarch64_report"):
+        monkeypatch.setattr(
+            cmd_lscpu,
+            name,
+            collect if name == collector else lambda: pytest.fail("wrong architecture collector"),
+        )
+    assert cmd_lscpu.cpu_report() is report
+    assert calls == [collector]
+
+
 @pytest.mark.parametrize("architecture", (Architecture.RISCV, Architecture.XTENSA, None))
 def test_unsupported_architecture_never_falls_back_to_arm(
     monkeypatch: pytest.MonkeyPatch, architecture: Architecture | None
@@ -121,9 +147,11 @@ def test_unsupported_architecture_never_falls_back_to_arm(
             probe=lambda: SimpleNamespace(unavailable_reason="no recognized architecture"),
         ),
     )
-    monkeypatch.setattr(cmd_lscpu, "device_report", lambda: pytest.fail("unexpected ARM collector"))
     monkeypatch.setattr(
-        cmd_lscpu, "cpu_report", lambda: pytest.fail("unexpected AArch64 collector")
+        cmd_lscpu, "cpu_arm_report", lambda: pytest.fail("unexpected ARM collector")
+    )
+    monkeypatch.setattr(
+        cmd_lscpu, "cpu_aarch64_report", lambda: pytest.fail("unexpected AArch64 collector")
     )
 
     message = (

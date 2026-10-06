@@ -55,7 +55,7 @@ class GdbCpuRegisterReader(GdbDiagnosticRegisterReader):
         return CpuRegister(name, width_bits, None)
 
 
-def cpu_report(session: ToolkitSession = SESSION) -> CpuReport:
+def cpu_aarch64_report(session: ToolkitSession = SESSION) -> CpuReport:
     """Collect fresh registers for the selected CPU without caching execution state."""
     target = session.require_target_of(AArch64TargetDescription)
     return collect_cpu_report(target, GdbCpuRegisterReader())
