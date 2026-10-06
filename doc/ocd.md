@@ -55,7 +55,37 @@ verified ADIv5 JTAG-DPv0 configuration, where DP SELECT can be read back.
 It uses `ReadAPEx` to inspect AP registers, saves SELECT, and restores and
 verifies it even when a read fails. The restoration writes only the debug-port
 selection register, not AP transfer registers or target memory. SWD/other DP
-versions and hardware core selection currently report explicit errors.
+versions and switching to other physical cores currently report explicit errors.
+
+### Attached Cortex-M Identity
+
+After a successful connection, pyGdbServer extracts the detected Cortex-M name
+from JLinkGDBServer output (`JTAG ID: 0x... (Cortex-M...)` or
+`Found Cortex-M...`), requires `Connected to target`, and registers it with
+`CORES.register_jlink_core(name)` inside GDB. Device settings alone are not
+accepted, nor are failed or conflicting detections. These are connection-log
+formats, not a standardized core-identification protocol. Unknown formats
+fail closed without blocking ordinary server startup.
+
+`dap core`, `dap core list` and the matching RPCs then expose the single
+attached CPU. RPC metadata contains `scope: attached-core-only` and
+`identity_source: jlink-server-connection-log`. The local ID `0` is not a
+SEGGER physical CPU identifier. Selecting it has no side effects; other IDs
+are rejected. No AP or target-memory operation is needed. This works with
+recognized Cortex-M names independently of the board's device identifier.
+
+For complex targets such as the **i.MX8M family**, J-Link `dap core` is
+supported **only through pyGdbServer**. Correct identification requires
+correlating the OCD's connected CPU with GDB's actual inferior/connection,
+not merely recognizing the probe or reading the configured device name.
+pyGdbServer supervises both OCD and GDB, captures the connection evidence,
+and binds that evidence to the GDB session to keep the whole stack coherent.
+
+Standalone GDB does not automatically receive this correlated information.
+The low-level registration API does not, by itself, establish that correlation
+and is not a substitute for pyGdbServer's supported workflow on these targets.
+The declaration is scoped to the current inferior/connection, not transferable
+to a later connection. Neither AArch64 nor Cortex-R support is added.
 
 `dap select` changes the toolkit's profiling selection only, not the AP used
 by J-Link's ordinary GDB memory accesses. The initial profiling selection is

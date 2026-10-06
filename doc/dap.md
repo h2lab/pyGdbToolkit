@@ -53,9 +53,31 @@ it does not open another socket. Unidentifiable threads, including RTOS task
 threads that cannot be mapped to physical CPUs, cause an explicit error rather
 than guessing from thread order or GDB thread IDs.
 
-With **J-Link**, physical-core discovery and selection are not implemented.
-The toolkit reports this explicitly instead of treating J-Link's GDB threads
-as an OpenOCD hardware-core inventory.
+With **J-Link**, pyGdbServer registers the server-reported Cortex-M attached
+to the current connection. `dap core list` shows one selected entry with
+`scope: attached-core-only`; `dap core` reports it, and `dap core 0` is a no-op.
+The ID `0` is local to this session, not an APSEL or a SEGGER physical-core ID.
+Other IDs are rejected. No RTOS thread switching, AP scanning, memory reads,
+reset or additional probe connection is performed by these core operations.
+
+On complex targets such as the **i.MX8M family**, reliable J-Link `dap core`
+support requires **pyGdbServer**. It correlates the CPU reported by the OCD
+with the actual GDB inferior/connection and manages both processes as one
+coherent debug session. A standalone GDB connection or a configured device
+name alone cannot provide this correlation; standalone J-Link `dap core`
+operation is not supported for these targets.
+
+The identity comes from successful JLinkGDBServer connection logs, not a
+board-name table or the configured `-device` alone. Missing, conflicting or
+unrecognized log formats leave it unavailable. The declaration is bound to
+the GDB inferior/connection pair and becomes invalid after reconnection.
+Cortex-A/AArch64 and Cortex-R are outside this implementation's scope.
+This does not discover all physical CPUs in a multicore SoC.
+
+SEGGER's [UM08036 protocol extensions manual](https://www.segger.com/downloads/jlink/UM08036)
+(V1.00) documents trace/SWO queries, not a core-inventory query or a physical
+CPU-number query. Consequently no undocumented remote packet or `monitor core`
+fallback is used. See [ocd.md](ocd.md) for identity registration details.
 
 Selection does not explicitly reset or resume the target, nor change APSEL.
 Attaching a new pyOCD socket can halt its core according to the server's connection
