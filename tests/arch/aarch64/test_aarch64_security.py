@@ -17,6 +17,7 @@ from pyGdbToolkit.arch import (
     TargetDescription,
 )
 from pyGdbToolkit.arch.aarch64.security import AArch64SecurityAuditor
+from pyGdbToolkit.arch.aarch64.features import FEATURE_FIELDS, FEATURE_REGISTERS
 from pyGdbToolkit.arch.aarch64.target import AArch64TargetDescription
 from pyGdbToolkit.cmd_secscan import SecscanReport, run_audit
 from pyGdbToolkit.session import ToolkitSession
@@ -73,13 +74,17 @@ def test_default_runtime_dispatches_without_memory_reads() -> None:
     assert all(finding.severity is DiagnosticSeverity.INFO for finding in result.report.findings)
     assert "Cortex-A53 r0p4" in result.report.findings[1].detail
     assert result.report.findings[2].detail == "EL1, observed through CurrentEL."
-    assert registers.calls == [("midr_el1", "MIDR_EL1"), ("currentel", "CurrentEL")]
+    assert registers.calls == [
+        *((name.lower(), name) for name in FEATURE_REGISTERS),
+        ("midr_el1", "MIDR_EL1"),
+        ("currentel", "CurrentEL"),
+    ]
 
 
 def test_missing_registers_do_not_invent_cpu_version_or_security() -> None:
     """A report remains available without identifying a CPU or declaring protection."""
     report = AArch64SecurityAuditor().collect(MemoryReader(), target())
-    assert len(report.findings) == 4
+    assert len(report.findings) == 4 + len(FEATURE_FIELDS)
     assert all(finding.severity is DiagnosticSeverity.INFO for finding in report.findings)
     assert "not audited" in report.findings[0].detail
     assert "identity is unknown" in report.findings[1].detail
@@ -156,5 +161,26 @@ def test_secscan_command_renders_aarch64_report_with_stable_schema(fake_gdb: obj
     assert report.core == "AArch64"
     assert report.vendor is None
     assert report.device_name is None
-    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 4, "PASS": 0}
+    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 4 + len(FEATURE_FIELDS), "PASS": 0}
     assert SecscanReport.from_dict(report.to_dict()) == report
+
+
+def test_capability_findings_preserve_evidence_without_security_verdicts() -> None:
+    """The common report distinguishes variants, unknowns and feature history."""
+    registers = Registers(
+        {
+            "ID_AA64MMFR1_EL1": 2 << 20,
+            "ID_AA64PFR1_EL1": (1 << 8) | 15,
+        }
+    )
+    report = AArch64SecurityAuditor(registers).collect(MemoryReader(), target())
+    capabilities = {finding.title: finding for finding in report.findings[4:]}
+    assert "present: PAN2" in capabilities["PAN"].detail
+    assert "ID_AA64MMFR1_EL1.PAN=0x2" in capabilities["PAN"].detail
+    assert "instructions only" in capabilities["MTE"].detail
+    assert "unknown:" in capabilities["BTI"].detail
+    assert "Reserved or unrecognized" in capabilities["BTI"].detail
+    assert "unknown:" in capabilities["UAO"].detail
+    assert "ARMv8.1-A, ARMv8.5-A" in report.findings[3].detail
+    assert "not a minimum or exact" in report.findings[3].detail
+    assert all(finding.severity is DiagnosticSeverity.INFO for finding in report.findings)

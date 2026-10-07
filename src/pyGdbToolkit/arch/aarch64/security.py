@@ -16,6 +16,7 @@ from ..diagnostics import (
     DiagnosticSeverity,
 )
 from .cpu import decode_midr
+from .features import collect_feature_report
 from .target import AArch64TargetDescription
 
 
@@ -48,6 +49,7 @@ class AArch64SecurityAuditor:
             if access is not None and access.registers is not None
             else self._registers
         )
+        features = collect_feature_report(registers)
         midr = None if registers is None else registers.read_first(("midr_el1", "MIDR_EL1"))
         if midr is None:
             identity_detail = "MIDR_EL1 is not exposed or readable; CPU identity is unknown."
@@ -58,12 +60,12 @@ class AArch64SecurityAuditor:
                 f"MIDR_EL1[31:0]=0x{midr & 0xFFFFFFFF:08X}. "
                 "The CPU revision is not an ARMv8-A architecture minor version."
             )
-        findings = (
+        findings: tuple[DiagnosticFinding, ...] = (
             DiagnosticFinding(
                 "Scope",
                 DiagnosticSeverity.INFO,
                 "AArch64 audit coverage is limited",
-                "Only CPU identity and the current execution level are observed. "
+                "CPU identity, the current execution level and selected ID capabilities are observed. "
                 "Memory protection, isolation and optional security extensions are not audited. "
                 "This report does not establish a secure configuration.",
             ),
@@ -81,8 +83,26 @@ class AArch64SecurityAuditor:
                 DiagnosticSeverity.INFO,
                 "ARMv8-A minor version is undetermined",
                 "GDB AArch64 metadata and MIDR_EL1 do not establish an ARMv8.x-A version. "
-                "Architectural feature decoding is not yet part of this audit.",
+                "Observed feature-family introduction generations: "
+                f"{', '.join(features.observed_generations) or 'none established'}. "
+                "These are feature history, not a minimum or exact CPU architecture version. "
+                "This inventory is not a complete architecture conformance check; "
+                "ID values can also describe a virtualized CPU.",
             ),
+        )
+        findings += tuple(
+            DiagnosticFinding(
+                "Capabilities",
+                DiagnosticSeverity.INFO,
+                capability.field.name,
+                f"{capability.support.value}: {capability.description} "
+                f"{capability.field.register}.{capability.field.field}="
+                f"{f'0x{capability.encoding:X}' if capability.encoding is not None else 'unknown'}; "
+                f"source: {capability.source}. "
+                f"Feature family introduced in {capability.field.introduced_in}. "
+                "Presence does not establish runtime enablement or protection.",
+            )
+            for capability in features.capabilities
         )
         return DiagnosticReport(self.service, target, findings=findings)
 
