@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""AArch64 capability and MMU audit behind the portable diagnostic API."""
+"""AArch64 capability, MMU and isolation audit behind the portable diagnostic API."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from ..diagnostics import (
 )
 from .cpu import decode_midr
 from .features import collect_feature_report
+from .isolation import audit_isolation, collect_isolation_report
 from .mmu import audit_mmu, collect_execution_context, collect_mmu_report
 from .target import AArch64TargetDescription
 
@@ -54,6 +55,7 @@ class AArch64SecurityAuditor:
         midr = None if registers is None else registers.read_first(("midr_el1", "MIDR_EL1"))
         context = collect_execution_context(registers)
         mmu = collect_mmu_report(registers, context, features)
+        isolation = collect_isolation_report(registers, context, features, mmu)
         if midr is None:
             identity_detail = "MIDR_EL1 is not exposed or readable; CPU identity is unknown."
         else:
@@ -68,8 +70,8 @@ class AArch64SecurityAuditor:
                 "Scope",
                 DiagnosticSeverity.INFO,
                 "AArch64 audit coverage is limited",
-                "CPU identity, execution context, selected ID capabilities and stage-1 MMU controls are observed. "
-                "Mapping permissions, isolation and optional security extension activation are not audited. "
+                "CPU identity, execution context, selected ID capabilities, stage-1 MMU and isolation controls are observed. "
+                "Mapping permissions, effective system-wide isolation and optional security extension activation are not audited. "
                 "This report does not establish a secure configuration.",
             ),
             DiagnosticFinding(
@@ -108,4 +110,5 @@ class AArch64SecurityAuditor:
             for capability in features.capabilities
         )
         findings += audit_mmu(mmu, features)
+        findings += audit_isolation(isolation, features)
         return DiagnosticReport(self.service, target, findings=findings)

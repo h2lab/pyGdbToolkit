@@ -83,13 +83,15 @@ def test_default_runtime_dispatches_without_memory_reads() -> None:
         ("ttbr0_el1", "TTBR0_EL1"),
         ("mair_el1", "MAIR_EL1"),
         ("ttbr1_el1", "TTBR1_EL1"),
+        ("id_aa64pfr0_el1", "ID_AA64PFR0_EL1"),
+        ("vbar_el1", "VBAR_EL1"),
     ]
 
 
 def test_missing_registers_do_not_invent_cpu_version_or_security() -> None:
     """A report remains available without identifying a CPU or declaring protection."""
     report = AArch64SecurityAuditor().collect(MemoryReader(), target())
-    assert len(report.findings) == 6 + len(FEATURE_FIELDS)
+    assert len(report.findings) == 15 + len(FEATURE_FIELDS)
     assert all(finding.severity is DiagnosticSeverity.INFO for finding in report.findings)
     assert "not audited" in report.findings[0].detail
     assert "identity is unknown" in report.findings[1].detail
@@ -166,7 +168,7 @@ def test_secscan_command_renders_aarch64_report_with_stable_schema(fake_gdb: obj
     assert report.core == "AArch64"
     assert report.vendor is None
     assert report.device_name is None
-    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 6 + len(FEATURE_FIELDS), "PASS": 0}
+    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 15 + len(FEATURE_FIELDS), "PASS": 0}
     assert SecscanReport.from_dict(report.to_dict()) == report
 
 
@@ -211,3 +213,28 @@ def test_mmu_findings_are_appended_without_memory_access() -> None:
     ) == len(FEATURE_FIELDS)
     assert registers.calls.count(("currentel", "CurrentEL")) == 1
     assert sum(names == ("sctlr_el1", "SCTLR_EL1") for names in registers.calls) == 1
+
+
+def test_isolation_reuses_pstate_and_hcr_from_other_passes() -> None:
+    """A complete audit shares context evidence and appends portable isolation findings."""
+    registers = Registers(
+        {
+            "pstate": 9,
+            "ID_AA64PFR0_EL1": 0x1100,
+            "ID_AA64MMFR1_EL1": (1 << 8) | (1 << 20),
+            "HCR_EL2": (1 << 34) | (1 << 27),
+            "SCTLR_EL2": 1,
+        }
+    )
+    report = AArch64SecurityAuditor(registers).collect(MemoryReader(), target())
+    isolation = {
+        finding.title: finding for finding in report.findings if finding.category == "Isolation"
+    }
+    assert len(isolation) == 9
+    assert "PAN=0" in isolation["PSTATE.PAN"].detail
+    assert isolation["PSTATE.PAN"].severity is DiagnosticSeverity.WARNING
+    assert "E2H=1" in isolation["EL2 configuration"].detail
+    assert registers.calls.count(("pstate", "cpsr")) == 1
+    assert registers.calls.count(("hcr_el2", "HCR_EL2")) == 1
+    assert registers.calls.count(("sctlr_el2", "SCTLR_EL2")) == 1
+    assert "secure configuration" in report.findings[0].detail

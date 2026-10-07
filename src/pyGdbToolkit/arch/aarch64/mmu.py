@@ -33,6 +33,7 @@ class ExecutionContext:
 
     exception_level: int | None
     detail: str
+    pstate: CpuRegister | None = None
 
 
 def collect_execution_context(reader: DiagnosticRegisterReader | None) -> ExecutionContext:
@@ -51,16 +52,23 @@ def collect_execution_context(reader: DiagnosticRegisterReader | None) -> Execut
             None, "CurrentEL has an invalid encoding; the current EL is unknown."
         )
     pstate = reader.read_first(("pstate", "cpsr"))
+    evidence = CpuRegister("PSTATE", 64, pstate)
     if pstate is None:
         return ExecutionContext(
-            None, "CurrentEL and PSTATE are not exposed or readable; the current EL is unknown."
+            None,
+            "CurrentEL and PSTATE are not exposed or readable; the current EL is unknown.",
+            evidence,
         )
     mode = pstate & 0x1F
     if mode not in (0, 4, 5, 8, 9, 12, 13):
         return ExecutionContext(
-            None, "PSTATE does not identify a valid AArch64 mode; the current EL is unknown."
+            None,
+            "PSTATE does not identify a valid AArch64 mode; the current EL is unknown.",
+            evidence,
         )
-    return ExecutionContext(mode >> 2, f"EL{mode >> 2}, observed through GDB PSTATE.M[3:2].")
+    return ExecutionContext(
+        mode >> 2, f"EL{mode >> 2}, observed through GDB PSTATE.M[3:2].", evidence
+    )
 
 
 class TranslationRegime(StrEnum):
