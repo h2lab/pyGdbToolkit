@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""Initial AArch64 security-audit context behind the portable diagnostic API."""
+"""AArch64 capability and MMU audit behind the portable diagnostic API."""
 
 from __future__ import annotations
 
@@ -17,11 +17,12 @@ from ..diagnostics import (
 )
 from .cpu import decode_midr
 from .features import collect_feature_report
+from .mmu import audit_mmu, collect_execution_context, collect_mmu_report
 from .target import AArch64TargetDescription
 
 
 class AArch64SecurityAuditor:
-    """Observe CPU context without claiming that security controls were audited."""
+    """Audit observed controls without certifying uninspected memory mappings."""
 
     architecture = Architecture.AARCH64
     service = DiagnosticServiceName.SECURITY_AUDIT
@@ -51,6 +52,8 @@ class AArch64SecurityAuditor:
         )
         features = collect_feature_report(registers)
         midr = None if registers is None else registers.read_first(("midr_el1", "MIDR_EL1"))
+        context = collect_execution_context(registers)
+        mmu = collect_mmu_report(registers, context, features)
         if midr is None:
             identity_detail = "MIDR_EL1 is not exposed or readable; CPU identity is unknown."
         else:
@@ -65,8 +68,8 @@ class AArch64SecurityAuditor:
                 "Scope",
                 DiagnosticSeverity.INFO,
                 "AArch64 audit coverage is limited",
-                "CPU identity, the current execution level and selected ID capabilities are observed. "
-                "Memory protection, isolation and optional security extensions are not audited. "
+                "CPU identity, execution context, selected ID capabilities and stage-1 MMU controls are observed. "
+                "Mapping permissions, isolation and optional security extension activation are not audited. "
                 "This report does not establish a secure configuration.",
             ),
             DiagnosticFinding(
@@ -76,7 +79,7 @@ class AArch64SecurityAuditor:
                 "CPU context",
                 DiagnosticSeverity.INFO,
                 "Current exception level",
-                self._exception_level_detail(registers),
+                context.detail,
             ),
             DiagnosticFinding(
                 "Architecture",
@@ -104,22 +107,5 @@ class AArch64SecurityAuditor:
             )
             for capability in features.capabilities
         )
+        findings += audit_mmu(mmu, features)
         return DiagnosticReport(self.service, target, findings=findings)
-
-    @staticmethod
-    def _exception_level_detail(registers: DiagnosticRegisterReader | None) -> str:
-        """Use CurrentEL or a valid AArch64 PSTATE mode without guessing hidden state."""
-        if registers is None:
-            return "No runtime register reader is available; the current EL is unknown."
-        current_el = registers.read_first(("currentel", "CurrentEL"))
-        if current_el is not None:
-            if current_el in (0, 4, 8, 12):
-                return f"EL{current_el >> 2}, observed through CurrentEL."
-            return "CurrentEL has an invalid encoding; the current EL is unknown."
-        pstate = registers.read_first(("pstate", "cpsr"))
-        if pstate is None:
-            return "CurrentEL and PSTATE are not exposed or readable; the current EL is unknown."
-        mode = pstate & 0x1F
-        if mode not in (0, 4, 5, 8, 9, 12, 13):
-            return "PSTATE does not identify a valid AArch64 mode; the current EL is unknown."
-        return f"EL{mode >> 2}, observed through GDB PSTATE.M[3:2]."

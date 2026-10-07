@@ -78,13 +78,18 @@ def test_default_runtime_dispatches_without_memory_reads() -> None:
         *((name.lower(), name) for name in FEATURE_REGISTERS),
         ("midr_el1", "MIDR_EL1"),
         ("currentel", "CurrentEL"),
+        ("sctlr_el1", "SCTLR_EL1"),
+        ("tcr_el1", "TCR_EL1"),
+        ("ttbr0_el1", "TTBR0_EL1"),
+        ("mair_el1", "MAIR_EL1"),
+        ("ttbr1_el1", "TTBR1_EL1"),
     ]
 
 
 def test_missing_registers_do_not_invent_cpu_version_or_security() -> None:
     """A report remains available without identifying a CPU or declaring protection."""
     report = AArch64SecurityAuditor().collect(MemoryReader(), target())
-    assert len(report.findings) == 4 + len(FEATURE_FIELDS)
+    assert len(report.findings) == 6 + len(FEATURE_FIELDS)
     assert all(finding.severity is DiagnosticSeverity.INFO for finding in report.findings)
     assert "not audited" in report.findings[0].detail
     assert "identity is unknown" in report.findings[1].detail
@@ -161,7 +166,7 @@ def test_secscan_command_renders_aarch64_report_with_stable_schema(fake_gdb: obj
     assert report.core == "AArch64"
     assert report.vendor is None
     assert report.device_name is None
-    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 4 + len(FEATURE_FIELDS), "PASS": 0}
+    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 6 + len(FEATURE_FIELDS), "PASS": 0}
     assert SecscanReport.from_dict(report.to_dict()) == report
 
 
@@ -184,3 +189,25 @@ def test_capability_findings_preserve_evidence_without_security_verdicts() -> No
     assert "ARMv8.1-A, ARMv8.5-A" in report.findings[3].detail
     assert "not a minimum or exact" in report.findings[3].detail
     assert all(finding.severity is DiagnosticSeverity.INFO for finding in report.findings)
+
+
+def test_mmu_findings_are_appended_without_memory_access() -> None:
+    """The neutral report contains MMU configuration warnings and retains feature findings."""
+    registers = Registers(
+        {
+            "CurrentEL": 4,
+            "SCTLR_EL1": 1,
+            "TCR_EL1": (2 << 30) | (16 << 16) | 16,
+            "ID_AA64MMFR0_EL1": 5,
+        }
+    )
+    report = AArch64SecurityAuditor(registers).collect(MemoryReader(), target())
+    mmu = {finding.title: finding for finding in report.findings if finding.category == "MMU"}
+    assert mmu["Stage-1 MMU control"].severity is DiagnosticSeverity.INFO
+    assert mmu["Write-implies-execute-never control"].severity is DiagnosticSeverity.WARNING
+    assert "No translation tables" in mmu["MMU audit scope"].detail
+    assert len(
+        [finding for finding in report.findings if finding.category == "Capabilities"]
+    ) == len(FEATURE_FIELDS)
+    assert registers.calls.count(("currentel", "CurrentEL")) == 1
+    assert sum(names == ("sctlr_el1", "SCTLR_EL1") for names in registers.calls) == 1
