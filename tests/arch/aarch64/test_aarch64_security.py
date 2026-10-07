@@ -91,7 +91,7 @@ def test_default_runtime_dispatches_without_memory_reads() -> None:
 def test_missing_registers_do_not_invent_cpu_version_or_security() -> None:
     """A report remains available without identifying a CPU or declaring protection."""
     report = AArch64SecurityAuditor().collect(MemoryReader(), target())
-    assert len(report.findings) == 15 + len(FEATURE_FIELDS)
+    assert len(report.findings) == 19 + len(FEATURE_FIELDS)
     assert all(finding.severity is DiagnosticSeverity.INFO for finding in report.findings)
     assert "not audited" in report.findings[0].detail
     assert "identity is unknown" in report.findings[1].detail
@@ -168,7 +168,7 @@ def test_secscan_command_renders_aarch64_report_with_stable_schema(fake_gdb: obj
     assert report.core == "AArch64"
     assert report.vendor is None
     assert report.device_name is None
-    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 15 + len(FEATURE_FIELDS), "PASS": 0}
+    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 19 + len(FEATURE_FIELDS), "PASS": 0}
     assert SecscanReport.from_dict(report.to_dict()) == report
 
 
@@ -238,3 +238,25 @@ def test_isolation_reuses_pstate_and_hcr_from_other_passes() -> None:
     assert registers.calls.count(("hcr_el2", "HCR_EL2")) == 1
     assert registers.calls.count(("sctlr_el2", "SCTLR_EL2")) == 1
     assert "secure configuration" in report.findings[0].detail
+
+
+def test_protection_findings_share_registers_and_never_read_keys() -> None:
+    """The complete audit reuses PSTATE and SCTLR for the new protection checks."""
+    registers = Registers(
+        {
+            "pstate": 5,
+            "ID_AA64ISAR1_EL1": 1 << 4,
+            "ID_AA64PFR1_EL1": 1 | (2 << 8),
+            "SCTLR_EL1": (1 << 31) | (1 << 43) | (1 << 40),
+        }
+    )
+    report = AArch64SecurityAuditor(registers).collect(MemoryReader(), target())
+    findings = {finding.title: finding for finding in report.findings}
+    assert "EnIA=1" in findings["Address authentication controls"].detail
+    assert "not global BTI enable bits" in findings["Branch target compatibility"].detail
+    assert "TCF mode: synchronous" in findings["Tag checking configuration"].detail
+    assert "PSTATE.TCO=0" in findings["Tag check override"].detail
+    assert registers.calls.count(("pstate", "cpsr")) == 1
+    assert registers.calls.count(("sctlr_el1", "SCTLR_EL1")) == 1
+    assert not any("key" in name.lower() for names in registers.calls for name in names)
+    assert all(finding.severity is not DiagnosticSeverity.PASS for finding in report.findings)

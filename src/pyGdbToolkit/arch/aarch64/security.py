@@ -19,6 +19,7 @@ from .cpu import decode_midr
 from .features import collect_feature_report
 from .isolation import audit_isolation, collect_isolation_report
 from .mmu import audit_mmu, collect_execution_context, collect_mmu_report
+from .protection import audit_protection, collect_protection_report
 from .target import AArch64TargetDescription
 
 
@@ -56,6 +57,7 @@ class AArch64SecurityAuditor:
         context = collect_execution_context(registers)
         mmu = collect_mmu_report(registers, context, features)
         isolation = collect_isolation_report(registers, context, features, mmu)
+        protection = collect_protection_report(registers, isolation, features)
         if midr is None:
             identity_detail = "MIDR_EL1 is not exposed or readable; CPU identity is unknown."
         else:
@@ -70,8 +72,8 @@ class AArch64SecurityAuditor:
                 "Scope",
                 DiagnosticSeverity.INFO,
                 "AArch64 audit coverage is limited",
-                "CPU identity, execution context, selected ID capabilities, stage-1 MMU and isolation controls are observed. "
-                "Mapping permissions, effective system-wide isolation and optional security extension activation are not audited. "
+                "CPU identity, execution context, selected ID capabilities, MMU, isolation and conditional PAC/BTI/MTE controls are observed. "
+                "Mapping permissions, effective system-wide isolation and binary protection coverage are not audited. "
                 "This report does not establish a secure configuration.",
             ),
             DiagnosticFinding(
@@ -111,4 +113,5 @@ class AArch64SecurityAuditor:
         )
         findings += audit_mmu(mmu, features)
         findings += audit_isolation(isolation, features)
+        findings += audit_protection(protection, features)
         return DiagnosticReport(self.service, target, findings=findings)
