@@ -5,9 +5,69 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Callable, Protocol, runtime_checkable
 
 import gdb
+
+
+@dataclass(frozen=True)
+class PhysicalMemoryRange:
+    """An explicitly authorized physical table-memory interval, end excluded."""
+
+    start: int
+    end: int
+
+    def __post_init__(self) -> None:
+        """Reject empty, negative or overflowing authorization intervals."""
+        if not 0 <= self.start < self.end <= 1 << 64:
+            raise ValueError("invalid physical memory range")
+
+
+class PhysicalTableMemory(Protocol):
+    """Explicit physical access, not ordinary GDB virtual memory or a guessed MEM-AP."""
+
+    source: str
+    table_ranges: tuple[PhysicalMemoryRange, ...]
+    stage1_addresses_are_physical: bool
+
+    def snapshot_is_valid(self) -> bool:
+        """Verify the bound CPU/security context and stable halted/coherent table snapshot."""
+        ...
+
+    def read_physical_bytes(self, address: int, size: int) -> bytes:
+        """Read physical table bytes or raise TargetReadError, with no address translation."""
+        ...
+
+
+@dataclass(frozen=True)
+class RestrictedPhysicalTableMemory:
+    """Adapt a verified backend callback with explicit authorization and context checks."""
+
+    source: str
+    table_ranges: tuple[PhysicalMemoryRange, ...]
+    read: Callable[[int, int], bytes]
+    valid_context: Callable[[], bool]
+    stage1_addresses_are_physical: bool = False
+
+    def snapshot_is_valid(self) -> bool:
+        """Delegate context, halt-state and coherence verification to the backend."""
+        return self.valid_context()
+
+    def read_physical_bytes(self, address: int, size: int) -> bytes:
+        """Reject stale contexts, unauthorized ranges and short physical reads."""
+        if size <= 0 or address < 0 or address + size > 1 << 64:
+            raise ValueError("invalid physical read range")
+        if not self.snapshot_is_valid() or not self.stage1_addresses_are_physical:
+            raise TargetReadError(address, size, "physical table context is not verified")
+        if not any(
+            region.start <= address and address + size <= region.end for region in self.table_ranges
+        ):
+            raise TargetReadError(address, size, "physical table read is not authorized")
+        result = self.read(address, size)
+        if len(result) != size:
+            raise TargetReadError(address, size, "short physical table read")
+        return result
 
 
 class TargetMemory(Protocol):

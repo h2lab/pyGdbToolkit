@@ -91,7 +91,7 @@ def test_default_runtime_dispatches_without_memory_reads() -> None:
 def test_missing_registers_do_not_invent_cpu_version_or_security() -> None:
     """A report remains available without identifying a CPU or declaring protection."""
     report = AArch64SecurityAuditor().collect(MemoryReader(), target())
-    assert len(report.findings) == 19 + len(FEATURE_FIELDS)
+    assert len(report.findings) == 20 + len(FEATURE_FIELDS)
     assert all(finding.severity is DiagnosticSeverity.INFO for finding in report.findings)
     assert "not audited" in report.findings[0].detail
     assert "identity is unknown" in report.findings[1].detail
@@ -168,7 +168,7 @@ def test_secscan_command_renders_aarch64_report_with_stable_schema(fake_gdb: obj
     assert report.core == "AArch64"
     assert report.vendor is None
     assert report.device_name is None
-    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 19 + len(FEATURE_FIELDS), "PASS": 0}
+    assert report.counts() == {"FAIL": 0, "WARN": 0, "INFO": 20 + len(FEATURE_FIELDS), "PASS": 0}
     assert SecscanReport.from_dict(report.to_dict()) == report
 
 
@@ -260,3 +260,76 @@ def test_protection_findings_share_registers_and_never_read_keys() -> None:
     assert registers.calls.count(("sctlr_el1", "SCTLR_EL1")) == 1
     assert not any("key" in name.lower() for names in registers.calls for name in names)
     assert all(finding.severity is not DiagnosticSeverity.PASS for finding in report.findings)
+
+
+def test_secscan_physical_provider_is_explicit_and_refreshed(fake_gdb: object) -> None:
+    """The real service receives physical access through the public session contract."""
+    from pyGdbToolkit.target_memory import PhysicalMemoryRange, RestrictedPhysicalTableMemory
+
+    fake_gdb._inferior = object()
+    calls: list[int] = []
+    provider_calls: list[int] = []
+
+    def read(address: int, size: int) -> bytes:
+        calls.append(address)
+        return (0x400001 if address == 0x1000 else 0).to_bytes(size, "little")
+
+    physical = RestrictedPhysicalTableMemory(
+        "verified physical fixture",
+        (PhysicalMemoryRange(0x1000, 0x3000),),
+        read,
+        lambda: True,
+        True,
+    )
+    registers = Registers(
+        {
+            "CurrentEL": 4,
+            "SCTLR_EL1": 1,
+            "TCR_EL1": 39 | (39 << 16) | (2 << 30),
+            "TTBR0_EL1": 0x1000,
+            "TTBR1_EL1": 0x2000,
+            "ID_AA64MMFR0_EL1": 0,
+            "ID_AA64MMFR1_EL1": 0,
+            "ID_AA64MMFR3_EL1": 0,
+        }
+    )
+
+    class Runtime:
+        def diagnose(
+            self,
+            reader: TargetMemory,
+            service: DiagnosticServiceName,
+            access: DiagnosticRuntimeAccess | None = None,
+        ) -> DiagnosticResult:
+            del reader
+            assert access is not None
+            return DEFAULT_DIAGNOSTIC_RUNTIME.diagnose(
+                MemoryReader(),
+                service,
+                DiagnosticRuntimeAccess(
+                    registers=registers,
+                    physical_memory=access.physical_memory,
+                ),
+            )
+
+    def provider():
+        provider_calls.append(1)
+        return physical
+
+    session = ToolkitSession(diagnostic_runtime=Runtime())
+    session.set_physical_table_access(provider)
+    first = run_audit(session)
+    assert any(
+        finding.title == "Stage-1 W^X candidate" and finding.severity == "FAIL"
+        for finding in first.findings
+    )
+    assert len(calls) == 32
+    second = run_audit(session)
+    assert len(provider_calls) == 2
+    assert len(calls) == 64
+    assert first.counts() == second.counts()
+    session.set_physical_table_access(None)
+    third = run_audit(session)
+    assert len(calls) == 64
+    assert "no explicitly configured" in third.findings[-1].detail
+    assert SecscanReport.from_dict(first.to_dict()) == first

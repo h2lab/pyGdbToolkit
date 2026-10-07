@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum, auto, unique
 from typing import Protocol, TypeAlias
 
-from ..target_memory import TargetMemory
+from ..target_memory import PhysicalTableMemory, TargetMemory
 from .base import Architecture, TargetDescription
 from .registry import ArchitectureRegistry
 
@@ -190,6 +190,7 @@ class DiagnosticRuntimeAccess:
 
     registers: DiagnosticRegisterReader | None = None
     symbols: DiagnosticSymbolResolver | None = None
+    physical_memory: PhysicalTableMemory | None = None
 
 
 class DiagnosticRuntime(Protocol):

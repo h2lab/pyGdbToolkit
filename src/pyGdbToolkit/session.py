@@ -13,7 +13,7 @@ and the command help registered through :meth:`ToolkitSession.register_command`.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, TypeVar
 
 import gdb
@@ -30,7 +30,7 @@ from .arch import (
     ProbeResult,
     TargetDescription,
 )
-from .target_memory import TargetMemoryReader, WritableTargetMemory
+from .target_memory import PhysicalTableMemory, TargetMemoryReader, WritableTargetMemory
 from .arch.memmap import MemoryRegion, TargetFingerprint
 from .memmap import MemoryMapReport
 
@@ -88,6 +88,7 @@ class ToolkitSession:
         self,
         architecture_registry: ArchitectureRegistry = DEFAULT_ARCHITECTURE_REGISTRY,
         diagnostic_runtime: DiagnosticRuntime = DEFAULT_DIAGNOSTIC_RUNTIME,
+        physical_table_access: Callable[[], PhysicalTableMemory | None] | None = None,
     ) -> None:
         """Create a session bound to an architecture registry and a diagnostic runtime.
 
@@ -100,6 +101,7 @@ class ToolkitSession:
         """
         self._architecture_registry = architecture_registry
         self._diagnostic_runtime = diagnostic_runtime
+        self._physical_table_access = physical_table_access
         self._memory: WritableTargetMemory | None = None
         self._probe: ProbeResult | None = None
         self._slices: dict[type[SessionSlice], SessionSlice] = {}
@@ -236,6 +238,13 @@ class ToolkitSession:
             )
         return target
 
+    def set_physical_table_access(
+        self,
+        provider: Callable[[], PhysicalTableMemory | None] | None,
+    ) -> None:
+        """Bind or revoke explicit context-checked physical access; never infer it from GDB."""
+        self._physical_table_access = provider
+
     def diagnose(
         self,
         service: DiagnosticServiceName,
@@ -255,6 +264,15 @@ class ToolkitSession:
         DiagnosticResult
             The collected report or an explicit unavailable result.
         """
+        if (
+            service is DiagnosticServiceName.SECURITY_AUDIT
+            and self._physical_table_access is not None
+            and (access is None or access.physical_memory is None)
+        ):
+            access = replace(
+                access or DiagnosticRuntimeAccess(),
+                physical_memory=self._physical_table_access(),
+            )
         return self._diagnostic_runtime.diagnose(self.memory, service, access)
 
     def state(self, slice_type: type[SliceT]) -> SliceT:

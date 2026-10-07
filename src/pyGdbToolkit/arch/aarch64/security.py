@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ...target_memory import TargetMemory
 from ..base import Architecture, TargetDescription
 from ..diagnostics import (
@@ -15,12 +17,13 @@ from ..diagnostics import (
     DiagnosticServiceName,
     DiagnosticSeverity,
 )
-from .cpu import decode_midr
+from .cpu import CpuRegister, decode_midr
 from .features import collect_feature_report
 from .isolation import audit_isolation, collect_isolation_report
 from .mmu import audit_mmu, collect_execution_context, collect_mmu_report
 from .protection import audit_protection, collect_protection_report
 from .target import AArch64TargetDescription
+from .tables import audit_table_walk, walk_tables
 
 
 class AArch64SecurityAuditor:
@@ -58,6 +61,18 @@ class AArch64SecurityAuditor:
         mmu = collect_mmu_report(registers, context, features)
         isolation = collect_isolation_report(registers, context, features, mmu)
         protection = collect_protection_report(registers, isolation, features)
+        physical = None if access is None else access.physical_memory
+        table_context = protection
+        if physical is not None and registers is not None:
+            format_value = registers.read_first(("id_aa64mmfr3_el1", "ID_AA64MMFR3_EL1"))
+            table_context = replace(
+                protection,
+                registers=(
+                    *protection.registers,
+                    CpuRegister("ID_AA64MMFR3_EL1", 64, format_value),
+                ),
+            )
+        tables = walk_tables(physical, table_context, features)
         if midr is None:
             identity_detail = "MIDR_EL1 is not exposed or readable; CPU identity is unknown."
         else:
@@ -73,7 +88,8 @@ class AArch64SecurityAuditor:
                 DiagnosticSeverity.INFO,
                 "AArch64 audit coverage is limited",
                 "CPU identity, execution context, selected ID capabilities, MMU, isolation and conditional PAC/BTI/MTE controls are observed. "
-                "Mapping permissions, effective system-wide isolation and binary protection coverage are not audited. "
+                "Classic table permissions are inspected only with explicitly authorized physical access. "
+                "Effective system-wide isolation and binary protection coverage are not audited. "
                 "This report does not establish a secure configuration.",
             ),
             DiagnosticFinding(
@@ -114,4 +130,5 @@ class AArch64SecurityAuditor:
         findings += audit_mmu(mmu, features)
         findings += audit_isolation(isolation, features)
         findings += audit_protection(protection, features)
+        findings += audit_table_walk(tables)
         return DiagnosticReport(self.service, target, findings=findings)
