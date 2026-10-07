@@ -86,11 +86,11 @@ def test_run_audit_adapts_portable_report_without_architecture_branches(fake_gdb
 
 
 def test_run_audit_preserves_unsupported_target_error(fake_gdb: object) -> None:
-    """Unavailable portable results retain the established user-facing error."""
+    """Unavailable portable results retain the architecture-neutral service reason."""
     fake_gdb._inferior = object()
     runtime = Runtime(DiagnosticResult.unavailable("not registered"), [])
 
-    with pytest.raises(fake_gdb.GdbError, match="secscan only supports ARM Cortex-M targets"):
+    with pytest.raises(fake_gdb.GdbError, match="not registered"):
         run_audit(ToolkitSession(diagnostic_runtime=runtime))
 
 

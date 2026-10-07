@@ -139,7 +139,7 @@ def run_audit(session: ToolkitSession = SESSION) -> SecscanReport:
     if result.report is None:
         if result.access_error:
             raise gdb.GdbError(result.unavailable_reason or "target unavailable")
-        raise gdb.GdbError("secscan only supports ARM Cortex-M targets")
+        raise gdb.GdbError(result.unavailable_reason or "secscan is unavailable for this target")
     return _render_model(result.report)
 
 
@@ -347,7 +347,7 @@ SECSCAN_HELP = CommandHelp(
 def render_help() -> None:
     """Render the secscan command overview and help table."""
     table = Table(
-        title="Cortex-M Security Posture Audit",
+        title="Target Security Posture Audit",
         box=box.SIMPLE_HEAVY,
         header_style="bold cyan",
         show_header=True,

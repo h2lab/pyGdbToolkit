@@ -143,10 +143,14 @@ def test_unavailable_gdb_architecture_is_explicit(fake_gdb: SimpleNamespace) -> 
 def test_cortex_m_diagnostics_are_not_dispatched_on_aarch64(
     service: DiagnosticServiceName,
 ) -> None:
-    """Unsupported services return unavailability without Cortex-M memory reads."""
+    """Only registered AArch64 services run, without Cortex-M memory reads."""
     result = DEFAULT_DIAGNOSTIC_RUNTIME.diagnose(MetadataReader("aarch64"), service)
 
     assert result.target is not None
     assert result.target.architecture is Architecture.AARCH64
+    if service is DiagnosticServiceName.SECURITY_AUDIT:
+        assert result.report is not None
+        assert result.report.target == result.target
+        return
     assert result.unavailable_reason is not None
     assert "not registered" in result.unavailable_reason
