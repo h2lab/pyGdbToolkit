@@ -48,6 +48,7 @@ Issues = "https://github.com/h2lab/pyGdbToolkit/issues"
 [project.scripts]
 pyGdbServer = "pyGdbServer.cli:main"
 pyGdbClient = "pyGdbClient.cli:main"
+pyTestFarm = "pyTestFarm.cli:main"
 
 [project.optional-dependencies]
 dev = [
