@@ -12,7 +12,7 @@ bord interactif. L'ancien executable reste disponible pour compatibilite.
 ## Principes
 
 - Une cible associe un identifiant unique dans la ferme a une instance
-  `pyGdbServer`, avec un role optionnel dans l'API Python.
+  `pyGdbServer`, avec un role optionnel dans l'API Python ou le scenario.
 - Chaque instance possede sa connexion WebSocket JSON-RPC independante.
   Les identifiants ne modifient pas la configuration des serveurs.
 - Les connexions et les operations sur plusieurs cibles sont concurrentes.
@@ -121,26 +121,110 @@ asyncio.run(analyse())
 `monitor ...`). Les notifications restent dans une file par cible :
 apres `await farm.request("logs.subscribe")`, consommer
 `await farm.notifications("cpu_primary").get()` dans sa propre tache.
-La CLI ne surveille pas les notifications. Le transport existant conserve
+Le mode commandes CLI ne surveille pas les notifications. Le transport existant conserve
 au maximum 2000 notifications par cible ; ce n'est pas un stockage durable.
 
-## Scenarios futurs et limites actuelles
+## Scenarios YAML et JSON
 
-Cette version fournit uniquement les fondations de connexion et de routage.
-Elle ne lit **aucun fichier de scenario**, JSON ou YAML, et n'interprete pas
-encore `connect_all`, `reset_sequence`, `run_until`, `peer failure` ou
-`wait_and_observe` comme etapes de scenario.
+Le support initial couvre les actions specialisees et les commandes libres de
+[l'exemple multi-cible](examples/multi_soc_protocol_resilience.yaml).
+Adapter les adresses des serveurs et l'adresse d'execution avant de le lancer :
 
-Une future couche de scenario pourra mapper `targets[].id`, `server` et
-`role` vers `Target`, puis ordonnancer les etapes via cette API. Les commandes
-sont concurrentes, mais ne garantissent pas une synchronisation temps reel.
-Une reponse a `gdb continue` ne signifie pas que la cible a atteint un point
-d'arret : une future action `run_until` devra observer les evenements.
+```console
+pyTestFarm --scenario src/pyTestFarm/examples/multi_soc_protocol_resilience.yaml
+```
+
+`--scenario` ne se combine pas avec `--target`, `--select` ou `--command`.
+Les cibles et leurs roles viennent du fichier. `--timeout` reste disponible
+pour les connexions, requetes RPC et le delai par defaut de `run_until`.
+Le fichier entier est valide **avant toute connexion** : champs inconnus,
+identifiants dupliques, references invalides, actions sans commande inconnues, valeurs
+negatives et cles YAML dupliquees sont refuses. Le chargement YAML est sur ;
+les tags de construction d'objets Python ne sont pas autorises.
+
+| Action | Parametres | Appels JSON-RPC et comportement |
+| --- | --- | --- |
+| `connect_all` | Aucun | Doit etre la premiere et unique etape de connexion. Ouvre les connexions en parallele puis demande `server.status`. |
+| `reset_sequence` | `targets`, `delay_ms` (defaut : 0) | `command.execute` avec `monitor reset halt` sur toutes les cibles selectionnees **en parallele**, puis attend `delay_ms` apres les reponses de toutes les cibles. |
+| `run_until` | `target`, `address`, `timeout_ms` (optionnel) | `command.execute` avec `gdb until *adresse &`, puis lit `logs.get` jusqu'a un evenement MI `*stopped` a l'adresse demandee. |
+| `peer failure` ou `peer_failure` | `target`, `command: reset` | `command.execute` avec `monitor reset` sur ce pair uniquement. Les autres commandes d'injection ne sont pas encore supportees. |
+| `wait_and_observe` | `duration_ms`, `monitor`, `poll_interval_ms` (defaut : 100) | Echantillonne `target.status` et collecte les nouveaux evenements via `logs.get`, separes par cible. |
+| Libelle libre, par exemple `show cpustate` | `targets`, `command` | Transmet la commande telle quelle via `command.execute` en parallele aux cibles selectionnees. |
+
+Pour les commandes libres, la CLI affiche les resultats sur stdout apres chaque
+etape, avec le prefixe `[identifiant]` sur chaque ligne, puis le rapport JSON
+final. Par exemple :
+
+```text
+[stm32n657] show cpustate: lscpu
+[stm32n657] ... resultat de lscpu ...
+[stm32u5a5] show cpustate: lscpu
+[stm32u5a5] ... resultat de lscpu ...
+```
+
+Les sorties des cibles ayant reussi sont aussi affichees si une autre cible
+echoue. Le mode commandes CLI existant (`--command`) conserve sa sortie JSON.
+Les commandes du scenario ne sont ni corrigees ni interpretees localement :
+une commande inconnue fait echouer l'etape avec l'erreur du serveur.
+
+Les durees sont des entiers en millisecondes ; `timeout_ms` et
+`poll_interval_ms` doivent etre strictement positifs. Une duree d'observation
+de zero produit un echantillon immediat. `address` accepte un entier ou une
+chaine hexadecimale, entre 0 et `0xffffffffffffffff`.
+
+`run_until` ne confond pas l'acquittement avec l'arrivee a l'adresse. Il
+verifie un nouvel evenement d'arret (`location-reached` ou `breakpoint-hit`)
+et l'adresse de la frame GDB. Un autre point d'arret, un signal, une sortie
+du programme ou un timeout fait echouer l'etape. Les evenements historiques
+sont exclus avec un curseur de sequence etabli avant la commande.
+L'execution en arriere-plan doit etre supportee par GDB et sa cible.
+`until` peut egalement s'arreter si la fonction courante se termine :
+si l'adresse demandee n'est pas atteinte, cela reste un echec.
+
+L'observation retourne `samples` (temps ecoule en ms et etats par cible) et
+`events` (listes de logs par cible). Les appels reseau peuvent allonger la
+duree reelle au-dela de `duration_ms` ; l'echantillonnage n'est pas temps reel.
+Une interruption des sequences de logs est signalee comme une erreur :
+le serveur ne garde que 10000 evenements recents accessibles par `logs.get`.
+Les etats d'execution indisponibles ou les erreurs RPC interrompent egalement
+le scenario.
+
+Le rapport JSON contient `scenario`, `targets` (serveur et role) et `steps`
+(index a partir de 1, action canonique et resultat). Sur erreur, stderr
+contient aussi `step`, `action` et `report` avec les etapes deja terminees,
+en plus des erreurs et resultats partiels de l'operation en echec.
+Les codes de sortie sont les memes que pour le mode commandes.
+
+API Python :
+
+```python
+import asyncio
+from pathlib import Path
+
+from pyTestFarm import load_scenario, run_scenario
+
+scenario = load_scenario(Path("scenario.yaml"))
+report = asyncio.run(run_scenario(scenario, timeout=30))
+```
+
+## Limites et tests
+
+Cette version n'ajoute pas d'assertions metier, boucles, conditions ou
+reconnexion automatique. Elle ne supervise pas les processus serveurs.
+Les resets sont propres au backend OCD configure ; notamment, le reset
+d'un coeur peut affecter d'autres coeurs du meme SoC. Verifier ce comportement
+sur le materiel avant l'execution du scenario.
+
+Le scenario ne restaure pas l'etat du materiel : meme sur erreur ou timeout,
+une cible reprise peut continuer a executer, et les effets des commandes
+deja envoyees persistent. Fermer les connexions n'est pas une annulation
+de l'execution. Apres `run_until`, la cible reste arretee a l'adresse
+demandee ; aucune reprise implicite n'est faite.
 
 Les tests de base utilisent des serveurs WebSocket locaux sans GDB ni sonde :
 
 ```console
-python -m pytest tests/test_testfarm.py
+python -m pytest tests/test_testfarm.py tests/test_scenarios.py
 ```
 
 Pour une utilisation distante, proteger l'API par un reseau de confiance ou

@@ -403,6 +403,20 @@ Requests orderly shutdown of WebSocket, GDB, and the OCD.
 {"jsonrpc":"2.0","id":9,"method":"server.shutdown"}
 ```
 
+## Multi-target automation client
+
+`pyTestFarm` connects to multiple independently identified server sessions
+without a dashboard. Start each server separately, then run:
+
+```console
+pyTestFarm --target primary=127.0.0.1:1234 --target peer=127.0.0.1:1235
+pyTestFarm --target primary=127.0.0.1:1234 --command "lscpu"
+```
+
+Without commands it returns `server.status`; repeated `--command` options run
+in order, concurrently across the selected targets. Results are JSON keyed by
+target id. File-based scenario execution is not implemented yet.
+
 ## Dashboard client
 
 Install the project in the client environment and start the terminal dashboard:

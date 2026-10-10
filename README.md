@@ -12,8 +12,10 @@ Cortex-M microcontrollers. The toolkit provides processor identification, debug
 access-port inspection, memory discovery, fault analysis, SVD peripheral access, profiling,
 security auditing and Camelot RTOS inspection.
 
-Use it directly in GDB, or run `pyGdbServer` and `pyGdbClient` for a supervised
-debug session with a terminal dashboard and a JSON-RPC automation interface.
+Use it directly in GDB, or run `pyGdbServer` for a supervised debug session.
+[`pyTestFarm`](src/pyTestFarm/README.md) automates one or multiple identified
+server sessions concurrently through JSON-RPC. The legacy `pyGdbClient`
+terminal dashboard remains available for interactive sessions.
 
 ## Installation
 

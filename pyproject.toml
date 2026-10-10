@@ -22,6 +22,7 @@ dependencies = [
     "rich>=13.6",
     "textual>=1.0",
     "websockets>=14.2",
+    "PyYAML>=6.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -59,12 +60,16 @@ dev = [
     "pytest",
     "pytest-cov",
     "types-gdb",
+    "types-PyYAML>=6.0",
     "sphinx>=8,<9",
     "myst-parser>=4,<5",
     "furo>=2024.8.6,<2027",
 ]
 
 [tool.setuptools_scm]
+
+[tool.setuptools.package-data]
+pyTestFarm = ["README.md", "examples/*.yaml"]
 
 [tool.black]
 line-length = 100
