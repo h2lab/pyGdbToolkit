@@ -17,6 +17,7 @@ from .arch.aarch64.session_state import cpu_aarch64_report
 from .arch.arm.coresight import RomTableDiscovery
 from .arch.arm.models import DeviceReport, FieldValue
 from .arch.arm.session_state import cpu_arm_report
+from .arch.trace import TraceCapabilities, TraceComponentKind
 from .session import SESSION, CommandHelp, CommandUsage
 from .target_memory import TargetReadError
 
@@ -80,12 +81,12 @@ def render_report() -> None:
     """Render the architecture-specific result of the common CPU collection API."""
     report = cpu_report()
     if isinstance(report, DeviceReport):
-        render_arm_report(report)
+        render_arm_report(report, SESSION.trace_capabilities())
     else:
-        render_aarch64_report(report)
+        render_aarch64_report(report, trace=None)
 
 
-def render_aarch64_report(report: CpuReport) -> None:
+def render_aarch64_report(report: CpuReport, trace: TraceCapabilities | None = None) -> None:
     """Render architected CPU identity without inferring SoC signatures or topology."""
     table = Table(
         title="AArch64 CPU report",
@@ -144,13 +145,15 @@ def render_aarch64_report(report: CpuReport) -> None:
     CONSOLE.print(table)
 
 
-def render_arm_report(report: DeviceReport) -> None:
+def render_arm_report(report: DeviceReport, trace: TraceCapabilities | None = None) -> None:
     """Render a stable device report through the shared Rich console.
 
     Parameters
     ----------
     report
         Decoded CPU and device information.
+    trace
+        Optional architecture-neutral trace capability evidence.
     """
     table = Table(
         title="Cortex-M CPU report",
@@ -174,7 +177,41 @@ def render_arm_report(report: DeviceReport) -> None:
     table.add_row("Flash", _field_text(report.flash))
     table.add_row("Package type", _field_text(report.package))
     table.add_row("Serial number", _field_text(report.serial_number))
+    if trace is not None:
+        table.add_section()
+        for kind in TraceComponentKind:
+            table.add_row(kind.value.upper(), _trace_text(trace, kind))
     CONSOLE.print(table)
+
+
+def _trace_text(trace: TraceCapabilities, kind: TraceComponentKind) -> Text:
+    """Format all components of one kind without promoting unknown properties."""
+    if not trace.is_available:
+        return Text(f"Unavailable: {trace.unavailable_reason}", style="yellow")
+    components = tuple(component for component in trace.components if component.kind == kind)
+    if not components:
+        return Text("Not detected")
+    details: list[str] = []
+    for component in components:
+        details.append(f"Detected at 0x{component.base:08X}")
+        if kind == TraceComponentKind.ETM:
+            details.append(f"Architecture version: {component.version or 'Unknown'}")
+            security = component.security_filtering
+            filtering = (
+                "Unknown" if security is None else ("Supported" if security else "Not supported")
+            )
+            details.append(f"Secure/non-Secure filtering: {filtering}")
+            if component.secure_exception_levels is not None:
+                details.append(f"EXLEVEL_S mask: 0x{component.secure_exception_levels:X}")
+            if component.nonsecure_exception_levels is not None:
+                details.append(f"EXLEVEL_NS mask: 0x{component.nonsecure_exception_levels:X}")
+        if kind in (TraceComponentKind.ETB, TraceComponentKind.ETF):
+            size = component.buffer_size_bytes
+            details.append(f"Buffer size: {'Unknown' if size is None else f'{size:,} bytes'}")
+        for register in component.registers:
+            if not register.is_available:
+                details.append(f"{register.name} unavailable: {register.unavailable_reason}")
+    return Text("\n".join(details))
 
 
 def _field_text(field: FieldValue) -> Text:

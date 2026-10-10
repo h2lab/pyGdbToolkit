@@ -21,6 +21,7 @@ import gdb
 from .arch import (
     DEFAULT_ARCHITECTURE_REGISTRY,
     DEFAULT_DIAGNOSTIC_RUNTIME,
+    DEFAULT_TRACE_CAPABILITY_REGISTRY,
     Architecture,
     ArchitectureRegistry,
     DiagnosticResult,
@@ -29,8 +30,10 @@ from .arch import (
     DiagnosticServiceName,
     ProbeResult,
     TargetDescription,
+    TraceCapabilities,
+    TraceCapabilityRegistry,
 )
-from .target_memory import TargetMemoryReader, WritableTargetMemory
+from .target_memory import TargetMemoryReader, TargetReadError, WritableTargetMemory
 from .arch.memmap import MemoryRegion, TargetFingerprint
 from .memmap import MemoryMapReport
 
@@ -88,6 +91,7 @@ class ToolkitSession:
         self,
         architecture_registry: ArchitectureRegistry = DEFAULT_ARCHITECTURE_REGISTRY,
         diagnostic_runtime: DiagnosticRuntime = DEFAULT_DIAGNOSTIC_RUNTIME,
+        trace_registry: TraceCapabilityRegistry = DEFAULT_TRACE_CAPABILITY_REGISTRY,
     ) -> None:
         """Create a session bound to an architecture registry and a diagnostic runtime.
 
@@ -97,9 +101,13 @@ class ToolkitSession:
             Registry probing the supported architectures, in priority order.
         diagnostic_runtime : DiagnosticRuntime
             Runtime dispatching diagnostic services to the detected architecture.
+        trace_registry : TraceCapabilityRegistry
+            Registry dispatching read-only trace capability probes by architecture.
         """
         self._architecture_registry = architecture_registry
         self._diagnostic_runtime = diagnostic_runtime
+        self._trace_registry = trace_registry
+        self._trace_capabilities: TraceCapabilities | None = None
         self._memory: WritableTargetMemory | None = None
         self._probe: ProbeResult | None = None
         self._slices: dict[type[SessionSlice], SessionSlice] = {}
@@ -191,6 +199,39 @@ class ToolkitSession:
         """The architecture of the connected target, or ``None`` when unidentified."""
         target = self.probe().target
         return None if target is None else target.architecture
+
+    def trace_capabilities(self) -> TraceCapabilities:
+        """Probe and cache trace presence and properties for the current target."""
+        if self._trace_capabilities is None:
+            result = self.probe()
+            if result.target is None:
+                self._trace_capabilities = TraceCapabilities(
+                    unavailable_reason=result.unavailable_reason
+                )
+            else:
+                try:
+                    self._trace_capabilities = self._trace_registry.inspect(
+                        self.memory, result.target
+                    )
+                except TargetReadError as error:
+                    self._trace_capabilities = TraceCapabilities(unavailable_reason=str(error))
+        return self._trace_capabilities
+
+    def has_etm(self) -> bool:
+        """Whether the current target has a positively identified ETM."""
+        return self.trace_capabilities().has_etm()
+
+    def has_etb(self) -> bool:
+        """Whether the current target has a positively identified ETB."""
+        return self.trace_capabilities().has_etb()
+
+    def has_mtb(self) -> bool:
+        """Whether the current target has a positively identified MTB."""
+        return self.trace_capabilities().has_mtb()
+
+    def has_etf(self) -> bool:
+        """Whether the current target has a positively identified ETF."""
+        return self.trace_capabilities().has_etf()
 
     def require_target(self) -> TargetDescription:
         """Return the detected target description.
@@ -290,6 +331,7 @@ class ToolkitSession:
         """Drop the cached target access and identity without clearing command state."""
         self._memory = None
         self._probe = None
+        self._trace_capabilities = None
         self._discovery = None
         self._discovery_context = None
 

@@ -61,6 +61,9 @@ Owner of the session context.
 - **`probe()`**: Returns the cached `ProbeResult` produced by the architecture registry.
 - **`architecture`**: Property returning the detected `Architecture`, or `None` when no registered
   probe recognized the target.
+- **`trace_capabilities()`**: Returns cached, read-only `TraceCapabilities` for the current target.
+- **`has_etm()`**, **`has_etb()`**, **`has_mtb()`**, **`has_etf()`**: Return whether the corresponding
+  trace component was positively identified. These do not enable or configure tracing.
 - **`require_target()`**: Returns the detected `TargetDescription` or raises `gdb.GdbError` with
   the probe's unavailability reason.
 - **`require_target_of(description_type)`**: Same contract, narrowed to an architecture-specific
@@ -141,6 +144,70 @@ This module is deliberately **not** re-exported by `arch.arm.__init__`: it is th
 the `arch` package depends on the session, and keeping it out of the package surface guarantees
 that `arch` stays usable, and testable, without any session or GDB concern.
 
+## Read-Only Trace Capabilities
+
+```python
+from pyGdbToolkit.session import SESSION
+
+capabilities = SESSION.trace_capabilities()
+if capabilities.is_available:
+    present = (SESSION.has_etm(), SESSION.has_etb(), SESSION.has_mtb())
+    for component in capabilities.components:
+        print(component.kind, hex(component.base), component.version,
+              component.security_filtering, component.buffer_size_bytes)
+else:
+    print(capabilities.unavailable_reason)
+```
+
+The portable models and `TraceCapabilityRegistry` live in `arch.trace`; Arm register
+decoding lives in `arch.arm.trace`. A backend is registered per architecture. A new
+architecture can supply another probe without modifying `ToolkitSession`. Custom sessions
+can inject a registry through `ToolkitSession(trace_registry=...)`.
+
+The current Arm backend supports Cortex-M target descriptions and the existing ordered
+MCU/processor ROM-table roots, including nested class-1 tables. It does not guess fixed
+ETM/ETB/MTB addresses from the CPU name. `discover_trace_capabilities(reader, discovery)`
+also accepts an existing `CoreSightDiscovery`, including a caller-supplied ROM topology.
+It returns every recognized component, not only the first trace source or sink. On a
+multi-core topology these are reachable components, not a claim of per-core ownership.
+
+- **ETM**: Architected ETMv4 identification uses Arm `DEVARCH` (including `PRESENT` and
+  architect identity); its revision supplies the minor architecture version. Known legacy
+  Arm PIDR parts fall back to `ETMIDR`; known older ETMv4 parts can use `TRCIDR1`.
+  Version is the trace architecture version, not the silicon/PIDR revision.
+- **Secure/non-Secure distinction**: `security_filtering` is `True` or `False` when
+  the capability registers are readable, otherwise `None`. Legacy ETM uses the security
+  extension field in `ETMIDR`. ETMv4 uses the Secure/non-Secure masks advertised by
+  `TRCIDR3`, preserved as `secure_exception_levels` and `nonsecure_exception_levels`.
+  Both nonempty masks establish support for distinguishing the states. This is not a
+  check of authentication, current trace configuration, or Secure debug access permissions.
+- **ETB**: The classic Arm ETB reports `RAM_DEPTH * 4` bytes. Recognized Arm TMCs use
+  `DEVID.CONFIGTYPE` to distinguish ETB from ETF and external-memory ETR/ETS; embedded
+  capacity is `RSZ * 4` bytes. ETF is exposed separately, not counted as ETB.
+- **MTB**: Identification uses the Arm MTB `DEVARCH` or known legacy Arm PIDR parts.
+  No total buffer capacity is inferred from the currently programmed MTB mask.
+
+No control register is written, no lock is cleared, no power domain is enabled, and
+no trace data is read or consumed. Optional register read errors preserve recognized
+component presence and are recorded in `component.registers` as `RegisterValue` evidence.
+Unknown version, security support, or buffer size is `None`, never a guessed value.
+
+`has_*()` reports confirmed presence only. `False` is not proof of hardware absence:
+an unsupported architecture, inaccessible ROM table, or component invisible through the
+selected memory access may prevent detection. Inspect `is_available`, `unavailable_reason`,
+and register evidence when this distinction matters. Only known/architected identities are
+recognized; unknown components are not classified just because they are CPU trace sources.
+Class-9 ROM-table traversal and powering inaccessible components are not added by this API.
+
+The trace cache is cleared by both `invalidate()` and `reset()`, including core switches
+that invalidate the session. Failed results are cached too; invalidate the session before
+retrying after access permissions or connectivity change.
+
+Register encodings were checked against
+[Arm CSAL register definitions](https://github.com/ARM-software/CSAL/blob/master/include/csregisters.h),
+[Linux ETMv4 definitions](https://github.com/torvalds/linux/blob/master/drivers/hwtracing/coresight/coresight-etm4x.h),
+and [pyOCD component identities](https://github.com/pyocd/pyOCD/blob/main/pyocd/coresight/component_ids.py).
+
 ---
 
 ## Session State Slices
@@ -161,7 +228,7 @@ Two levels of clearing are distinguished, because target-derived data and user-s
 have the same lifetime:
 
 - **`invalidate()`** drops only what is re-derivable from the target: the memory accessor and the
-  probe result, plus the confirmed discovery metadata. It is what GDB event hooks call, so reconnecting a probe or loading new symbols
+  probe result, trace capabilities, plus the confirmed discovery metadata. It is what GDB event hooks call, so reconnecting a probe or loading new symbols
   never discards user work such as a loaded SVD file or an RTOS project.
 - **`reset()`** additionally clears every registered slice. It is the full session teardown, used
   when the whole context must return to its initial state.
