@@ -16,6 +16,7 @@ from .context import RpcRequester, TargetContextError, fetch_target_context
 from .contracts import (
     ActionPlan,
     PlannedAction,
+    PolicyDecision,
     PolicyOutcome,
     TargetContext,
     TargetPolicy,
@@ -29,9 +30,16 @@ MAX_RESULT_BYTES = 64 * 1024
 class GatewayError(RuntimeError):
     """A plan was blocked or interrupted; completed observations remain available."""
 
-    def __init__(self, message: str, results: tuple[ToolResult, ...] = ()) -> None:
+    def __init__(
+        self,
+        message: str,
+        results: tuple[ToolResult, ...] = (),
+        *,
+        decision: PolicyDecision | None = None,
+    ) -> None:
         super().__init__(message)
         self.results = results
+        self.decision = decision
 
 
 class GatewayCancelledError(asyncio.CancelledError):
@@ -124,7 +132,8 @@ class ToolGateway:
             decision = self._policy.evaluate(normalized, context)
             if decision.outcome is not PolicyOutcome.ALLOW:
                 raise GatewayError(
-                    f"plan blocked ({decision.outcome}): {'; '.join(decision.reasons)}"
+                    f"plan blocked ({decision.outcome}): {'; '.join(decision.reasons)}",
+                    decision=decision,
                 )
             pending_call_id = None
             try:

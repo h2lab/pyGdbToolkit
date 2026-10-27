@@ -15,13 +15,12 @@ No new dependency is required.
 The second increment isolates client tests from GDB (see
 [Client test suite](#client-test-suite)). The third adds the structured
 [`target.context`](#target-context) RPC. The fourth adds local SQLite
-[conversation persistence](#conversation-persistence). Subsequent increments will add
-target protection, auditor approval, orchestration, the Copilot adapter, and the second
-dashboard prompt. Long-context management and end-to-end simulated audit
-workflows follow.
-
-The fifth increment supplies the [tool catalogue and controlled RPC gateway](#tool-catalogue-and-rpc-gateway).
-There is still no production allowing policy or automatic dashboard execution.
+[conversation persistence](#conversation-persistence). The fifth supplies the
+[tool catalogue and controlled RPC gateway](#tool-catalogue-and-rpc-gateway).
+The sixth adds the [deterministic protection policy](#deterministic-protection-policy).
+There is still no automatic dashboard execution. Subsequent increments will add
+auditor approval, orchestration, the Copilot adapter, and the second dashboard
+prompt. Long-context management and end-to-end simulated audit workflows follow.
 
 ## Trust boundaries
 
@@ -41,7 +40,7 @@ Auditor prompt -> orchestrator -> LLM provider
 
 The provider receives context and tool **definitions**, never executable
 callbacks, a target-memory accessor, or an RPC client. A `ToolCallProposed` event
-does not execute anything. Only a future local executor may dispatch an operation,
+does not execute anything. Only the local execution gateway may dispatch an operation,
 after argument validation, policy assessment, and any required auditor approval.
 
 `ActionPlan` identifies the target-context snapshot and the ordered steps.
@@ -52,7 +51,7 @@ classify the actual operation and its arguments independently.
 `TargetPolicy.evaluate()` assesses the complete plan against a current snapshot.
 `PolicyDecision` has one of three explained outcomes: `allow`,
 `require_approval`, or `deny`. None of these objects is an auditor approval token.
-This increment supplies the interface, not an allowing policy implementation.
+`ProtectionPolicy` supplies the conservative local implementation described below.
 
 Frozen dataclasses prevent field reassignment but JSON dictionaries and lists
 inside tool payloads remain mutable. They are data-transfer objects, not signed
@@ -262,9 +261,9 @@ and log subscriptions are not exposed by the catalogue.
    operation stops the chain, with no automatic retry.
 
 Effects describe operation classes, not an unconditional safe-read policy.
-The deterministic policy is the next increment; auditor approval and the
-orchestrator follow separately. Neither the store nor the provider receives
-this gateway or its transport.
+The [deterministic policy](#deterministic-protection-policy) is available in
+`pyGdbClient.llm.policy`; auditor approval and the orchestrator follow separately.
+Neither the store nor the provider receives this gateway or its transport.
 
 Results are correlated `ToolResult` objects whose `content` is valid JSON.
 Normal content is `{"result": <RPC object>, "truncated": false}`. The complete
@@ -277,7 +276,9 @@ an error observation with `outcome: "unknown"`: the target action may already
 have run. Long error text is also explicitly truncated within the byte limit.
 
 Validation errors raise `ToolValidationError`. Context/policy blocks raise
-`GatewayError`, retaining any earlier results in `results`. Cancellation raises
+`GatewayError`, retaining any earlier results in `results`. Policy blocks also
+carry the structured `PolicyDecision` in `decision`, so callers need not parse
+the exception message. Other blocks leave `decision` as `None`. Cancellation raises
 `GatewayCancelledError` (an `asyncio.CancelledError`) with prior `results` and a
 `pending_call_id` when an operation may still be in flight. None of these
 outcomes rolls back target actions. The caller must not silently replay
@@ -290,6 +291,95 @@ core switch also changes context: subsequent actions need a fresh snapshot and
 new assessment, rather than inheriting the old plan. Asynchronous target output
 still arrives through existing log notifications, outside an individual RPC
 result; collecting it for the agent belongs to the orchestrator increment.
+
+## Deterministic protection policy
+
+`pyGdbClient.llm.policy.ProtectionPolicy` implements `TargetPolicy`. It is a pure
+client-side assessment: no RPC, GDB import, target probe, provider request or
+filesystem access is performed. It validates proposals again through the local
+catalogue and ignores model-supplied effect labels, rationale and claims of
+previous approval.
+
+The default rules are:
+
+| Operation | Decision | Reason |
+|---|---|---|
+| `target_context`, `target_status`, `target_cores`, `target_core`, `svd_peripherals`, `toolkit_commands`, `toolkit_help`, `register_names` | `allow` | Explicit metadata allowlist, with the expected local `observe` classification. |
+| `memory_read` | `require_approval` | Any target memory read may have side effects, even with a declared RAM/ROM/flash region and read permission. |
+| `register_values` | `require_approval` | Fetches target values rather than register catalogue metadata. |
+| `target_select_core` | `require_approval` | Attaching may halt the core; selection changes context for later steps. |
+| Free toolkit/GDB/OCD/MI commands | `require_approval` | Opaque command languages may alter memory, execution, flash/OTP, debug protection or the host filesystem/processes. Text matching cannot prove safety. |
+| Unknown tools, invalid arguments or operations without an explicit policy rule | `deny` | A new catalogue operation does not inherit blanket permission from an `observe` label. |
+| Plan bound to a different supplied target-context ID | `deny` | A fresh plan is required. |
+
+Memory-map kinds, access permissions and provenance are **evidence to show the
+auditor, not authorization**. Memory-read explanations include the requested
+half-open interval, all overlapping declared regions and their sources and
+protections. An unavailable map, addresses outside declared ranges, and reads
+not contained within one region receive explicit explanations. Overlays are
+retained: a broad RAM declaration cannot hide a narrower register window.
+Adjacent regions or gaps do not imply that a combined read is safe.
+
+Applications can configure non-overridable local prohibitions:
+
+```python
+from pyGdbClient.llm.contracts import MemoryRegion
+from pyGdbClient.llm.gateway import ToolGateway
+from pyGdbClient.llm.policy import ProtectionPolicy
+
+policy = ProtectionPolicy(
+    denied_tools={"target_select_core"},
+    denied_memory=(
+        MemoryRegion(
+            0x40000000, 0x40001000,
+            kind="protected", source="auditor", name="Sensitive control window",
+        ),
+    ),
+)
+gateway = ToolGateway(client, policy)
+assessment = policy.assess(plan, context)
+decision = policy.evaluate(plan, context)
+```
+
+`denied_tools` accepts only known catalogue names; configuration typos fail
+explicitly. `denied_memory` contains `MemoryRegion` objects with integer bounds.
+For matching, their kind/protection labels do not change the prohibition:
+**any byte** shared by a `memory_read` and a configured half-open range yields
+`deny`, including when the live map is unavailable or labels it as ordinary RAM.
+A read ending exactly at the range start or beginning at its end does not
+overlap. Configuration is copied, deduplicated and is never read from model
+arguments. Local rules must be chosen by the application/auditor for the
+equipment being assessed.
+
+When **any** local tool or address prohibition is configured, **all opaque
+command tools are denied**, not merely sent for approval. Their scripts and
+alternate command spellings could otherwise bypass a prohibited structured
+operation. Supporting a constrained operation under these restrictions requires
+an explicit validated tool and corresponding policy rule, not a command-text
+allowlist. These are client execution rules, not a server-side memory sandbox:
+they do not constrain other clients or the debug server's own internal accesses.
+
+`assess()` returns a `PlanAssessment` with ordered `ActionAssessment` objects.
+Each action contains its call ID, tool name, catalogue-owned effects and
+explained `PolicyDecision`. The aggregate uses the strict precedence
+**`deny` > `require_approval` > `allow`** and preserves every action's reasons.
+It assesses the whole chain: a safe prefix is not dispatched before an unsafe
+or prohibited later step is resolved. `evaluate()` returns that aggregate
+decision for the existing gateway protocol.
+
+Assessment objects and `require_approval` are **not auditor consent**. The
+gateway still blocks both `deny` and `require_approval`; there is no approved
+flag, persisted authorization or allowing fallback. Its no-policy default also
+remains disabled. Applications must explicitly supply `ProtectionPolicy` to
+enable its metadata-only automatic path. The current dashboard is unchanged.
+Local restrictions are not automatically persisted in conversation history;
+the application must reapply them when reopening an audit.
+
+Auditor approval UI, binding approval to an exact plan/context digest, execution
+budgets and orchestration are subsequent increments. Until then, memory reads,
+register-value reads, core changes and opaque commands do not execute through
+this policy. The gateway's live-context refresh remains mandatory for allowed
+plans and retains its documented multi-client check/execute limitation.
 
 ## Provider lifecycle and events
 
