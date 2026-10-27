@@ -21,14 +21,25 @@ from .llm.approval import ApprovalRequest, ApprovalResponse
 from .llm.approval_screen import ApprovalScreen
 from .llm.controller import AgentController, AgentSettings, OpenedSession
 from .llm.orchestrator import AgentEvent
-from .llm.rendering import AgentTranscript, describe_context, describe_status, printable
+from .llm.rendering import (
+    AgentTranscript,
+    describe_session,
+    describe_sessions,
+    describe_status,
+    describe_usage,
+    printable,
+)
 from .rpc import JsonRpcClient, RpcError
 
 _COMMAND_HISTORY_LIMIT = 40
+_AGENT_COMMANDS = {"/status", "/new", "/compact", "/sessions", "/cancel", "/end"}
 _AGENT_HELP = (
     ("TEXT", "Send a natural-language request; the first one opens a session."),
     ("/status", "Show provider readiness and authentication guidance."),
     ("/new", "Cancel any request and open a session on a fresh target snapshot."),
+    ("/compact", "Continue the session in a new one seeded with a bounded recollection."),
+    ("/sessions", "List journaled sessions (this run only, unless --llm-store is set)."),
+    ("/resume ID", "Continue a journaled session on a fresh target snapshot."),
     ("/cancel", "Interrupt the running request; started operations are not rolled back."),
     ("/end", "Cancel any request and close the session."),
     ("/help", "Show these agent commands."),
@@ -338,11 +349,14 @@ class PyGdbClientApp(App[None]):
     def _dispatch_agent_input(self, text: str) -> None:
         """Route an agent CLI line; slash commands are local and never sent to the model."""
         if text.startswith("/"):
-            name = " ".join(text.lower().split())
-            if name == "/help":
+            name, _, argument = text.partition(" ")
+            name, argument = name.lower(), argument.strip()
+            if name == "/help" and not argument:
                 self._show_agent_help()
-            elif name in {"/status", "/new", "/cancel", "/end"}:
+            elif name in _AGENT_COMMANDS and not argument:
                 self.run_worker(self._agent_command(name), group="agent-control")
+            elif name == "/resume" and argument and " " not in argument:
+                self.run_worker(self._agent_command(name, argument), group="agent-control")
             else:
                 self._append_output(
                     f"Unknown agent command: {printable(text)} (see /help)", error=True
@@ -353,7 +367,7 @@ class PyGdbClientApp(App[None]):
     def _show_agent_help(self) -> None:
         self._append_output("AGENT COMMANDS")
         for syntax, description in _AGENT_HELP:
-            self.query_one("#command-output", RichLog).write(Text(f"  {syntax:<9} {description}"))
+            self.query_one("#command-output", RichLog).write(Text(f"  {syntax:<10} {description}"))
 
     def _agent_ready(self) -> AgentController | None:
         if self._agent is None:
@@ -376,15 +390,23 @@ class PyGdbClientApp(App[None]):
         except Exception as error:
             self._show_agent_error(error)
 
-    async def _agent_command(self, name: str) -> None:
-        agent = self._agent_ready() if name != "/status" or self._agent is None else self._agent
+    async def _agent_command(self, name: str, argument: str = "") -> None:
+        local = name in {"/status", "/sessions"}
+        agent = self._agent if local and self._agent is not None else self._agent_ready()
         if agent is None:
             return
         try:
             if name == "/status":
                 self._write_output(describe_status(agent.provider_id, await agent.status()))
+                self._write_output([describe_usage(agent.usage)])
             elif name == "/new":
                 self._show_agent_session(await agent.new_session())
+            elif name == "/compact":
+                self._show_agent_session(await agent.compact())
+            elif name == "/resume":
+                self._show_agent_session(await agent.resume(argument))
+            elif name == "/sessions":
+                self._write_output(describe_sessions(agent.sessions()))
             elif name == "/cancel":
                 if not await agent.cancel():
                     self._append_output("No agent request is running")
@@ -396,7 +418,7 @@ class PyGdbClientApp(App[None]):
             self._show_agent_error(error)
 
     def _show_agent_session(self, session: OpenedSession) -> None:
-        self._write_output(describe_context(session.session_id, session.context))
+        self._write_output(describe_session(session))
 
     def _show_agent_event(self, event: AgentEvent) -> None:
         self._write_output(self._transcript.feed(event))
@@ -717,7 +739,7 @@ def _help_text(
         ),
         Text("Other commands without a prefix are sent to GDB and resolve pyGdbToolkit commands."),
         Text("AGENT CLI (second input, enabled with --llm <provider>)", style="bold cyan"),
-        *(Text(f"  {syntax:<9} {description}") for syntax, description in _AGENT_HELP),
+        *(Text(f"  {syntax:<10} {description}") for syntax, description in _AGENT_HELP),
     ]
 
 

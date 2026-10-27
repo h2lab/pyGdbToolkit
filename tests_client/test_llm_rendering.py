@@ -17,6 +17,7 @@ from pyGdbClient.llm.contracts import (
     ToolCall,
     ToolResult,
 )
+from pyGdbClient.llm.controller import ContextUsage, OpenedSession
 from pyGdbClient.llm.orchestrator import (
     AgentNotice,
     AgentPlan,
@@ -32,9 +33,13 @@ from pyGdbClient.llm.rendering import (
     MAX_DISPLAYED_REGIONS,
     AgentTranscript,
     describe_context,
+    describe_session,
+    describe_sessions,
     describe_status,
+    describe_usage,
     printable,
 )
+from pyGdbClient.llm.store import StoredSession
 
 
 def _plain(lines: list[Text]) -> list[str]:
@@ -190,3 +195,41 @@ def test_status_reports_readiness_and_guidance() -> None:
     )
     assert required[0].plain.endswith("not ready · authentication required")
     assert required[0].style == "bold red"
+
+
+def test_session_description_reports_redactions_and_continuity() -> None:
+    plain = _plain(describe_session(OpenedSession("s-1", _context())))
+    assert plain == _plain(describe_context("s-1", _context()))
+    lines = describe_session(OpenedSession("s-2", _context(), 2, "s-\x1b1", 900))
+    text = _plain(lines)
+    assert text[-2:] == [
+        "  Redacted before disclosure: 2 value(s)",
+        "  Continues s-\ufffd1: 900 characters of recollection",
+    ]
+    assert lines[-1].style == "yellow"
+    empty = _plain(describe_session(OpenedSession("s-3", _context(), continues="s-1")))
+    assert empty[-1] == "  Continues s-1: no recorded history to recollect"
+    test_data = describe_session(OpenedSession("s-4", _context(), test_data=True))
+    assert test_data[-1].plain == "  Test data analysis: automatic masking disabled"
+    assert test_data[-1].style == "yellow"
+
+
+def test_usage_is_reported_as_a_bounded_percentage() -> None:
+    assert describe_usage(None).plain == "Agent session: none open"
+    assert describe_usage(ContextUsage(30, 120)).plain == (
+        "Agent session context: 30 / 120 characters (25%)"
+    )
+    assert describe_usage(ContextUsage(500, 100)).plain.endswith("(100%)")
+
+
+def test_sessions_are_listed_with_their_titles() -> None:
+    assert _plain(describe_sessions(())) == ["No journaled agent session"]
+    sessions = (
+        StoredSession("a", "scripted", "", "ctx-1", "2026-01-01T00:00:00Z"),
+        StoredSession("b", "scripted", "continues a", "ctx-1", "2026-01-02T00:00:00Z"),
+    )
+    assert _plain(describe_sessions(sessions)) == [
+        "Journaled agent sessions (oldest first)",
+        "  a  2026-01-01T00:00:00Z  scripted",
+        "  b  2026-01-02T00:00:00Z  scripted · continues a",
+    ]

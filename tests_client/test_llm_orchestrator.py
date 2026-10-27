@@ -13,11 +13,13 @@ from typing import Any
 import pytest
 
 from pyGdbClient.llm.approval import ApprovalRequest, ApprovalResponse
+from pyGdbClient.llm.confidentiality import Redactor
 from pyGdbClient.llm.contracts import (
     ContextFact,
     MemoryMapContext,
     TargetContext,
     ToolCall,
+    ToolResult,
 )
 from pyGdbClient.llm.gateway import ToolGateway
 from pyGdbClient.llm.orchestrator import (
@@ -167,6 +169,7 @@ class Harness:
         policy: ProtectionPolicy | None = None,
         store: ContextStore | None = None,
         client: Any = None,
+        redactor: Redactor | None = None,
     ) -> None:
         self.events: list[AgentEvent] = []
         self.requests: list[ApprovalRequest] = []
@@ -189,6 +192,7 @@ class Harness:
             budget=budget,
             store=store,
             context_client=self.client,
+            redactor=redactor,
         )
 
     def of[T](self, kind: type[T]) -> list[T]:
@@ -581,3 +585,63 @@ def test_concurrent_requests_and_invalid_prompts_are_rejected() -> None:
 def test_budget_validation(change: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         replace(AgentBudget(), **change)
+
+
+def test_redactor_masks_disclosures_but_not_sink_or_journal(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        with ContextStore(tmp_path / "agent.db") as store:
+            store.create_session("s-1", "fake", _context())
+            session = FakeSession(_tools(_status()), _answer())
+            harness = Harness(session, store=store, redactor=Redactor())
+            harness.client.responses["target.status"] = {"state": "password=hunter2"}
+            outcome = await harness.agent.submit("Unlock with secret=opensesame")
+            assert outcome.reason == "completed"
+            prompt, results = session.inputs
+            assert prompt == UserPrompt("Unlock with [REDACTED:credential-assignment]")
+            assert isinstance(results, ToolResults)
+            assert "hunter2" not in results.results[0].content
+            assert "[REDACTED:credential-assignment]" in results.results[0].content
+            observed = harness.of(AgentToolResults)[0].results[0]
+            assert "hunter2" in observed.content
+            notices = [notice.message for notice in harness.of(AgentNotice)]
+            assert notices.count("Redacted 1 value(s) before disclosure to the provider") == 2
+            journal = {entry.kind: entry.payload for entry in store.history("s-1")}
+            assert journal[EntryKind.USER] == {"text": "Unlock with secret=opensesame"}
+            assert "hunter2" in str(journal[EntryKind.TOOL_RESULT]["content"])
+
+    asyncio.run(exercise())
+
+
+def test_recollection_prefixes_only_the_first_prompt(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        with ContextStore(tmp_path / "agent.db") as store:
+            store.create_session("s-1", "fake", _context())
+            session = FakeSession(_answer(), _answer())
+            harness = Harness(session, store=store)
+            await harness.agent.submit("first", recollection="Earlier: clock at 8 MHz")
+            await harness.agent.submit("second")
+            assert session.inputs == [
+                UserPrompt("Earlier: clock at 8 MHz\n\nCurrent auditor request:\nfirst"),
+                UserPrompt("second"),
+            ]
+            kinds = [(entry.kind, entry.payload) for entry in store.history("s-1")][:2]
+            assert kinds == [
+                (EntryKind.SUMMARY, {"text": "Earlier: clock at 8 MHz"}),
+                (EntryKind.USER, {"text": "first"}),
+            ]
+            with pytest.raises(ValueError, match="recollection"):
+                await harness.agent.submit("third", recollection=3)  # type: ignore[arg-type]
+
+    asyncio.run(exercise())
+
+
+def test_without_redactor_results_are_disclosed_verbatim() -> None:
+    session = FakeSession(_tools(_status()), _answer())
+    harness = Harness(session)
+    harness.client.responses["target.status"] = {"state": "password=hunter2"}
+    asyncio.run(harness.agent.submit("status"))
+    results = session.inputs[1]
+    assert isinstance(results, ToolResults)
+    assert all(isinstance(result, ToolResult) for result in results.results)
+    assert "hunter2" in results.results[0].content
+    assert not harness.of(AgentNotice)
