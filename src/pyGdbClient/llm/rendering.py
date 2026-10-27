@@ -19,7 +19,7 @@ from .orchestrator import (
     AgentText,
     AgentToolResults,
 )
-from .provider import AuthenticationState, ProviderStatus
+from .provider import AuthenticationState, ProviderError, ProviderStatus, ProviderUsage
 from .store import StoredSession
 
 MAX_RESULT_DISPLAY_CHARS = 2000
@@ -143,6 +143,43 @@ def describe_status(provider_id: str, status: ProviderStatus) -> list[Text]:
         style=_INFO_STYLE if ready else _ERROR_STYLE,
     )
     return [heading, *_lines(status.message, "" if ready else "red", "  ")]
+
+
+def describe_credits(provider_id: str, usage: ProviderUsage | None) -> Text:
+    """Render used and remaining provider credits as percentages, limited quotas first."""
+    heading = printable(provider_id)
+    if usage is None:
+        return Text(f"{heading}: credits not reported", style="dim")
+    if not usage.quotas:
+        return Text(f"{heading}: no quota reported", style="dim")
+    text = Text(f"{heading}\n", style=_INFO_STYLE)
+    ordered = sorted(usage.quotas, key=lambda quota: (quota.unlimited, quota.name))
+    for index, quota in enumerate(ordered):
+        name = printable(quota.name.replace("_", " "))
+        if index:
+            text.append("\n")
+        if quota.unlimited:
+            text.append(f"{name}: unlimited", style="green")
+            continue
+        remaining = quota.remaining_percentage
+        style = "green" if remaining > 25 else "yellow" if remaining > 10 else _ERROR_STYLE
+        filled = round(quota.used_percentage / 10)
+        text.append(f"{name}\n")
+        text.append(f"[{'█' * filled}{'·' * (10 - filled)}] ", style=style)
+        text.append(f"remaining {remaining:.1f}%", style=style)
+        text.append(
+            f"\nused {quota.used_percentage:.1f}% · {quota.used}/{quota.entitlement} requests",
+            style=style,
+        )
+        if quota.reset_date:
+            text.append(f"\nresets {printable(quota.reset_date[:10])}", style="dim")
+    return text
+
+
+def describe_credits_error(provider_id: str, error: Exception) -> Text:
+    """Render why credits could not be read, with sanitized provider errors only."""
+    message = str(error) if isinstance(error, ProviderError) else type(error).__name__
+    return Text(f"{printable(provider_id)}: credits unavailable\n{printable(message)}", style="red")
 
 
 class AgentTranscript:

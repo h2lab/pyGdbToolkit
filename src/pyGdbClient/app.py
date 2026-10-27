@@ -23,6 +23,8 @@ from .llm.controller import AgentController, AgentSettings, OpenedSession
 from .llm.orchestrator import AgentEvent
 from .llm.rendering import (
     AgentTranscript,
+    describe_credits,
+    describe_credits_error,
     describe_session,
     describe_sessions,
     describe_status,
@@ -32,6 +34,7 @@ from .llm.rendering import (
 from .rpc import JsonRpcClient, RpcError
 
 _COMMAND_HISTORY_LIMIT = 40
+_CREDITS_REFRESH_SECONDS = 60.0
 _AGENT_COMMANDS = {"/status", "/new", "/compact", "/sessions", "/cancel", "/end"}
 _AGENT_HELP = (
     ("TEXT", "Send a natural-language request; the first one opens a session."),
@@ -87,6 +90,13 @@ class PyGdbClientApp(App[None]):
         height: 1fr;
         border: tall $surface;
         scrollbar-size-vertical: 1;
+    }
+    #llm-credits {
+        height: auto;
+        min-height: 2;
+        max-height: 12;
+        padding: 0 1;
+        border: tall $surface;
     }
     #core-current {
         height: auto;
@@ -165,6 +175,7 @@ class PyGdbClientApp(App[None]):
         self._target_status_refresh_failed = False
         self._approval_screen: ApprovalScreen | None = None
         self._approval_future: asyncio.Future[ApprovalResponse | None] | None = None
+        self._credits_reading = False
 
     async def request_plan_approval(self, request: ApprovalRequest) -> ApprovalResponse:
         """Display an auditor request; cancellation removes the modal without consent."""
@@ -216,6 +227,16 @@ class PyGdbClientApp(App[None]):
                 yield RichLog(id="gdb-log", wrap=True, markup=False, highlight=False)
                 yield Static("OCD LOG", classes="panel-title")
                 yield RichLog(id="ocd-log", wrap=True, markup=False, highlight=False)
+                yield Static("LLM CREDITS", classes="panel-title")
+                yield Static(
+                    (
+                        "Reading provider credits…"
+                        if self._agent is not None
+                        else "Agent disabled: start with --llm <provider>"
+                    ),
+                    id="llm-credits",
+                    markup=False,
+                )
             with Vertical(id="output-column"):
                 yield Static("COMMAND OUTPUT", classes="panel-title")
                 yield RichLog(id="command-output", wrap=True, markup=False, highlight=False)
@@ -244,6 +265,29 @@ class PyGdbClientApp(App[None]):
         """Connect, subscribe to logs, and initialize the target dashboard."""
         self.query_one("#command", Input).focus()
         self.run_worker(self._connect_and_initialize(), group="connection")
+        if self._agent is not None:
+            self.refresh_credits()
+            self.set_interval(_CREDITS_REFRESH_SECONDS, self.refresh_credits)
+
+    def refresh_credits(self) -> None:
+        """Read the provider's credits in the background, skipping if a read is running."""
+        if self._agent is not None and not self._credits_reading:
+            self._credits_reading = True
+            self.run_worker(self._update_credits(), group="llm-credits")
+
+    async def _update_credits(self) -> None:
+        agent = self._agent
+        try:
+            if agent is None:
+                return
+            try:
+                text = describe_credits(agent.provider_id, await agent.credits())
+            except Exception as error:
+                text = describe_credits_error(agent.provider_id, error)
+            if self.is_running:
+                self.query_one("#llm-credits", Static).update(text)
+        finally:
+            self._credits_reading = False
 
     def on_resize(self, event: Resize) -> None:
         """Stack dashboard panels when the terminal is too narrow for columns."""
@@ -389,6 +433,8 @@ class PyGdbClientApp(App[None]):
             await agent.submit(text, on_session=self._show_agent_session)
         except Exception as error:
             self._show_agent_error(error)
+        finally:
+            self.refresh_credits()
 
     async def _agent_command(self, name: str, argument: str = "") -> None:
         local = name in {"/status", "/sessions"}
@@ -399,6 +445,7 @@ class PyGdbClientApp(App[None]):
             if name == "/status":
                 self._write_output(describe_status(agent.provider_id, await agent.status()))
                 self._write_output([describe_usage(agent.usage)])
+                self.refresh_credits()
             elif name == "/new":
                 self._show_agent_session(await agent.new_session())
             elif name == "/compact":
