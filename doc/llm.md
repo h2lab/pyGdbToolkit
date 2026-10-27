@@ -19,9 +19,9 @@ The second increment isolates client tests from GDB (see
 [tool catalogue and controlled RPC gateway](#tool-catalogue-and-rpc-gateway).
 The sixth adds the [deterministic protection policy](#deterministic-protection-policy).
 The seventh adds [one-attempt auditor approval](#auditor-approval) and its Textual modal.
+The eighth adds the bounded [agent orchestrator](#agent-orchestrator).
 There is still no automatic dashboard execution. Subsequent increments will add
-orchestration, the Copilot adapter, and the second dashboard
-prompt. Long-context management and end-to-end simulated audit workflows follow.
+the Copilot adapter and the second dashboard prompt. Long-context management and end-to-end simulated audit workflows follow.
 
 ## Trust boundaries
 
@@ -441,9 +441,95 @@ restored plans and old `ApprovalResponse` objects cannot authorize a new request
 Failure or cancellation during dispatch retains the gateway's partial-results
 and uncertain-in-flight semantics; consent does not imply rollback or safe retry.
 
-This increment supplies the approval API and modal, but does not yet create a
-gateway automatically in the dashboard or add an agent prompt. Orchestration,
-execution budgets and the second CLI remain separate increments.
+The approval API and modal do not create a gateway automatically in the
+dashboard; the [orchestrator](#agent-orchestrator) drives them, and the second
+CLI wires everything together in a later increment.
+
+## Agent orchestrator
+
+`pyGdbClient.llm.orchestrator.AgentOrchestrator` runs one auditor request at a
+time between an `LlmSession` and a `ToolGateway`:
+
+```python
+from pyGdbClient.llm.orchestrator import AgentBudget, AgentOrchestrator
+
+agent = AgentOrchestrator(
+    session,                 # from provider.open_session(...)
+    gateway,                 # ToolGateway(client, ProtectionPolicy(), approver=...)
+    context,                 # snapshot sent when the session was opened
+    sink=render_event,       # synchronous callback for the central console
+    budget=AgentBudget(),
+    store=store,             # optional ContextStore with an existing session
+    context_client=client,   # optional; refreshes the snapshot after context errors
+)
+outcome = await agent.submit("Why does the UART driver lose bytes?")
+```
+
+The provider only receives its session. The gateway, transport, approval
+callback and store stay local. For each request the orchestrator:
+
+1. Sends a `UserPrompt` and consumes the complete turn under `turn_timeout`.
+   `TextDelta` events are forwarded as `AgentText` while they stream.
+2. Rejects protocol violations as `provider_error` **before executing
+   anything**: missing or repeated `TurnFinished`, unknown events, reused call
+   IDs, or a finish reason that does not match the proposed calls.
+3. Validates every proposed call with the catalogue. One invalid call prevents
+   the whole round; each call receives an explanation.
+4. Builds an `ActionPlan` bound to the current snapshot. The rationale is the
+   model's text for that turn (at most 4000 characters), shown to the auditor.
+   It emits `AgentPlan`, then calls `ToolGateway.execute()`, which applies the
+   policy, the auditor approval and the live-context checks.
+5. Returns a `ToolResults` message containing **one result per proposed call**:
+   an observation, or a JSON error with `"executed": false` when the call was
+   blocked, rejected, invalid, over budget or skipped after a failed operation.
+   The model can then adapt its approach rather than retrying blindly.
+6. Repeats until the provider completes the turn without calls.
+
+When the gateway blocks for a context reason (changed or unverifiable) and
+`context_client` is supplied, the orchestrator reads `target.context` again.
+A changed snapshot is registered in the store, announced with an `AgentNotice`,
+and used for subsequent plans; it never inherits earlier approvals.
+
+### Budgets
+
+`AgentBudget` bounds each request:
+
+| Limit | Default | When exceeded |
+|---|---|---|
+| `max_tool_rounds` | 8 | Calls are answered as not executed and the model gets one final turn without tools. |
+| `max_tool_calls` | 32 | Same as above, counted over all rounds of the request. |
+| `max_calls_per_round` | 8 | The whole round is answered as not executed. |
+| `max_output_chars` | 64000 | The provider turn is cancelled. |
+| `max_prompt_chars` | 16000 | `submit()` raises `ValueError`. |
+| `turn_timeout` | 300 s | The provider turn is cancelled (`timeout`). |
+
+Approval waits are bounded by the gateway's `approval_timeout`, not by
+`turn_timeout`.
+
+### Outcomes, cancellation and journal
+
+`submit()` returns a `RunOutcome` (`completed`, `cancelled`,
+`budget_exhausted`, `timeout` or `provider_error`) with the rounds, tool calls
+and output characters consumed. The sink also receives a final
+`AgentRunFinished`. Concurrent requests and requests after `close()` raise
+`OrchestratorError`.
+
+`cancel()` interrupts the provider turn, a pending approval or the dispatch in
+progress. **Started target operations are not rolled back**: completed results
+are reported, and an `AgentNotice` names a call that may still complete on the
+target. Task cancellation from another source propagates unchanged.
+
+The provider protocol expects a result for each proposed call. If a request
+stops with calls left unanswered (cancellation during approval or dispatch, or
+a model still proposing tools after budget exhaustion),
+`requires_new_session` becomes true and further requests are refused. A
+cancellation while text is streaming keeps the conversation usable.
+
+With a store, the orchestrator records the prompt, the assistant text
+(including partial text when interrupted), each proposed call, each result and
+an `error` entry for any outcome other than `completed`, all bound to the
+snapshot current at the time. This journal records what happened; it is never
+replayed as authorization.
 
 ## Provider lifecycle and events
 
@@ -461,7 +547,7 @@ by exactly one `TurnFinished`. The terminal reason is `tool_calls` when the turn
 proposes invocations, otherwise `completed`. Partial tool-call JSON is assembled
 and validated by adapters before it is exposed to the orchestrator.
 
-The orchestrator collects a complete turn before executing proposals. It
+The [orchestrator](#agent-orchestrator) collects a complete turn before executing proposals. It
 correlates tool results by call ID, and enforces the advertised schemas, call
 ordering, and protection policy. Provider output is never a direct RPC command.
 Provider errors raise `ProviderError`; failure or truncated streaming must not
