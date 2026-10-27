@@ -16,10 +16,12 @@ The second increment isolates client tests from GDB (see
 [Client test suite](#client-test-suite)). The third adds the structured
 [`target.context`](#target-context) RPC. The fourth adds local SQLite
 [conversation persistence](#conversation-persistence). Subsequent increments will add
-a tool catalogue, target
-protection, auditor approval, orchestration, the Copilot adapter, and the second
+target protection, auditor approval, orchestration, the Copilot adapter, and the second
 dashboard prompt. Long-context management and end-to-end simulated audit
 workflows follow.
+
+The fifth increment supplies the [tool catalogue and controlled RPC gateway](#tool-catalogue-and-rpc-gateway).
+There is still no production allowing policy or automatic dashboard execution.
 
 ## Trust boundaries
 
@@ -196,6 +198,98 @@ target context and reassess plans against the protection policy and auditor
 approval. A persisted snapshot alone cannot prove that the same equipment is
 still connected. Session restoration does not resume a Copilot SDK conversation;
 that remains the responsibility of the provider adapter and orchestrator.
+
+## Tool catalogue and RPC gateway
+
+`pyGdbClient.llm.tools.ToolCatalogue` advertises provider-neutral `ToolDefinition`
+objects with JSON Schema object arguments (`additionalProperties: false`).
+Definitions contain no callbacks or transport. The same local parameter
+descriptors generate the schemas and validate primitive types, required fields
+and limits. `prepare()` rejects unknown tools/arguments and returns a detached
+`PreparedCall`: the normalized arguments, fixed RPC route, exact parameters,
+timeout and local effects. Preparing a call is **not authorization** to run it.
+
+| Tool | RPC route or generated command | Local effects |
+|---|---|---|
+| `target_context` | `target.context` | observe |
+| `target_status` | `target.status` | observe |
+| `target_cores`, `target_core` | `target.cores`, `target.core` | observe |
+| `target_select_core` | `target.select_core` with integer `core` | execution control, unknown |
+| `svd_peripherals` | `svd.peripherals` (loaded metadata only) | observe |
+| `toolkit_commands`, `toolkit_help` | `toolkit.commands`, `toolkit.help` | observe |
+| `register_names` | MI `-data-list-register-names` | observe |
+| `register_values` | MI `-data-list-register-values x` | observe |
+| `memory_read` | MI `-data-read-memory-bytes <address> <length>` | read memory |
+| `toolkit_command` | `command.execute`, unmodified command | unknown |
+| `gdb_command` | `command.execute`, `gdb ` prefix | unknown |
+| `ocd_command` | `command.execute`, `monitor ` prefix | unknown |
+| `mi_command` | `mi.execute`, command must start with `-` | unknown |
+
+`memory_read` accepts a JSON integer address and length, rejects booleans and
+floats, and limits each read to 1-4096 bytes without overflowing the 64-bit
+address domain. This limit is not permission to read MMIO. All tools have an
+optional `timeout` in seconds (0.001-300, default 30); the client waits five
+additional seconds for the response. The parameter is forwarded to existing
+RPC methods; methods without server-side timeout support still use their
+existing server timeout. Command strings are nonblank, at most 4096 characters,
+and exclude control characters, including newlines. Toolkit help names are
+limited to 128 characters. Core IDs are integers from 0 to `2**31 - 1`.
+
+The free-command tools retain the capabilities of GDB/OCD/toolkit, including
+memory writes, watchpoints, execution control and toolkit analyses. They are
+**not sandboxes or restricted command languages**: GDB can also run scripts,
+access host files and execute host commands. Even `toolkit_command` is resolved
+by GDB and does not guarantee that the command belongs to the toolkit. These
+tools are always classified as unknown, irrespective of the command name or
+model's claimed effects. Shell/file/MI escape routes must never be treated as
+safe by string matching. Arbitrary RPC methods, workspace transfers, shutdown
+and log subscriptions are not exposed by the catalogue.
+
+`pyGdbClient.llm.gateway.ToolGateway.execute(plan, context)`:
+
+1. Validates **every** proposed call before any RPC or policy evaluation.
+2. Builds a detached normalized plan, replacing model-supplied effect labels
+   with catalogue-owned classifications and making default arguments explicit.
+3. Rejects a plan bound to a different supplied target-context ID.
+4. Asks the application-owned `TargetPolicy` to assess the **whole** plan.
+   No configured policy, `deny`, or `require_approval` blocks dispatch.
+   This increment has no approval flag or bypass.
+5. Before **each** operation, fetches the live target context and checks that
+   both its ID and facts equal the supplied snapshot. A mismatch or unavailable
+   context blocks the remaining steps.
+6. Dispatches sequentially under a per-gateway lock. Arguments cannot be changed
+   by mutating the original proposal after validation. The first failed
+   operation stops the chain, with no automatic retry.
+
+Effects describe operation classes, not an unconditional safe-read policy.
+The deterministic policy is the next increment; auditor approval and the
+orchestrator follow separately. Neither the store nor the provider receives
+this gateway or its transport.
+
+Results are correlated `ToolResult` objects whose `content` is valid JSON.
+Normal content is `{"result": <RPC object>, "truncated": false}`. The complete
+encoded content is capped at **64 KiB**; larger results become
+`{"preview": "...", "original_bytes": N, "truncated": true}`. A preview is an
+incomplete serialized observation, not a complete structured result. GDB/MI
+results are checked for their `class`, `record` and string-array `output`.
+GDB errors and malformed responses set `is_error`. Transport failures produce
+an error observation with `outcome: "unknown"`: the target action may already
+have run. Long error text is also explicitly truncated within the byte limit.
+
+Validation errors raise `ToolValidationError`. Context/policy blocks raise
+`GatewayError`, retaining any earlier results in `results`. Cancellation raises
+`GatewayCancelledError` (an `asyncio.CancelledError`) with prior `results` and a
+`pending_call_id` when an operation may still be in flight. None of these
+outcomes rolls back target actions. The caller must not silently replay
+unexecuted or uncertain steps.
+
+The live-context check and execution are separate RPCs: the gateway serializes
+its own plans, **not other dashboard clients or standalone GDB users**. It does
+not provide an atomic check-and-execute operation across clients. A deliberate
+core switch also changes context: subsequent actions need a fresh snapshot and
+new assessment, rather than inheriting the old plan. Asynchronous target output
+still arrives through existing log notifications, outside an individual RPC
+result; collecting it for the agent belongs to the orchestrator increment.
 
 ## Provider lifecycle and events
 
