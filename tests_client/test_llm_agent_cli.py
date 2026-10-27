@@ -12,7 +12,7 @@ import sqlite3
 from typing import Any
 
 import pytest
-from textual.widgets import Input
+from textual.widgets import Input, Static
 
 from pyGdbClient.llm.approval import ApprovalRequest, ApprovalResponse
 from pyGdbClient.llm.approval_screen import ApprovalScreen
@@ -41,8 +41,11 @@ from pyGdbClient.llm.orchestrator import (
 from pyGdbClient.llm.provider import (
     AuthenticationState,
     LlmSession,
+    ProviderError,
     ProviderEvent,
     ProviderStatus,
+    ProviderUsage,
+    QuotaUsage,
     TextDelta,
     ToolCallProposed,
     TurnFinished,
@@ -53,6 +56,7 @@ from pyGdbClient.llm.recollection import RECOLLECTION_HEADER
 from pyGdbClient.llm.scripted import ScriptedSession, ScriptedTurn
 from pyGdbClient.llm.store import ContextStore, EntryKind
 from pyGdbClient.llm.tools import ToolCatalogue
+from pyGdbClient.app import PyGdbClientApp
 from pyGdbClient.rpc import JsonRpcClient
 from agent_harness import AgentApp, type_agent, until
 from agent_harness import output as console
@@ -569,6 +573,87 @@ def test_agent_cli_commands_are_handled_locally() -> None:
                 assert "provider scripted is not ready" in output
                 assert server.requests == []
                 assert provider.sessions == []
+
+    asyncio.run(exercise())
+
+
+class CreditProvider(TrackedProvider):
+    """Provider reporting a quota that shrinks after each read."""
+
+    def __init__(self, *turns: ScriptedTurn) -> None:
+        super().__init__(*turns)
+        self.remaining = [40.0, 5.0]
+        self.reads = 0
+
+    async def usage(self) -> ProviderUsage:
+        self.reads += 1
+        remaining = self.remaining[min(self.reads, len(self.remaining)) - 1]
+        used = round((100 - remaining) * 30)
+        return ProviderUsage(
+            (
+                QuotaUsage("chat", 100.0, 0, None),
+                QuotaUsage("premium_interactions", remaining, used, 3000),
+            )
+        )
+
+
+class FailingCreditProvider(TrackedProvider):
+    async def usage(self) -> ProviderUsage:
+        raise ProviderError("Copilot quota query failed; check runtime.")
+
+
+def _credits(app: PyGdbClientApp) -> str:
+    return str(app.query_one("#llm-credits", Static).render())
+
+
+def test_credits_panel_sits_below_the_ocd_log_and_refreshes_after_each_request() -> None:
+    async def exercise() -> None:
+        provider = CreditProvider(_answer("Done."))
+        async with FakeRpcServer(_responses()) as server:
+            app = AgentApp(server.url, AgentSettings(provider))
+            async with app.run_test(size=(110, 45)) as pilot:
+                await until(pilot, lambda: "remaining 40.0%" in _credits(app))
+                column = app.query_one("#logs-column")
+                ids = [child.id for child in column.children]
+                assert ids.index("llm-credits") > ids.index("ocd-log")
+                ocd = app.query_one("#ocd-log").region
+                panel = app.query_one("#llm-credits").region
+                assert panel.y >= ocd.bottom and panel.height > 0
+                assert "used 60.0%" in _credits(app)
+                assert "chat: unlimited" in _credits(app)
+                await until(pilot, lambda: app._connected)
+                await type_agent(pilot, app, "Summarize")
+                await until(pilot, lambda: "remaining 5.0%" in _credits(app))
+                assert "used 95.0%" in _credits(app)
+                assert provider.reads == 2
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        (TrackedProvider(), "scripted: credits not reported"),
+        (FailingCreditProvider(), "Copilot quota query failed; check runtime."),
+    ],
+)
+def test_credits_panel_reports_missing_or_failed_credits(
+    provider: TrackedProvider, expected: str
+) -> None:
+    async def exercise() -> None:
+        app = AgentApp("ws://127.0.0.1:1", AgentSettings(provider), connect=False)
+        async with app.run_test(size=(110, 45)) as pilot:
+            await until(pilot, lambda: expected in _credits(app))
+
+    asyncio.run(exercise())
+
+
+def test_credits_panel_explains_disabled_agent() -> None:
+    async def exercise() -> None:
+        app = AgentApp("ws://127.0.0.1:1", None, connect=False)
+        async with app.run_test(size=(110, 45)) as pilot:
+            await pilot.pause()
+            assert "Agent disabled" in _credits(app)
 
     asyncio.run(exercise())
 

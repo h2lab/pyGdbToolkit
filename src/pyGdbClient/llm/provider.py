@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from .contracts import TargetContext, ToolCall, ToolDefinition, ToolResult
 
@@ -30,6 +30,52 @@ class ProviderStatus:
     available: bool
     authentication: AuthenticationState
     message: str
+
+
+@dataclass(frozen=True)
+class QuotaUsage:
+    """Consumption of one provider quota for the current billing period."""
+
+    name: str
+    remaining_percentage: float
+    used: int
+    entitlement: int | None
+    reset_date: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject impossible percentages and counts."""
+        if not self.name.strip():
+            raise ValueError("quota name must be nonempty")
+        if not 0.0 <= self.remaining_percentage <= 100.0:
+            raise ValueError("remaining_percentage must be between 0 and 100")
+        if self.used < 0 or (self.entitlement is not None and self.entitlement < 0):
+            raise ValueError("quota counts must be nonnegative")
+
+    @property
+    def unlimited(self) -> bool:
+        """Return whether the entitlement has no request limit."""
+        return self.entitlement is None
+
+    @property
+    def used_percentage(self) -> float:
+        """Return the consumed share of the entitlement."""
+        return 100.0 - self.remaining_percentage
+
+
+@dataclass(frozen=True)
+class ProviderUsage:
+    """Quota snapshot reported by a provider, without account identity."""
+
+    quotas: tuple[QuotaUsage, ...]
+
+
+@runtime_checkable
+class UsageReporter(Protocol):
+    """Optional provider capability reporting remaining credits."""
+
+    async def usage(self) -> ProviderUsage:
+        """Return the current quota snapshot, or raise ProviderError."""
+        ...
 
 
 @dataclass(frozen=True)
