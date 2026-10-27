@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""LLM contract tests, also runnable with --noconftest without the GDB shim."""
+"""LLM contract tests, run by the client suite without the GDB shim."""
 
 import asyncio
 from dataclasses import replace
