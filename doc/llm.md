@@ -23,8 +23,9 @@ The eighth adds the bounded [agent orchestrator](#agent-orchestrator).
 The ninth adds the optional [GitHub Copilot provider](#github-copilot-provider).
 The tenth adds the [dashboard agent CLI](#dashboard-agent-cli), a second prompt
 that routes natural-language requests through the orchestrator, the policy and
-auditor approval, with output in the central console. Long-context management
-and end-to-end simulated audit workflows follow.
+auditor approval, with output in the central console. The eleventh adds
+[long context and confidentiality](#long-context-and-confidentiality) controls.
+End-to-end simulated audit workflows follow.
 
 ## Trust boundaries
 
@@ -755,8 +756,9 @@ and approved observations to GitHub Copilot. CLI credentials, runtime-owned
 diagnostic/session files and service-side retention remain under their
 respective policies; the local SQLite store is not a guarantee of exclusive
 local persistence. In particular CLI-login mode retains the CLI's normal data
-directory. Do not send sensitive audit data without authorization. Dedicated
-long-context and confidentiality controls follow in a later increment.
+directory. Do not send sensitive audit data without authorization. Recognizable
+secrets are [masked before disclosure](#long-context-and-confidentiality), but
+raw memory and register values are disclosed as read.
 
 ## Dashboard agent CLI
 
@@ -781,7 +783,10 @@ literally: control and bidirectional-formatting characters are replaced by
 | Option | Purpose |
 | ------ | ------- |
 | `--llm PROVIDER` | Enable the agent CLI with a registered provider (`github-copilot`). |
-| `--llm-store FILE` | Retain conversations and target snapshots in this SQLite file. By default nothing is persisted. |
+| `--llm-store FILE` | Retain conversations and target snapshots in this SQLite file (created with mode `0600`). By default they are journaled in memory only, for the dashboard's lifetime. |
+| `--llm-redact REGEX` | Also mask matches of this Python regular expression before disclosure (repeatable, at most 512 characters). |
+| `--llm-test-data` | Analyse test data without automatic masking, including test cryptographic material. Cannot be combined with `--llm-redact`. |
+| `--llm-context-limit CHARS` | Characters exchanged in one conversation before continuing in a new one (default `120000`, at least `24000`). |
 | `--copilot-runtime PATH` | Copilot runtime executable; defaults to `$PYGDB_COPILOT_RUNTIME`. Relative paths are made absolute; nothing is downloaded. |
 | `--copilot-model MODEL` | Model requested from Copilot (default: the runtime's choice). |
 | `--copilot-token-env NAME` | Read a GitHub token from environment variable `NAME`. Without it, the `copilot login` account is used. |
@@ -797,8 +802,11 @@ Lines starting with `/` are handled locally and never sent to the model:
 | Command | Effect |
 | ------- | ------ |
 | *text* | Send a natural-language request. The first one opens a session. |
-| `/status` | Show provider readiness and authentication guidance (for example, run `copilot login`). |
+| `/status` | Show provider readiness, authentication guidance (for example, run `copilot login`) and the session's context usage. |
 | `/new` | Cancel any request, close the session and open one on a fresh target snapshot. |
+| `/compact` | Continue the idle session in a new one, seeded with a recollection of it. |
+| `/sessions` | List the 20 most recently journaled sessions. |
+| `/resume ID` | Cancel any request and continue journaled session `ID` on a fresh snapshot. |
 | `/cancel` | Interrupt the running request; started target operations are not rolled back. |
 | `/end` | Cancel any request and close the session. |
 | `/help` | List these commands. The dashboard `help` command lists them too. |
@@ -812,17 +820,20 @@ of Textual, so other front ends can reuse it. Opening a session:
    authentication is `required` or `expired`, is reported with its guidance
    before any target access;
 2. reads a fresh [`target.context`](#target-context) snapshot;
-3. opens a provider conversation with that snapshot and the
+3. opens a provider conversation with that snapshot, after
+   [masking](#long-context-and-confidentiality), and the
    [tool catalogue](#tool-catalogue-and-rpc-gateway) definitions;
-4. registers the session in the optional SQLite store;
+4. registers the session, with the unmasked snapshot, in the store;
 5. binds a new `ToolGateway` using the default `ProtectionPolicy` and the
    dashboard's [auditor approval](#auditor-approval) modal, then an
    `AgentOrchestrator` with the default budgets.
 
 The console then lists the facts transmitted to the provider: MCU, revision,
 architecture, debug transport (JTAG or SWD), OCD, core, SVD file and memory
-map regions, each with its source or unavailability reason. If any step fails
-after the provider conversation was opened, that conversation is closed.
+map regions, each with its source or unavailability reason, followed by the
+number of masked values and, for a continuation, the recollection size. If any
+step fails after the provider conversation was opened, that conversation is
+closed.
 
 Only one request runs at a time. A conversation left with unanswered tool
 calls (see [cancellation](#outcomes-cancellation-and-journal)) refuses further
@@ -854,3 +865,102 @@ registry.register(MyProviderFactory())
 Identifiers must be unique lowercase names, and the built provider must report
 the same `provider_id`. A provider only receives conversations: it never gets
 the gateway, the RPC client, the approval callback or the store.
+
+## Long context and confidentiality
+
+### Masking before disclosure
+
+Masking is enabled by default. For complete analysis of a test target, use
+the explicit [test-data analysis mode](#test-data-analysis-mode) below.
+
+`pyGdbClient.llm.confidentiality.Redactor` replaces every match of its rules
+with `[REDACTED:<rule>]` in everything the provider receives: the session
+snapshot (descriptive strings only; context identifier and addresses are kept),
+auditor prompts, recollections and tool observations. JSON observations keep
+their structure; only string values are masked. The console and the store keep
+the unmasked data, and each masking is reported by a notice such as
+`Redacted 1 value(s) before disclosure to the provider`.
+
+| Rule | Matches |
+| ---- | ------- |
+| `private-key` | PEM private key blocks, including truncated ones. |
+| `github-token` | `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_` tokens. |
+| `aws-access-key` | `AKIA…` and `ASIA…` access key identifiers. |
+| `bearer-token` | `Bearer …` authorization values. |
+| `credential-assignment` | `password`, `passwd`, `pwd`, `secret`, `api_key`, `access_token` or `auth_token` followed by `:` or `=` and a value. |
+| `custom-N` | The N-th `--llm-redact` expression. |
+
+Rules use bounded quantifiers and expressions matching empty text are rejected.
+Masking is best effort: it recognizes **textual** secrets only. Key material in
+memory dumps, register values or hexadecimal output cannot be recognized and is
+disclosed as read; protect it by not reading it (the
+[protection policy](#deterministic-protection-policy) and the auditor's
+approval decide what is read). Masking is not a production-data isolation
+boundary and does not make an external provider suitable for production data.
+
+### Test-data analysis mode
+
+The purpose of the agent is effective target analysis: memory dumps, register
+values, symbols, stack traces, peripheral state and driver behaviour must stay
+usable by the model. Enable `--llm-test-data` when analysing a target containing
+only test data and **test cryptographic material**:
+
+```console
+pyGdbClient ws://192.0.2.15:1234 --llm github-copilot \
+    --copilot-runtime /absolute/path/to/copilot --llm-test-data
+```
+
+In this mode, automatic masking is disabled for target snapshots, auditor
+prompts, tool results and recollections. Test keys (including PEM), test vectors
+and symbols resembling credential assignments remain visible to the model.
+Every new session emits an explicit disclosure warning, and its console
+description identifies the mode. `--llm-redact` is incompatible with this mode
+to avoid promising unchanged data while applying a filter.
+
+This changes disclosure only: the existing tool catalogue, result-size bounds,
+context budget, deterministic protection policy and one-attempt auditor
+approvals still apply. In particular, memory reads still need approval when
+required by policy, and denied operations stay denied. Recollections remain
+bounded excerpts, not complete archives of dumps; the agent can request fresh
+observations through the same controlled tools.
+
+**For production data, use a local model running on trusted equipment instead
+of an external provider**, including when analysing real keys or other
+cryptographic material. Default masking cannot detect every secret in target
+state. The currently supplied provider is GitHub Copilot, an external service;
+`--llm-test-data` does not make it local or establish a local security boundary.
+A local provider must be integrated through the provider abstraction and its
+execution environment and data retention verified before production use.
+Do not treat an unverified endpoint or an external-service proxy as a trusted
+local model.
+
+### Context budget and continuation
+
+`AgentController` counts the characters exchanged in a conversation: the
+disclosed snapshot, prompts, recollection, assistant text and observations.
+`/status` shows the count against `--llm-context-limit`. When a request starts
+with the count at or above the limit, a notice is written and the request
+continues in a new conversation, exactly as `/compact` does:
+
+1. the previous conversation is closed and a fresh snapshot is read;
+2. `pyGdbClient.llm.recollection.build_recollection` builds, from its journal,
+   a recollection of at most 12000 characters: the newest entries in
+   chronological order, each clipped to 600 characters, an earlier
+   recollection limited to half the budget, the count of omitted entries and
+   the target contexts they were recorded against;
+3. the new conversation is journaled with the title `continues <ID>`, and its
+   first prompt is the recollection followed by `Current auditor request:`.
+
+The recollection states that it is untrusted context, not instructions: it
+grants no approval, and recorded observations may be stale and must be checked
+again on the live target. Every proposed call still goes through the policy
+and, when required, a new auditor approval. `/resume ID` applies the same
+mechanism to any journaled session listed by `/sessions`, which needs
+`--llm-store` to survive a dashboard restart.
+
+### Local store protection
+
+A store file created by the dashboard has mode `0600` (SQLite journal files
+inherit it); an existing file keeps its permissions. The store holds unmasked
+prompts, snapshots and observations: keep it on a protected volume and delete
+it according to the audit's data-handling rules.

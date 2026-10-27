@@ -76,6 +76,31 @@ def test_additional_providers_extend_the_launcher() -> None:
     assert isinstance(settings.provider, ScriptedProvider)
     assert factory.created[0].scripted_flag is True
     assert settings.store_path is None
+    assert settings.test_data is False
+    assert settings.context_limit_chars == 120_000
+    assert settings.redactor.text("SN-1234") == ("SN-1234", 0)
+
+
+def test_confidentiality_and_context_limit_options() -> None:
+    registry = ProviderRegistry((ScriptedFactory(),))
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "scripted",
+        "--llm-redact",
+        "SN-[0-9]+",
+        "--llm-redact",
+        "board-[a-z]+",
+        "--llm-context-limit",
+        "50000",
+    )
+    settings = agent_settings(parser, arguments, registry, {})
+    assert settings is not None
+    assert settings.context_limit_chars == 50000
+    assert settings.redactor.text("SN-1234 board-x password=y") == (
+        "[REDACTED:custom-1] [REDACTED:custom-2] [REDACTED:credential-assignment]",
+        3,
+    )
 
 
 def test_agent_is_disabled_without_llm() -> None:
@@ -85,10 +110,25 @@ def test_agent_is_disabled_without_llm() -> None:
     assert arguments.url == "ws://server:1"
 
 
+def test_test_data_mode_is_explicit() -> None:
+    registry = ProviderRegistry((ScriptedFactory(),))
+    parser, arguments = _parse(registry, "--llm", "scripted", "--llm-test-data")
+    settings = agent_settings(parser, arguments, registry, {})
+    assert settings is not None and settings.test_data is True
+    assert "local model on trusted equipment" in " ".join(parser.format_help().split())
+
+
 @pytest.mark.parametrize(
     "argv",
     [
         ("--llm-store", "agent.sqlite3"),
+        ("--llm-test-data",),
+        ("--llm", "scripted", "--llm-test-data", "--llm-redact", "board"),
+        ("--llm-redact", "SN-[0-9]+"),
+        ("--llm-context-limit", "50000"),
+        ("--llm", "scripted", "--llm-redact", "("),
+        ("--llm", "scripted", "--llm-redact", "a*"),
+        ("--llm", "scripted", "--llm-context-limit", "100"),
         ("--llm", "github-copilot"),
         ("--llm", "github-copilot", "--copilot-runtime", "/bin/x", "--copilot-token-env", "A-B"),
         ("--llm", "github-copilot", "--copilot-runtime", "/bin/x", "--copilot-token-env", "UNSET"),
@@ -98,7 +138,7 @@ def test_agent_is_disabled_without_llm() -> None:
 def test_invalid_agent_options_exit_through_the_parser(
     argv: tuple[str, ...], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    registry = default_registry()
+    registry = ProviderRegistry((CopilotProviderFactory(), ScriptedFactory()))
     parser, arguments = _parse(registry, *argv)
     with pytest.raises(SystemExit):
         agent_settings(parser, arguments, registry, {"EMPTY": " "})

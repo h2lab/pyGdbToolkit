@@ -13,7 +13,8 @@ from pathlib import Path
 
 from .app import PyGdbClientApp
 from .llm.controller import AgentSettings
-from .llm.registry import ProviderConfigurationError, ProviderRegistry, default_registry
+from .llm.confidentiality import Redactor
+from .llm.registry import ProviderRegistry, default_registry
 
 
 def _parser(registry: ProviderRegistry) -> argparse.ArgumentParser:
@@ -38,7 +39,29 @@ def _parser(registry: ProviderRegistry) -> argparse.ArgumentParser:
         "--llm-store",
         type=Path,
         metavar="FILE",
-        help="SQLite file retaining agent conversations and target snapshots (default: none)",
+        help="SQLite file retaining agent conversations and target snapshots (default: memory)",
+    )
+    agent.add_argument(
+        "--llm-redact",
+        action="append",
+        default=[],
+        metavar="REGEX",
+        help="Also mask matches of REGEX before disclosure to the provider (repeatable)",
+    )
+    agent.add_argument(
+        "--llm-test-data",
+        action="store_true",
+        help=(
+            "Disclose test data unchanged, including cryptographic material; production data "
+            "requires a local model on trusted equipment, not an external provider"
+        ),
+    )
+    agent.add_argument(
+        "--llm-context-limit",
+        type=int,
+        default=AgentSettings.context_limit_chars,
+        metavar="CHARS",
+        help="Characters exchanged before continuing in a new session (default: %(default)s)",
     )
     registry.add_arguments(parser)
     return parser
@@ -52,15 +75,34 @@ def agent_settings(
 ) -> AgentSettings | None:
     """Build the agent configuration, reporting invalid options through the parser."""
     if arguments.llm is None:
-        if arguments.llm_store is not None:
-            parser.error("--llm-store requires --llm")
+        if (
+            arguments.llm_store is not None
+            or arguments.llm_redact
+            or arguments.llm_test_data
+            or arguments.llm_context_limit != AgentSettings.context_limit_chars
+        ):
+            parser.error(
+                "--llm-store, --llm-redact, --llm-test-data and --llm-context-limit require --llm"
+            )
         return None
+    if arguments.llm_test_data and arguments.llm_redact:
+        parser.error("--llm-test-data cannot be combined with --llm-redact")
     try:
+        redactor = Redactor.with_patterns(arguments.llm_redact)
         provider = registry.create(arguments.llm, arguments, environ)
-    except ProviderConfigurationError as error:
+    except ValueError as error:
         parser.error(str(error))
     store = arguments.llm_store.expanduser() if arguments.llm_store is not None else None
-    return AgentSettings(provider, store_path=store)
+    try:
+        return AgentSettings(
+            provider,
+            store_path=store,
+            redactor=redactor,
+            context_limit_chars=arguments.llm_context_limit,
+            test_data=arguments.llm_test_data,
+        )
+    except ValueError as error:
+        parser.error(f"--llm-context-limit: {error}")
 
 
 def main() -> None:
