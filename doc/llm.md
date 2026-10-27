@@ -14,8 +14,9 @@ No new dependency is required.
 
 The second increment isolates client tests from GDB (see
 [Client test suite](#client-test-suite)). The third adds the structured
-[`target.context`](#target-context) RPC. Subsequent increments will add
-SQLite persistence, a tool catalogue, target
+[`target.context`](#target-context) RPC. The fourth adds local SQLite
+[conversation persistence](#conversation-persistence). Subsequent increments will add
+a tool catalogue, target
 protection, auditor approval, orchestration, the Copilot adapter, and the second
 dashboard prompt. Long-context management and end-to-end simulated audit
 workflows follow.
@@ -104,6 +105,97 @@ RPC. Collection is split in three layers:
    than 1 raises `TargetContextError`; unknown extra keys are ignored.
 
 Memory regions keep their optional `name` and `protection` metadata.
+
+## Conversation persistence
+
+`pyGdbClient.llm.store.ContextStore` is a synchronous, provider-independent
+SQLite journal. It imports neither GDB, the toolkit, the server, nor a provider
+SDK. This increment supplies the storage API; automatic recording, provider
+resumption and dashboard controls will be wired by the orchestrator and dashboard
+increments.
+
+The store records:
+
+- Sessions with application-owned IDs, provider IDs, titles, UTC creation times,
+  and the current target-context ID.
+- Target snapshots, retaining all `TargetContext` fields and their provenance.
+- Ordered history entries of kind `user`, `assistant`, `tool_call`, `tool_result`,
+  `summary`, or `error`, with JSON-object payloads, UTC timestamps, and a
+  session-local sequence starting at 1.
+
+Every entry refers to a snapshot registered in the same session. Registering a
+new snapshot with `save_context()` selects it for subsequent entries but does
+not rewrite earlier observations. A late result can explicitly specify its
+original `context_id`. Reusing an ID with different facts raises `StoreError`;
+identical snapshots can be registered again. The same context ID in separate
+sessions does not share or overwrite their snapshots.
+
+```python
+from pyGdbClient.llm.store import ContextStore, EntryKind
+
+# context is a validated TargetContext obtained from target.context.
+with ContextStore("audit.sqlite3") as store:
+    store.create_session("audit-1", "scripted", context, title="GPIO audit")
+    store.append("audit-1", EntryKind.USER, {"text": "Inspect the GPIO state"})
+    # Later, after the executor returns an observation:
+    store.append(
+        "audit-1",
+        EntryKind.TOOL_RESULT,
+        {"call_id": "read-1", "content": "GPIO unchanged", "is_error": False},
+        context_id=context.context_id,
+    )
+
+# Reopening the file preserves sessions, target snapshots and ordering.
+with ContextStore("audit.sqlite3") as store:
+    session = store.get_session("audit-1")
+    saved_context = store.get_context("audit-1")
+    entries = store.history("audit-1", after_sequence=0, limit=100)
+```
+
+`list_sessions(limit, offset)` and `history(session_id, after_sequence, limit)`
+provide bounded pagination (1 to 1000 records per page). The history cursor is
+exclusive: use the last returned sequence to fetch the next page. Payloads are
+copied through strict JSON serialization; mutating an input or a returned entry
+cannot modify persisted data. Non-string object keys, non-finite numbers and
+non-JSON objects are rejected.
+
+The database has an application identifier and schema version 1. Only an empty,
+unversioned database is initialized. Foreign, nonempty unversioned, or unsupported
+version databases are rejected without modification; migrations must be added
+explicitly when the schema changes. Session creation, snapshot registration,
+entry insertion and session deletion are transactional. Foreign keys bind history
+to snapshots and cascade deletion. Concurrent connections serialize writes before
+allocating sequence numbers. Each connection must stay in its creating thread;
+future async callers should keep blocking storage work outside the dashboard's
+event loop.
+
+Unknown sessions/snapshots raise `KeyError`, invalid API inputs raise `ValueError`,
+and incompatible schemas, conflicting snapshot IDs or malformed stored content
+raise `StoreError`. SQLite I/O, lock, integrity and corruption errors propagate;
+there is no silent fallback to an empty or in-memory journal. Closing is
+idempotent, and operations after closing fail explicitly.
+
+### Persistence trust boundary
+
+The caller supplies the path; the parent directory must already exist and should
+be private to the auditor. No database is created at import time or implicitly
+by the existing dashboard. The store captures no authentication state, environment
+variables or SDK objects, and emits no payload logs. Its payloads are explicit
+caller-supplied JSON: callers must never include credentials, and must apply
+the future confidentiality rules before storing sensitive target observations.
+
+SQLite files are **not encrypted**. `delete_session()` logically deletes the
+session, its snapshots and its history, but does not guarantee forensic erasure
+from files, journals or backups. Summary payloads are stored observations, not
+automatic compaction: this increment neither deletes covered history nor chooses
+what a model sees.
+
+Restored history, tool proposals and results are **not authorization to execute
+or replay operations**. After reopening, the orchestrator must fetch a fresh live
+target context and reassess plans against the protection policy and auditor
+approval. A persisted snapshot alone cannot prove that the same equipment is
+still connected. Session restoration does not resume a Copilot SDK conversation;
+that remains the responsibility of the provider adapter and orchestrator.
 
 ## Provider lifecycle and events
 
