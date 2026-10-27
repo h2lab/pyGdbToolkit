@@ -17,6 +17,8 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key, Resize
 from textual.widgets import Footer, Header, Input, RichLog, Select, Static, Tree
 
+from .llm.approval import ApprovalRequest, ApprovalResponse
+from .llm.approval_screen import ApprovalScreen
 from .rpc import JsonRpcClient, RpcError
 
 _COMMAND_HISTORY_LIMIT = 40
@@ -124,6 +126,46 @@ class PyGdbClientApp(App[None]):
         self._core_selecting = False
         self._core_refresh_failed = False
         self._target_status_refresh_failed = False
+        self._approval_screen: ApprovalScreen | None = None
+        self._approval_future: asyncio.Future[ApprovalResponse | None] | None = None
+
+    async def request_plan_approval(self, request: ApprovalRequest) -> ApprovalResponse:
+        """Display an auditor request; cancellation removes the modal without consent."""
+        if self._approval_screen is not None:
+            raise RuntimeError("an auditor approval is already pending")
+        future: asyncio.Future[ApprovalResponse | None] = asyncio.get_running_loop().create_future()
+
+        def respond(response: ApprovalResponse | None) -> None:
+            if not future.done():
+                future.set_result(response)
+
+        screen = ApprovalScreen(request)
+        self._approval_screen = screen
+        self._approval_future = future
+        self._append_output(f"Auditor approval requested: {request.request_id}")
+        response: ApprovalResponse | None = None
+        mount = None
+        try:
+            mount = self.push_screen(screen, respond)
+            await mount
+            response = await future
+            approved = response is not None and response.approved is True
+            self._append_output(
+                f"Auditor {'approved' if approved else 'rejected'} plan: {request.request_id}"
+                " (live context and policy checks remain mandatory)",
+                error=not approved,
+            )
+            return response if response is not None else request.respond(approved=False)
+        finally:
+            if self.is_running and mount is not None and screen in self.screen_stack:
+                await mount
+                await screen.dismiss(None)
+            self._approval_screen = None
+            self._approval_future = None
+            if response is None and self.is_running:
+                self._append_output(
+                    f"Approval closed without consent: {request.request_id}", error=True
+                )
 
     def compose(self) -> ComposeResult:
         """Build the log, output, target, tree, and command-input regions."""
@@ -500,6 +542,8 @@ class PyGdbClientApp(App[None]):
 
     async def on_unmount(self) -> None:
         """Release the WebSocket when the dashboard closes."""
+        if self._approval_future is not None and not self._approval_future.done():
+            self._approval_future.cancel()
         await self.client.close()
 
 

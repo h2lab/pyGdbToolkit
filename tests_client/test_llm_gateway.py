@@ -146,7 +146,8 @@ def test_allow_routes_through_real_rpc_and_replaces_model_effect_claims() -> Non
                 await client.close()
 
     asyncio.run(exercise())
-    assert len(policy.plans) == 1
+    assert len(policy.plans) == 4
+    assert all(plan == policy.plans[0] for plan in policy.plans)
     assert [step.effects for step in policy.plans[0].steps] == [
         (ActionEffect.READ_MEMORY,),
         (ActionEffect.UNKNOWN,),
