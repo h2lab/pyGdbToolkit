@@ -262,7 +262,7 @@ class RejectTargetDependencies(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectTargetDependencies())
 sys.path.insert(0, sys.argv[1])
-from pyGdbClient.llm import contracts, provider, scripted
+from pyGdbClient.llm import contracts, copilot, provider, scripted
 assert scripted.ScriptedProvider.provider_id == "scripted"
 """
     subprocess.run([sys.executable, "-I", "-c", script, str(source)], check=True)
