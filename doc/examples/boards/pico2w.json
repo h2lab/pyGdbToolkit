@@ -18,5 +18,6 @@
         "svd load"
     ],
     "log-directory": ".pygdbserver-logs",
-    "startup-timeout": 15
+    "startup-timeout": 15,
+    "target": {"mcu": "RP2350", "debug-transport": "swd"}
 }

@@ -195,6 +195,11 @@ class ToolkitSession:
         return self._probe
 
     @property
+    def cached_probe(self) -> ProbeResult | None:
+        """The identification already made in this session, without probing the target."""
+        return self._probe
+
+    @property
     def architecture(self) -> Architecture | None:
         """The architecture of the connected target, or ``None`` when unidentified."""
         target = self.probe().target

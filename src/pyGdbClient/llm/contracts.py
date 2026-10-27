@@ -40,6 +40,8 @@ class MemoryRegion:
     end: int
     kind: str
     source: str
+    name: str = ""
+    protection: str = "unknown"
 
     def __post_init__(self) -> None:
         """Reject invalid address ranges and missing provenance."""

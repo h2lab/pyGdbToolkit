@@ -13,8 +13,9 @@ The existing command prompt, RPC protocol, and dashboard behaviour are unchanged
 No new dependency is required.
 
 The second increment isolates client tests from GDB (see
-[Client test suite](#client-test-suite)). Subsequent increments will add a
-structured target-context RPC, SQLite persistence, a tool catalogue, target
+[Client test suite](#client-test-suite)). The third adds the structured
+[`target.context`](#target-context) RPC. Subsequent increments will add
+SQLite persistence, a tool catalogue, target
 protection, auditor approval, orchestration, the Copilot adapter, and the second
 dashboard prompt. Long-context management and end-to-end simulated audit
 workflows follow.
@@ -84,9 +85,25 @@ context; it is not just the MCU name. The collector must refresh it when relevan
 target state or configuration changes.
 
 SVD paths refer to the **server** filesystem. A path is not the SVD contents and
-must not be opened on the client as though it were local. The context collector
-and controlled retrieval of SVD metadata/content belong to subsequent increments.
+must not be opened on the client as though it were local. Controlled retrieval
+of SVD metadata/content belongs to subsequent increments.
 This layer imports neither GDB nor toolkit implementation modules.
+
+The snapshot is served by the [`target.context`](pygdbserver.md#targetcontext)
+RPC. Collection is split in three layers:
+
+1. `pyGdbToolkit.target_context.collect_target_context()` runs inside GDB and
+   reads only established session state (cached probe, confirmed discovery,
+   SVD, selected core) and host-side GDB state. It never probes the target.
+2. `pyGdbServer.target_context.build_target_context()` validates those facts,
+   adds the OCD identity and the debug transport, applies the declared
+   `target` configuration metadata, and derives `context_id` from the content.
+3. `pyGdbClient.llm.context.fetch_target_context()` requests the snapshot and
+   `parse_target_context()` decodes it strictly into `TargetContext`. A missing
+   field, a contradictory fact, an invalid region, or a schema version other
+   than 1 raises `TargetContextError`; unknown extra keys are ignored.
+
+Memory regions keep their optional `name` and `protection` metadata.
 
 ## Provider lifecycle and events
 

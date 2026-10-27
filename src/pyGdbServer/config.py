@@ -29,6 +29,9 @@ class ServerConfig:
     jlink_core_devices: tuple[str, ...] = ()
     ocd_identifier: str = ""
     jlink_core_ids: tuple[int, ...] = ()
+    target_mcu: str = ""
+    target_revision: str = ""
+    debug_transport: str = ""
 
     @property
     def backend_identifier(self) -> str:
@@ -209,6 +212,25 @@ def _listen_address(value: object) -> tuple[str, int]:
     return host, port
 
 
+def _target_metadata(value: object) -> tuple[str, str, str]:
+    if not isinstance(value, dict):
+        raise ValueError("target must be a JSON object")
+    unknown = set(value) - {"mcu", "revision", "debug-transport"}
+    if unknown:
+        raise ValueError(f"target contains unknown keys: {', '.join(sorted(unknown))}")
+    fields = []
+    for key in ("mcu", "revision", "debug-transport"):
+        item = value.get(key, "")
+        if not isinstance(item, str) or (key in value and not item.strip()):
+            raise ValueError(f"target.{key} must be a non-empty string")
+        fields.append(item.strip())
+    mcu, revision, transport = fields
+    transport = transport.lower()
+    if transport not in ("", "jtag", "swd"):
+        raise ValueError("target.debug-transport must be jtag or swd")
+    return mcu, revision, transport
+
+
 def load_config(path: str | Path) -> ServerConfig:
     """Load a pyGdbServer JSON configuration file."""
     config_path = Path(path).resolve()
@@ -253,6 +275,8 @@ def load_config(path: str | Path) -> ServerConfig:
     if not log_directory.is_absolute():
         log_directory = config_path.parent / log_directory
 
+    target_mcu, target_revision, debug_transport = _target_metadata(data.get("target", {}))
+
     timeout = data.get("startup-timeout", 15.0)
     if not isinstance(timeout, (int, float)) or timeout <= 0:
         raise ValueError("startup-timeout must be a positive number")
@@ -270,6 +294,9 @@ def load_config(path: str | Path) -> ServerConfig:
         jlink_core_devices=tuple(core_devices),
         jlink_core_ids=core_ids,
         ocd_identifier=identifier,
+        target_mcu=target_mcu,
+        target_revision=target_revision,
+        debug_transport=debug_transport,
     )
     if "jlink-core-devices" in data and config.backend_identifier != "jlinkgdbserver":
         raise ValueError(
