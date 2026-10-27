@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 
 from websockets.exceptions import ConnectionClosed
 
 from pyGdbClient.rpc import RpcError
 
+from .approval import AuditorApprover, create_approval_request
 from .context import RpcRequester, TargetContextError, fetch_target_context
 from .contracts import (
     ActionPlan,
@@ -93,16 +95,31 @@ def _result(call_id: str, response: object, command_result: bool) -> ToolResult:
 
 
 class ToolGateway:
-    """Execute validated plans only when a local policy explicitly returns ALLOW.
+    """Execute validated plans with local policy and optional one-attempt auditor consent.
 
-    No policy, DENY and REQUIRE_APPROVAL all block dispatch. This layer has no
-    approval bypass; auditor approval will be integrated in its own increment.
+    No policy and DENY always block dispatch. REQUIRE_APPROVAL needs an explicit
+    application-owned callback; providers must never receive this callback.
     """
 
-    def __init__(self, client: RpcRequester, policy: TargetPolicy | None = None) -> None:
-        """Bind a client-only transport and an optional application-owned policy."""
+    def __init__(
+        self,
+        client: RpcRequester,
+        policy: TargetPolicy | None = None,
+        *,
+        approver: AuditorApprover | None = None,
+        approval_timeout: float = 120.0,
+    ) -> None:
+        """Bind transport, policy and an optional auditor UI with a finite deadline."""
+        if (
+            isinstance(approval_timeout, bool)
+            or not math.isfinite(approval_timeout)
+            or approval_timeout <= 0
+        ):
+            raise ValueError("approval_timeout must be finite and positive")
         self._client = client
         self._policy = policy
+        self._approver = approver
+        self._approval_timeout = approval_timeout
         self._catalogue = ToolCatalogue()
         self._lock = asyncio.Lock()
 
@@ -114,29 +131,38 @@ class ToolGateway:
         Cancellation propagates and never implies rollback of target operations.
         """
         calls = tuple(self._catalogue.prepare(step.call) for step in plan.steps)
-        normalized = ActionPlan(
-            plan.plan_id,
-            plan.target_context_id,
-            plan.rationale,
-            tuple(
-                PlannedAction(call.tool_call(), step.purpose, call.effects)
-                for call, step in zip(calls, plan.steps)
-            ),
-        )
-        if normalized.target_context_id != context.context_id:
+        plan_id, context_id, rationale = plan.plan_id, plan.target_context_id, plan.rationale
+        purposes = tuple(step.purpose for step in plan.steps)
+
+        def normalized() -> ActionPlan:
+            return ActionPlan(
+                plan_id,
+                context_id,
+                rationale,
+                tuple(
+                    PlannedAction(call.tool_call(), purpose, call.effects)
+                    for call, purpose in zip(calls, purposes)
+                ),
+            )
+
+        if context_id != context.context_id:
             raise GatewayError("plan does not match the supplied target context")
         if self._policy is None:
             raise GatewayError("no target policy configured; execution is disabled")
         results: list[ToolResult] = []
         async with self._lock:
-            decision = self._policy.evaluate(normalized, context)
-            if decision.outcome is not PolicyOutcome.ALLOW:
+            decision = self._policy.evaluate(normalized(), context)
+            if decision.outcome not in (PolicyOutcome.ALLOW, PolicyOutcome.REQUIRE_APPROVAL) or (
+                decision.outcome is PolicyOutcome.REQUIRE_APPROVAL and self._approver is None
+            ):
                 raise GatewayError(
                     f"plan blocked ({decision.outcome}): {'; '.join(decision.reasons)}",
                     decision=decision,
                 )
             pending_call_id = None
             try:
+                if decision.outcome is PolicyOutcome.REQUIRE_APPROVAL:
+                    await self._approve(normalized(), context, decision)
                 for call in calls:
                     try:
                         live = await fetch_target_context(self._client)
@@ -147,6 +173,13 @@ class ToolGateway:
                     if live != context:
                         raise GatewayError(
                             "target context changed; replan before dispatch", tuple(results)
+                        )
+                    current = self._policy.evaluate(normalized(), context)
+                    if current != decision:
+                        raise GatewayError(
+                            "target policy changed; a fresh assessment is required",
+                            tuple(results),
+                            decision=current,
                         )
                     pending_call_id = call.call_id
                     try:
@@ -170,3 +203,27 @@ class ToolGateway:
             except asyncio.CancelledError as error:
                 raise GatewayCancelledError(tuple(results), pending_call_id) from error
         return tuple(results)
+
+    async def _approve(
+        self, plan: ActionPlan, context: TargetContext, decision: PolicyDecision
+    ) -> None:
+        if self._approver is None:
+            raise GatewayError("no auditor approver configured", decision=decision)
+        request = create_approval_request(plan, context, decision)
+        deadline = asyncio.get_running_loop().time() + self._approval_timeout
+        try:
+            response = await asyncio.wait_for(
+                self._approver(request), timeout=self._approval_timeout
+            )
+        except TimeoutError as error:
+            raise GatewayError("auditor approval expired", decision=decision) from error
+        if asyncio.get_running_loop().time() >= deadline:
+            raise GatewayError("auditor approval expired", decision=decision)
+        if (
+            response.request_id != request.request_id
+            or response.digest != request.digest
+            or response.approved is not True
+        ):
+            raise GatewayError(
+                "auditor rejected the plan or returned a mismatched approval", decision=decision
+            )
