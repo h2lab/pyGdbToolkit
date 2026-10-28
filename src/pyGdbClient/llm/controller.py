@@ -32,7 +32,13 @@ from .orchestrator import (
     RunOutcome,
 )
 from .policy import ProtectionPolicy
-from .provider import AuthenticationState, LlmProvider, ProviderStatus
+from .provider import (
+    AuthenticationState,
+    LlmProvider,
+    ProviderStatus,
+    ProviderUsage,
+    UsageReporter,
+)
 from .recollection import MIN_RECOLLECTION_CHARS, build_recollection
 from .store import ContextStore, HistoryEntry, StoredSession
 from .tools import ToolCatalogue
@@ -167,6 +173,13 @@ class AgentController:
     async def status(self) -> ProviderStatus:
         """Report provider readiness without opening a conversation."""
         return await self._settings.provider.status()
+
+    async def credits(self) -> ProviderUsage | None:
+        """Return the provider's quota snapshot, or None when it does not report one."""
+        provider = self._settings.provider
+        if not isinstance(provider, UsageReporter):
+            return None
+        return await provider.usage()
 
     async def ensure_session(self) -> OpenedSession | None:
         """Open a conversation when none exists; return it only when newly opened."""

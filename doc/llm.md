@@ -669,7 +669,7 @@ from pyGdbClient.llm.copilot import CopilotConfig, CopilotProvider
 
 provider = CopilotProvider(
     CopilotConfig(
-        runtime_path=Path("/absolute/path/printed/by/download-runtime/copilot"),
+        runtime_path=Path("/absolute/path/printed/by/download-runtime/copilot-runtime"),
         github_token=os.environ["PYGDB_COPILOT_TOKEN"],
         # Omit github_token to use existing CLI login instead.
     )
@@ -773,7 +773,7 @@ agent. It is enabled by selecting a provider when starting the client:
 
 ```console
 pyGdbClient ws://192.0.2.15:1234 --llm github-copilot \
-    --copilot-runtime /absolute/path/printed/by/download-runtime/copilot
+    --copilot-runtime /absolute/path/printed/by/download-runtime/copilot-runtime
 ```
 
 Without `--llm`, the prompt stays visible but only explains how to enable it;
@@ -783,6 +783,24 @@ central **COMMAND OUTPUT** console. Model text and observations are rendered
 literally: control and bidirectional-formatting characters are replaced by
 `�`, rich markup is not interpreted, and each observation display is limited to
 2000 characters (the provider still receives the gateway's bounded result).
+
+### Credits panel
+
+The **LLM CREDITS** panel, below the OCD log, shows the provider's quotas for
+the current billing period. Limited quotas are listed first with a gauge, the
+remaining and used percentages, the request count and the reset date;
+unlimited quotas are marked as such. The remaining share is shown in green
+above 25%, yellow above 10% and red otherwise. The panel is read when the
+dashboard starts, after each agent request, after `/status` and every 60
+seconds; a read already in progress is not restarted.
+
+Reporting credits is an optional provider capability: a provider implements
+`UsageReporter.usage()`, returning a `ProviderUsage` of `QuotaUsage` entries.
+`CopilotProvider` uses the runtime's `account.getQuota` request: only quota
+names, percentages, counts and reset dates are kept, never the account name.
+Providers without this capability show `credits not reported`; a failed read
+shows a sanitized error. Without `--llm`, the panel explains how to enable the
+agent. Reading Copilot credits starts the runtime at dashboard startup.
 
 ### Launcher options
 
@@ -913,7 +931,7 @@ only test data and **test cryptographic material**:
 
 ```console
 pyGdbClient ws://192.0.2.15:1234 --llm github-copilot \
-    --copilot-runtime /absolute/path/to/copilot --llm-test-data
+    --copilot-runtime /absolute/path/to/copilot-runtime --llm-test-data
 ```
 
 In this mode, automatic masking is disabled for target snapshots, auditor

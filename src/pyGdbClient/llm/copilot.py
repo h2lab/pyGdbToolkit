@@ -29,6 +29,8 @@ from .provider import (
     ProviderEvent,
     ProviderInput,
     ProviderStatus,
+    ProviderUsage,
+    QuotaUsage,
     TextDelta,
     ToolCallProposed,
     ToolResults,
@@ -38,7 +40,7 @@ from .provider import (
 
 if TYPE_CHECKING:
     from copilot import CopilotClient
-    from copilot.generated.rpc import PermissionDecisionReject
+    from copilot.generated.rpc import AccountGetQuotaResult, PermissionDecisionReject
     from copilot.session import CopilotSession, PermissionInvocation
     from copilot.session_events import PermissionRequest, SessionEvent
 
@@ -196,6 +198,34 @@ class CopilotProvider:
         if not auth.isAuthenticated:
             return ProviderStatus(True, AuthenticationState.REQUIRED, _LOGIN_GUIDANCE)
         return ProviderStatus(True, AuthenticationState.AUTHENTICATED, "Copilot is authenticated.")
+
+    async def usage(self) -> ProviderUsage:
+        """Return the authenticated account's quota percentages, without its identity."""
+        client = await self._connect()
+        from copilot.generated.rpc import AccountGetQuotaRequest
+
+        async def query() -> AccountGetQuotaResult:
+            return await client.rpc.account.get_quota(AccountGetQuotaRequest())
+
+        result = await _rpc(query(), "quota query", self._config.rpc_timeout)
+        try:
+            quotas = tuple(
+                QuotaUsage(
+                    name,
+                    min(100.0, max(0.0, float(snapshot.remaining_percentage))),
+                    max(0, int(snapshot.used_requests)),
+                    (
+                        None
+                        if snapshot.is_unlimited_entitlement
+                        else max(0, int(snapshot.entitlement_requests))
+                    ),
+                    snapshot.reset_date,
+                )
+                for name, snapshot in sorted(result.quota_snapshots.items())
+            )
+        except (TypeError, ValueError):
+            raise ProviderError("Copilot returned an invalid quota snapshot.") from None
+        return ProviderUsage(quotas)
 
     async def open_session(
         self, session_id: str, context: TargetContext, tools: tuple[ToolDefinition, ...]
