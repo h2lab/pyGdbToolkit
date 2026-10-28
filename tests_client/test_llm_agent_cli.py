@@ -12,10 +12,8 @@ import sqlite3
 from typing import Any
 
 import pytest
-from textual.pilot import Pilot
-from textual.widgets import Input, RichLog
+from textual.widgets import Input
 
-from pyGdbClient.app import PyGdbClientApp
 from pyGdbClient.llm.approval import ApprovalRequest, ApprovalResponse
 from pyGdbClient.llm.approval_screen import ApprovalScreen
 from pyGdbClient.llm.confidentiality import TEST_DATA_WARNING
@@ -56,6 +54,8 @@ from pyGdbClient.llm.scripted import ScriptedSession, ScriptedTurn
 from pyGdbClient.llm.store import ContextStore, EntryKind
 from pyGdbClient.llm.tools import ToolCatalogue
 from pyGdbClient.rpc import JsonRpcClient
+from agent_harness import AgentApp, type_agent, until
+from agent_harness import output as console
 from rpc_fakes import FakeRpcServer
 
 
@@ -508,37 +508,6 @@ def test_compact_resume_and_sessions() -> None:
     asyncio.run(exercise())
 
 
-class AgentApp(PyGdbClientApp):
-    def __init__(self, url: str, agent: AgentSettings | None, *, connect: bool = True) -> None:
-        super().__init__(url, agent)
-        self.connect = connect
-
-    async def _connect_and_initialize(self) -> None:
-        """Connect the transport without the dashboard's target polling."""
-        if self.connect:
-            await self.client.connect()
-            self._connected = True
-
-
-def _output(app: PyGdbClientApp) -> str:
-    return "\n".join(str(line) for line in app.query_one("#command-output", RichLog).lines)
-
-
-async def _type(pilot: Pilot[None], app: PyGdbClientApp, text: str) -> None:
-    field = app.query_one("#agent-command", Input)
-    field.focus()
-    field.value = text
-    await pilot.press("enter")
-
-
-async def _until(pilot: Pilot[None], condition: Callable[[], bool]) -> None:
-    for _ in range(200):
-        await pilot.pause(0.01)
-        if condition():
-            return
-    raise AssertionError("condition not reached")
-
-
 @pytest.mark.parametrize("size", [(110, 45), (80, 24)])
 def test_agent_cli_runs_an_approved_chain_in_the_central_console(size: tuple[int, int]) -> None:
     async def exercise() -> None:
@@ -548,13 +517,13 @@ def test_agent_cli_runs_an_approved_chain_in_the_central_console(size: tuple[int
         async with FakeRpcServer(_responses()) as server:
             app = AgentApp(server.url, AgentSettings(provider))
             async with app.run_test(size=size) as pilot:
-                await _until(pilot, lambda: app._connected)
-                await _type(pilot, app, "Dump the first word of SRAM")
-                await _until(pilot, lambda: isinstance(app.screen, ApprovalScreen))
+                await until(pilot, lambda: app._connected)
+                await type_agent(pilot, app, "Dump the first word of SRAM")
+                await until(pilot, lambda: isinstance(app.screen, ApprovalScreen))
                 assert "mi.execute" not in server.methods
                 await pilot.click("#approval-accept")
-                await _until(pilot, lambda: "Agent request completed" in _output(app))
-                output = _output(app)
+                await until(pilot, lambda: "Agent request completed" in console(app))
+                output = console(app)
                 for expected in (
                     "agent› Dump the first word of SRAM",
                     "Agent session",
@@ -585,12 +554,12 @@ def test_agent_cli_commands_are_handled_locally() -> None:
         async with FakeRpcServer(_responses()) as server:
             app = AgentApp(server.url, AgentSettings(provider))
             async with app.run_test(size=(110, 45)) as pilot:
-                await _until(pilot, lambda: app._connected)
+                await until(pilot, lambda: app._connected)
                 for command in ("/help", "/STATUS", "/cancel", "/end", "/unknown", "/new"):
-                    await _type(pilot, app, command)
-                await _until(pilot, lambda: "Agent error" in _output(app))
+                    await type_agent(pilot, app, command)
+                await until(pilot, lambda: "Agent error" in console(app))
                 await app.workers.wait_for_complete()
-                output = _output(app)
+                output = console(app)
                 assert "AGENT COMMANDS" in output
                 assert "not ready · authentication required" in output
                 assert "Run 'copilot login'." in output
@@ -614,9 +583,9 @@ def test_agent_cli_explains_how_to_enable_the_agent(connect: bool) -> None:
                 placeholder = app.query_one("#agent-command", Input).placeholder
                 assert "--llm" in placeholder
                 for command in ("hello", "/status"):
-                    await _type(pilot, app, command)
+                    await type_agent(pilot, app, command)
                 await app.workers.wait_for_complete()
-                assert _output(app).count("Agent disabled") == 2
+                assert console(app).count("Agent disabled") == 2
                 assert server.requests == []
 
     asyncio.run(exercise())
@@ -627,10 +596,10 @@ def test_agent_cli_requires_a_server_connection() -> None:
         provider = TrackedProvider(_answer("never"))
         app = AgentApp("ws://127.0.0.1:1", AgentSettings(provider), connect=False)
         async with app.run_test(size=(110, 45)) as pilot:
-            await _type(pilot, app, "hello")
-            await _type(pilot, app, "/new")
+            await type_agent(pilot, app, "hello")
+            await type_agent(pilot, app, "/new")
             await app.workers.wait_for_complete()
-            assert _output(app).count("Not connected to pyGdbServer") == 2
+            assert console(app).count("Not connected to pyGdbServer") == 2
             assert provider.sessions == []
 
     asyncio.run(exercise())
@@ -642,7 +611,7 @@ def test_dashboard_help_lists_agent_commands() -> None:
         async with app.run_test(size=(110, 45)) as pilot:
             await pilot.pause()
             await app.show_help()
-            output = _output(app)
+            output = console(app)
             assert "AGENT CLI" in output
             assert "/cancel" in output
 
@@ -655,21 +624,21 @@ def test_agent_cli_continuity_commands() -> None:
         async with FakeRpcServer(_responses(_secret_context())) as server:
             app = AgentApp(server.url, AgentSettings(provider))
             async with app.run_test(size=(110, 45)) as pilot:
-                await _until(pilot, lambda: app._connected)
-                await _type(pilot, app, "/sessions")
-                await _until(pilot, lambda: "No journaled agent session" in _output(app))
-                await _type(pilot, app, "remember 42")
-                await _until(pilot, lambda: "Agent request completed" in _output(app))
-                assert "Redacted before disclosure: 1 value(s)" in _output(app)
+                await until(pilot, lambda: app._connected)
+                await type_agent(pilot, app, "/sessions")
+                await until(pilot, lambda: "No journaled agent session" in console(app))
+                await type_agent(pilot, app, "remember 42")
+                await until(pilot, lambda: "Agent request completed" in console(app))
+                assert "Redacted before disclosure: 1 value(s)" in console(app)
                 first = provider.sessions[0].session_id
                 for command in ("/status", "/compact", "/sessions", "/resume", "/resume a b"):
-                    await _type(pilot, app, command)
+                    await type_agent(pilot, app, command)
                     await app.workers.wait_for_complete()
-                await _type(pilot, app, f"/RESUME {first}")
+                await type_agent(pilot, app, f"/RESUME {first}")
                 await app.workers.wait_for_complete()
-                await _type(pilot, app, "/resume missing")
+                await type_agent(pilot, app, "/resume missing")
                 await app.workers.wait_for_complete()
-                output = _output(app)
+                output = console(app)
                 assert "Agent session context:" in output
                 assert f"Continues {first}:" in output
                 assert "Journaled agent sessions (oldest first)" in output
