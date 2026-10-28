@@ -48,6 +48,7 @@ finally the public API. A failed stage stops the complete stack.
 | `log-directory` | Parent of timestamped run-log directories. |
 | `startup-timeout` | Per-stage timeout in seconds. |
 | `jlink-core-devices` | Optional mapping of non-negative core IDs to unique SEGGER device selectors. Allowed only for `ocd-identifier: jlinkgdbserver` (or a legacy inferred J-Link backend). The initial `-device` must belong to the mapping. |
+| `target` | Optional declared metadata reported by [`target.context`](#targetcontext): `mcu`, `revision` (non-empty strings), and `debug-transport` (`jtag` or `swd`). Other keys are rejected. |
 
 The OCD GDB endpoint and raw MI adapter always bind to `127.0.0.1` with dynamic
 ports. The raw MI adapter is for local diagnostics; clients should use the API.
@@ -338,6 +339,52 @@ The console equivalent remains available:
 
 See [CPU core selection](dap.md#cpu-core-selection) for standalone GDB usage and
 the opt-in RP2350 hardware tests. `dap select` still selects only an Access Port.
+
+### `target.context`
+
+Returns a versioned snapshot of the target identity, intended for an LLM agent
+or any automated client. Collection never probes the target: it reuses what the
+toolkit session already knows (architecture probe from `lscpu`, confirmed
+`memmap discover` results, loaded SVD, selected core), host-side GDB state, and
+the server configuration.
+
+```json
+{"jsonrpc":"2.0","id":30,"method":"target.context","params":{"timeout":10}}
+```
+
+```json
+{"jsonrpc":"2.0","id":30,"result":{
+  "schema_version":1,
+  "context_id":"ctx-3f9a0c5be1d27a44",
+  "mcu":{"value":"Raspberry Pi RP2350","source":"toolkit-discovery","unavailable_reason":null},
+  "revision":{"value":null,"source":"architecture-probe","unavailable_reason":"target not identified yet; run 'lscpu'"},
+  "architecture":{"value":"armv8-m.main","source":"gdb","unavailable_reason":null},
+  "debug_transport":{"value":"SWD","source":"configuration","unavailable_reason":null},
+  "ocd":{"value":"openocd (openocd)","source":"configuration","unavailable_reason":null},
+  "core":{"value":"rp2350.cm0 (id 0)","source":"debug-server","unavailable_reason":null},
+  "memory_map":{"regions":[{"start":536870912,"end":537395200,"kind":"ram","source":"gdb-server","name":"SRAM","protection":"rw"}],
+                "source":"toolkit-discovery","unavailable_reason":null},
+  "svd_file":{"value":"/srv/svd/RP2350.svd","source":"svd","unavailable_reason":null}}}
+```
+
+Every fact has a `source`; an unknown fact has a `null` value and an
+`unavailable_reason`. Sources and precedence:
+
+| Fact | Sources, by precedence |
+|---|---|
+| `mcu` | Hardware-confirmed `memmap discover` fingerprint, then `target.mcu`, then the loaded SVD device name. |
+| `revision` | Cached architecture probe (`unknown` is not reported), then `target.revision`. |
+| `architecture` | Cached architecture probe, then the GDB inferior architecture. |
+| `debug_transport` | `target.debug-transport`, then an explicit J-Link `-if` or OpenOCD `transport select` argument. pyOCD transports are not inferred. |
+| `ocd` | `ocd-identifier` (or inferred backend) and executable name. |
+| `core` | Selected core from the debug server, then the probed core name. |
+| `memory_map` | Regions of the confirmed `memmap discover` report; unavailable otherwise. Regions are half-open and are not permission to access them. |
+| `svd_file` | Path of the loaded SVD, on the **server** filesystem. |
+
+`context_id` is derived from the content: it changes whenever any fact or the
+memory map changes and is stable otherwise. When GDB cannot run the collector,
+the configured facts are still returned and each GDB fact explains the failure.
+The optional `timeout` is limited to 300 seconds.
 
 ### `svd.peripherals`
 

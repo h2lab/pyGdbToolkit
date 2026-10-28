@@ -452,6 +452,7 @@ def test_pico2w_openocd_example() -> None:
     assert "gdb_port 43123" in command
     assert "telnet_port 43124" in command
     assert "tcl_port disabled" in command
+    assert (config.target_mcu, config.debug_transport) == ("RP2350", "swd")
 
 
 def test_imx8mp_m7_jlink_example() -> None:

@@ -22,6 +22,7 @@ from .config import ServerConfig
 from .logs import LogEvent, LogStore
 from .mi import MiSession
 from .process import ManagedProcess
+from .target_context import build_target_context
 
 
 class PyGdbServer:
@@ -295,6 +296,8 @@ class PyGdbServer:
             ):
                 raise ValueError("core must be a non-negative integer")
             return await self.target_cores(method, core_id, _timeout(params)), False
+        if method == "target.context":
+            return await self.target_context(_timeout(params)), False
         if method == "svd.peripherals":
             return await self.svd_peripherals(), False
         if method == "toolkit.commands":
@@ -419,6 +422,20 @@ class PyGdbServer:
         if not isinstance(data, dict):
             raise RuntimeError("GDB did not return structured CPU core metadata")
         return data
+
+    async def target_context(self, timeout: float = 30.0) -> dict[str, Any]:
+        """Return the versioned target snapshot without probing the target."""
+        marker = "PYGDBSERVER_TARGET_CONTEXT_JSON:"
+        command = (
+            "python import json; "
+            "from pyGdbToolkit.target_context import collect_target_context; "
+            f"print('{marker}' + json.dumps(collect_target_context()))"
+        )
+        try:
+            facts = await self._python_json(marker, command, timeout)
+        except (RuntimeError, ValueError) as error:
+            return build_target_context(self.config, None, f"GDB context unavailable: {error}")
+        return build_target_context(self.config, facts)
 
     async def svd_peripherals(self) -> dict[str, Any]:
         """Return loaded SVD metadata in a stable JSON shape for client trees."""
