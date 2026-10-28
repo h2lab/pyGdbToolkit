@@ -248,7 +248,7 @@ def test_scripted_provider_rejects_incomplete_or_inconsistent_turns() -> None:
 
 
 def test_llm_modules_import_without_gdb_toolkit_or_copilot_sdk() -> None:
-    """A fresh interpreter rejects forbidden imports instead of installing a shim."""
+    """A fresh interpreter rejects forbidden imports, including from the launcher."""
     source = Path(__file__).resolve().parents[1] / "src"
     script = """
 import importlib.abc
@@ -262,7 +262,9 @@ class RejectTargetDependencies(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectTargetDependencies())
 sys.path.insert(0, sys.argv[1])
-from pyGdbClient.llm import contracts, copilot, provider, scripted
+from pyGdbClient.llm import contracts, controller, copilot, provider, registry, rendering, scripted
+import pyGdbClient.cli
 assert scripted.ScriptedProvider.provider_id == "scripted"
+assert registry.default_registry().ids == ("github-copilot",)
 """
     subprocess.run([sys.executable, "-I", "-c", script, str(source)], check=True)

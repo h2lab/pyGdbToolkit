@@ -19,9 +19,20 @@ from textual.widgets import Footer, Header, Input, RichLog, Select, Static, Tree
 
 from .llm.approval import ApprovalRequest, ApprovalResponse
 from .llm.approval_screen import ApprovalScreen
+from .llm.controller import AgentController, AgentSettings, OpenedSession
+from .llm.orchestrator import AgentEvent
+from .llm.rendering import AgentTranscript, describe_context, describe_status, printable
 from .rpc import JsonRpcClient, RpcError
 
 _COMMAND_HISTORY_LIMIT = 40
+_AGENT_HELP = (
+    ("TEXT", "Send a natural-language request; the first one opens a session."),
+    ("/status", "Show provider readiness and authentication guidance."),
+    ("/new", "Cancel any request and open a session on a fresh target snapshot."),
+    ("/cancel", "Interrupt the running request; started operations are not rolled back."),
+    ("/end", "Cancel any request and close the session."),
+    ("/help", "Show these agent commands."),
+)
 
 
 class PyGdbClientApp(App[None]):
@@ -92,10 +103,17 @@ class PyGdbClientApp(App[None]):
         height: 1fr;
         border: tall $surface;
     }
-    #command {
+    #prompts {
         dock: bottom;
+        height: auto;
+        margin-bottom: 1;
+    }
+    #command, #agent-command {
         height: 3;
         margin: 0 1;
+    }
+    #agent-command {
+        border: tall $warning;
     }
     Footer {
         dock: bottom;
@@ -113,9 +131,17 @@ class PyGdbClientApp(App[None]):
 
     BINDINGS = [("ctrl+q", "quit", "Quit")]
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, agent: AgentSettings | None = None) -> None:
         super().__init__()
         self.client = JsonRpcClient(url)
+        self._transcript = AgentTranscript()
+        self._agent = (
+            None
+            if agent is None
+            else AgentController(
+                agent, self.client, approver=self.request_plan_approval, sink=self._show_agent_event
+            )
+        )
         self._connected = False
         self._ocd_executable = "unknown"
         self._target_refresh_lock = asyncio.Lock()
@@ -188,10 +214,19 @@ class PyGdbClientApp(App[None]):
                 yield Static("Connecting…", id="target-state")
                 yield Static("SVD PERIPHERALS", id="svd-title")
                 yield Tree("SVD not loaded", id="svd-tree")
-        yield Input(
-            placeholder="Toolkit command | gdb <commande> | monitor <commande>",
-            id="command",
-        )
+        with Vertical(id="prompts"):
+            yield Input(
+                placeholder="Toolkit command | gdb <commande> | monitor <commande>",
+                id="command",
+            )
+            yield Input(
+                placeholder=(
+                    "Agent request in natural language | /help"
+                    if self._agent is not None
+                    else "Agent disabled: start pyGdbClient with --llm <provider>"
+                ),
+                id="agent-command",
+            )
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -278,6 +313,9 @@ class PyGdbClientApp(App[None]):
         event.input.value = ""
         if not command:
             return
+        if event.input.id == "agent-command":
+            self._dispatch_agent_input(command)
+            return
         self._remember_command(command)
         self._history_position = None
         self._history_draft = ""
@@ -296,6 +334,83 @@ class PyGdbClientApp(App[None]):
     def _remember_command(self, command: str) -> None:
         self._command_history.append(command)
         del self._command_history[:-_COMMAND_HISTORY_LIMIT]
+
+    def _dispatch_agent_input(self, text: str) -> None:
+        """Route an agent CLI line; slash commands are local and never sent to the model."""
+        if text.startswith("/"):
+            name = " ".join(text.lower().split())
+            if name == "/help":
+                self._show_agent_help()
+            elif name in {"/status", "/new", "/cancel", "/end"}:
+                self.run_worker(self._agent_command(name), group="agent-control")
+            else:
+                self._append_output(
+                    f"Unknown agent command: {printable(text)} (see /help)", error=True
+                )
+            return
+        self.run_worker(self._agent_request(text), group="agent")
+
+    def _show_agent_help(self) -> None:
+        self._append_output("AGENT COMMANDS")
+        for syntax, description in _AGENT_HELP:
+            self.query_one("#command-output", RichLog).write(Text(f"  {syntax:<9} {description}"))
+
+    def _agent_ready(self) -> AgentController | None:
+        if self._agent is None:
+            self._append_output(
+                "Agent disabled: start pyGdbClient with --llm <provider>", error=True
+            )
+            return None
+        if not self._connected:
+            self._append_output("Not connected to pyGdbServer", error=True)
+            return None
+        return self._agent
+
+    async def _agent_request(self, text: str) -> None:
+        agent = self._agent_ready()
+        if agent is None:
+            return
+        self._append_output(f"agent› {printable(text)}")
+        try:
+            await agent.submit(text, on_session=self._show_agent_session)
+        except Exception as error:
+            self._show_agent_error(error)
+
+    async def _agent_command(self, name: str) -> None:
+        agent = self._agent_ready() if name != "/status" or self._agent is None else self._agent
+        if agent is None:
+            return
+        try:
+            if name == "/status":
+                self._write_output(describe_status(agent.provider_id, await agent.status()))
+            elif name == "/new":
+                self._show_agent_session(await agent.new_session())
+            elif name == "/cancel":
+                if not await agent.cancel():
+                    self._append_output("No agent request is running")
+            elif await agent.end_session():
+                self._append_output("Agent session closed")
+            else:
+                self._append_output("No agent session is open")
+        except Exception as error:
+            self._show_agent_error(error)
+
+    def _show_agent_session(self, session: OpenedSession) -> None:
+        self._write_output(describe_context(session.session_id, session.context))
+
+    def _show_agent_event(self, event: AgentEvent) -> None:
+        self._write_output(self._transcript.feed(event))
+
+    def _show_agent_error(self, error: Exception) -> None:
+        self._write_output(self._transcript.flush())
+        self._append_output(
+            f"Agent error: {printable(str(error) or type(error).__name__)}", error=True
+        )
+
+    def _write_output(self, lines: list[Text]) -> None:
+        log = self.query_one("#command-output", RichLog)
+        for line in lines:
+            log.write(line)
 
     def _navigate_command_history(self, command_input: Input, direction: int) -> None:
         if not self._command_history:
@@ -544,6 +659,11 @@ class PyGdbClientApp(App[None]):
         """Release the WebSocket when the dashboard closes."""
         if self._approval_future is not None and not self._approval_future.done():
             self._approval_future.cancel()
+        if self._agent is not None:
+            try:
+                await asyncio.wait_for(self._agent.close(), 10)
+            except Exception:
+                self.log.warning("agent shutdown failed")
         await self.client.close()
 
 
@@ -596,6 +716,8 @@ def _help_text(
             style=f"link {ocd_manual}" if ocd_manual.startswith("https://") else "",
         ),
         Text("Other commands without a prefix are sent to GDB and resolve pyGdbToolkit commands."),
+        Text("AGENT CLI (second input, enabled with --llm <provider>)", style="bold cyan"),
+        *(Text(f"  {syntax:<9} {description}") for syntax, description in _AGENT_HELP),
     ]
 
 

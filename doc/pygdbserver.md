@@ -469,6 +469,10 @@ commands. Enter `quit` or press `Ctrl+Q` to exit only the dashboard. Enter
 `quit --all` to request orderly shutdown of the server, GDB, and OCD before
 the client exits.
 
+A second prompt, below the command prompt, sends natural-language requests to
+an optional LLM agent. Start the client with `--llm <provider>` to enable it;
+see [Dashboard agent CLI](llm.md#dashboard-agent-cli).
+
 Memory inspection uses the same command prompt and output panel as other
 toolkit commands, with no separate command parser or automatic memory scan:
 

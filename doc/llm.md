@@ -21,8 +21,10 @@ The sixth adds the [deterministic protection policy](#deterministic-protection-p
 The seventh adds [one-attempt auditor approval](#auditor-approval) and its Textual modal.
 The eighth adds the bounded [agent orchestrator](#agent-orchestrator).
 The ninth adds the optional [GitHub Copilot provider](#github-copilot-provider).
-There is still no automatic dashboard execution. The second dashboard prompt,
-long-context management and end-to-end simulated audit workflows follow.
+The tenth adds the [dashboard agent CLI](#dashboard-agent-cli), a second prompt
+that routes natural-language requests through the orchestrator, the policy and
+auditor approval, with output in the central console. Long-context management
+and end-to-end simulated audit workflows follow.
 
 ## Trust boundaries
 
@@ -755,3 +757,100 @@ respective policies; the local SQLite store is not a guarantee of exclusive
 local persistence. In particular CLI-login mode retains the CLI's normal data
 directory. Do not send sensitive audit data without authorization. Dedicated
 long-context and confidentiality controls follow in a later increment.
+
+## Dashboard agent CLI
+
+The dashboard has a second prompt, below the command prompt, dedicated to the
+agent. It is enabled by selecting a provider when starting the client:
+
+```console
+pyGdbClient ws://192.0.2.15:1234 --llm github-copilot \
+    --copilot-runtime /absolute/path/printed/by/download-runtime/copilot
+```
+
+Without `--llm`, the prompt stays visible but only explains how to enable it;
+the dashboard behaves as before. Agent text, proposed plans, tool
+observations, notices and the final outcome of each request are written to the
+central **COMMAND OUTPUT** console. Model text and observations are rendered
+literally: control and bidirectional-formatting characters are replaced by
+`�`, rich markup is not interpreted, and each observation display is limited to
+2000 characters (the provider still receives the gateway's bounded result).
+
+### Launcher options
+
+| Option | Purpose |
+| ------ | ------- |
+| `--llm PROVIDER` | Enable the agent CLI with a registered provider (`github-copilot`). |
+| `--llm-store FILE` | Retain conversations and target snapshots in this SQLite file. By default nothing is persisted. |
+| `--copilot-runtime PATH` | Copilot runtime executable; defaults to `$PYGDB_COPILOT_RUNTIME`. Relative paths are made absolute; nothing is downloaded. |
+| `--copilot-model MODEL` | Model requested from Copilot (default: the runtime's choice). |
+| `--copilot-token-env NAME` | Read a GitHub token from environment variable `NAME`. Without it, the `copilot login` account is used. |
+
+A token is never accepted on the command line, where other local users could
+read it from the process list. Invalid provider options stop the launcher with
+an error before the dashboard starts.
+
+### Agent commands
+
+Lines starting with `/` are handled locally and never sent to the model:
+
+| Command | Effect |
+| ------- | ------ |
+| *text* | Send a natural-language request. The first one opens a session. |
+| `/status` | Show provider readiness and authentication guidance (for example, run `copilot login`). |
+| `/new` | Cancel any request, close the session and open one on a fresh target snapshot. |
+| `/cancel` | Interrupt the running request; started target operations are not rolled back. |
+| `/end` | Cancel any request and close the session. |
+| `/help` | List these commands. The dashboard `help` command lists them too. |
+
+### Session opening
+
+`pyGdbClient.llm.controller.AgentController` owns the lifecycle independently
+of Textual, so other front ends can reuse it. Opening a session:
+
+1. checks the provider status; a provider that is unavailable, or whose
+   authentication is `required` or `expired`, is reported with its guidance
+   before any target access;
+2. reads a fresh [`target.context`](#target-context) snapshot;
+3. opens a provider conversation with that snapshot and the
+   [tool catalogue](#tool-catalogue-and-rpc-gateway) definitions;
+4. registers the session in the optional SQLite store;
+5. binds a new `ToolGateway` using the default `ProtectionPolicy` and the
+   dashboard's [auditor approval](#auditor-approval) modal, then an
+   `AgentOrchestrator` with the default budgets.
+
+The console then lists the facts transmitted to the provider: MCU, revision,
+architecture, debug transport (JTAG or SWD), OCD, core, SVD file and memory
+map regions, each with its source or unavailability reason. If any step fails
+after the provider conversation was opened, that conversation is closed.
+
+Only one request runs at a time. A conversation left with unanswered tool
+calls (see [cancellation](#outcomes-cancellation-and-journal)) refuses further
+requests until `/new` is used. Quitting the dashboard cancels any request and
+pending approval, then closes the conversation, the provider and the store.
+
+### Adding a provider
+
+`pyGdbClient.llm.registry` holds `ProviderFactory` objects. A factory declares
+its own launcher options, prefixed by its name, and builds an `LlmProvider`
+from the parsed options and the environment without network access:
+
+```python
+class MyProviderFactory:
+    provider_id = "my-provider"
+    description = "My provider"
+
+    def add_arguments(self, parser):
+        parser.add_argument_group("My provider").add_argument("--my-provider-url")
+
+    def create(self, arguments, environ):
+        return MyProvider(arguments.my_provider_url)
+
+
+registry = default_registry()
+registry.register(MyProviderFactory())
+```
+
+Identifiers must be unique lowercase names, and the built provider must report
+the same `provider_id`. A provider only receives conversations: it never gets
+the gateway, the RPC client, the approval callback or the store.
