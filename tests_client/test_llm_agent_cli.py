@@ -5,7 +5,7 @@
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import sqlite3
@@ -18,6 +18,7 @@ from textual.widgets import Input, RichLog
 from pyGdbClient.app import PyGdbClientApp
 from pyGdbClient.llm.approval import ApprovalRequest, ApprovalResponse
 from pyGdbClient.llm.approval_screen import ApprovalScreen
+from pyGdbClient.llm.confidentiality import TEST_DATA_WARNING
 from pyGdbClient.llm.contracts import (
     ContextFact,
     MemoryMapContext,
@@ -31,7 +32,14 @@ from pyGdbClient.llm.controller import (
     AgentSettings,
     OpenedSession,
 )
-from pyGdbClient.llm.orchestrator import AgentEvent, AgentPlan, AgentRunFinished, AgentText
+from pyGdbClient.llm.orchestrator import (
+    AgentEvent,
+    AgentNotice,
+    AgentPlan,
+    AgentRunFinished,
+    AgentText,
+    AgentToolResults,
+)
 from pyGdbClient.llm.provider import (
     AuthenticationState,
     LlmSession,
@@ -40,7 +48,10 @@ from pyGdbClient.llm.provider import (
     TextDelta,
     ToolCallProposed,
     TurnFinished,
+    ToolResults,
+    UserPrompt,
 )
+from pyGdbClient.llm.recollection import RECOLLECTION_HEADER
 from pyGdbClient.llm.scripted import ScriptedSession, ScriptedTurn
 from pyGdbClient.llm.store import ContextStore, EntryKind
 from pyGdbClient.llm.tools import ToolCatalogue
@@ -147,10 +158,11 @@ async def _controller(
     *,
     store: Path | None = None,
     session_ids: Callable[[], str] | None = None,
+    **options: Any,
 ) -> AgentController:
     client = JsonRpcClient(server.url)
     await client.connect()
-    settings = AgentSettings(provider, store_path=store)
+    settings = AgentSettings(provider, store_path=store, **options)
     if session_ids is None:
         return AgentController(
             settings, client, approver=recorder.approver, sink=recorder.events.append
@@ -320,6 +332,182 @@ def test_cancel_interrupts_a_request_waiting_for_the_auditor() -> None:
     asyncio.run(exercise())
 
 
+def _secret_context(context_id: str = "ctx-1") -> TargetContext:
+    context = _context(context_id)
+    return replace(context, mcu=ContextFact("STM32U585", "lscpu password=board-pin"))
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"context_limit_chars": 0}, "context_limit_chars must be a positive"),
+        ({"context_limit_chars": True}, "context_limit_chars must be a positive"),
+        ({"test_data": "true"}, "test_data must be a boolean"),
+        ({"recollection_chars": 999}, "at least 1000"),
+        ({"context_limit_chars": 3000, "recollection_chars": 2000}, "at least twice"),
+    ],
+)
+def test_settings_validate_context_limits(change: dict[str, Any], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        AgentSettings(TrackedProvider(), **change)
+
+
+def test_provider_receives_a_masked_snapshot_while_the_store_keeps_it(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        path = tmp_path / "agent.sqlite3"
+        provider = TrackedProvider(_answer("ok"))
+        async with FakeRpcServer(_responses(_secret_context())) as server:
+            controller = await _controller(server, provider, Recorder(), store=path)
+            opened = await controller.new_session()
+            assert opened.redactions == 1
+            assert opened.context == _secret_context()
+            (session,) = provider.sessions
+            assert "board-pin" not in json.dumps(asdict(session.context))
+            assert session.context.mcu.source == "lscpu [REDACTED:credential-assignment]"
+            usage = controller.usage
+            assert usage is not None and usage.used == len(json.dumps(asdict(session.context)))
+            await controller.close()
+        assert path.stat().st_mode & 0o777 == 0o600
+        with ContextStore(path) as store:
+            assert store.get_context(opened.session_id) == _secret_context()
+
+    asyncio.run(exercise())
+
+
+def test_existing_store_files_keep_their_permissions(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        path = tmp_path / "agent.sqlite3"
+        ContextStore(path).close()
+        path.chmod(0o640)
+        async with FakeRpcServer(_responses()) as server:
+            controller = await _controller(server, TrackedProvider(), Recorder(), store=path)
+            await controller.new_session()
+            await controller.close()
+        assert path.stat().st_mode & 0o777 == 0o640
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("approve", [True, False])
+def test_test_data_preserves_analysis_without_bypassing_approval(approve: bool) -> None:
+    async def exercise() -> None:
+        pem = "-----BEGIN PRIVATE KEY-----\nTEST-ONLY-KEY\n-----END PRIVATE KEY-----"
+        observation = (
+            "0x20000000: 00 01 ab ff; pc=0x08000134 <crypto_driver+4>\n"
+            "AES.CR=0x1; secret=test-vector\n" + pem
+        )
+        responses = _responses(_secret_context())
+        responses["mi.execute"]["output"] = [observation]
+        provider = TrackedProvider(_calls(_READ), _answer("analysed"))
+        recorder = Recorder()
+        recorder.approve = approve
+        recorder.release.set()
+        async with FakeRpcServer(responses) as server:
+            controller = await _controller(server, provider, recorder, test_data=True)
+            prompt = f"Analyse secret=test-vector with test key:\n{pem}"
+            await controller.submit(prompt)
+            session = provider.sessions[0]
+            assert session.context == _secret_context()
+            assert session.inputs[0] == UserPrompt(prompt)
+            assert len(recorder.requests) == 1
+            results = session.inputs[1]
+            assert isinstance(results, ToolResults)
+            observed = [event for event in recorder.events if isinstance(event, AgentToolResults)][
+                0
+            ]
+            assert results.results == observed.results
+            assert results.results[0].is_error is not approve
+            assert ("mi.execute" in server.methods) is approve
+            if approve:
+                document = json.loads(results.results[0].content)
+                assert document["result"]["output"] == [observation]
+                assert document["truncated"] is False
+            notices = [event.message for event in recorder.events if isinstance(event, AgentNotice)]
+            assert TEST_DATA_WARNING in notices
+            assert not any("Redacted" in message for message in notices)
+            await controller.compact()
+            await controller.submit("Continue")
+            continued = provider.sessions[1].inputs[0]
+            assert isinstance(continued, UserPrompt)
+            assert prompt in continued.text
+            assert controller.session is not None and controller.session.test_data
+            await controller.close()
+
+    asyncio.run(exercise())
+
+
+def test_reaching_the_context_limit_continues_with_a_recollection() -> None:
+    async def exercise() -> None:
+        provider = TrackedProvider(_answer("x" * 2400))
+        recorder = Recorder()
+        ids = iter(["first", "second"])
+        async with FakeRpcServer(_responses()) as server:
+            controller = await _controller(
+                server,
+                provider,
+                recorder,
+                session_ids=lambda: next(ids),
+                context_limit_chars=3000,
+                recollection_chars=1500,
+            )
+            opened: list[OpenedSession] = []
+            await controller.submit("measure the clock", on_session=opened.append)
+            usage = controller.usage
+            assert usage is not None and usage.used >= usage.limit == 3000
+            await controller.submit("and now?", on_session=opened.append)
+            assert [session.session_id for session in opened] == ["first", "second"]
+            assert opened[1].continues == "first"
+            assert 0 < opened[1].recollection_chars <= 1500
+            notices = [e.message for e in recorder.events if isinstance(e, AgentNotice)]
+            assert any("continuing in a new session" in notice for notice in notices)
+            assert provider.sessions[0].closed == 1
+            (prompt,) = provider.sessions[1].inputs
+            assert isinstance(prompt, UserPrompt)
+            assert prompt.text.startswith(f"{RECOLLECTION_HEADER}\nSession: first\n")
+            assert "Auditor: measure the clock" in prompt.text
+            assert prompt.text.endswith("Current auditor request:\nand now?")
+            stored = controller.sessions()
+            assert [(s.session_id, s.title) for s in stored] == [
+                ("first", ""),
+                ("second", "continues first"),
+            ]
+            await controller.close()
+
+    asyncio.run(exercise())
+
+
+def test_compact_resume_and_sessions() -> None:
+    async def exercise() -> None:
+        provider = TrackedProvider(_answer("noted"))
+        ids = iter(["a", "b", "c", "d"])
+        async with FakeRpcServer(_responses()) as server:
+            controller = await _controller(
+                server, provider, Recorder(), session_ids=lambda: next(ids)
+            )
+            assert controller.sessions() == ()
+            with pytest.raises(AgentControllerError, match="no agent session"):
+                await controller.compact()
+            with pytest.raises(AgentControllerError, match="unknown stored session: z"):
+                await controller.resume("z")
+            await controller.submit("remember 42")
+            compacted = await controller.compact()
+            assert (compacted.session_id, compacted.continues) == ("b", "a")
+            assert compacted.recollection_chars > 0
+            assert controller.sessions(limit=1)[0].session_id == "b"
+            resumed = await controller.resume("a")
+            assert (resumed.session_id, resumed.continues) == ("c", "a")
+            await controller.submit("what was it?")
+            prompt = provider.sessions[2].inputs[0]
+            assert isinstance(prompt, UserPrompt) and "Auditor: remember 42" in prompt.text
+            await controller.end_session()
+            empty = await controller.resume("b")
+            assert empty.recollection_chars == 0
+            assert controller.usage is not None
+            await controller.close()
+
+    asyncio.run(exercise())
+
+
 class AgentApp(PyGdbClientApp):
     def __init__(self, url: str, agent: AgentSettings | None, *, connect: bool = True) -> None:
         super().__init__(url, agent)
@@ -457,5 +645,37 @@ def test_dashboard_help_lists_agent_commands() -> None:
             output = _output(app)
             assert "AGENT CLI" in output
             assert "/cancel" in output
+
+    asyncio.run(exercise())
+
+
+def test_agent_cli_continuity_commands() -> None:
+    async def exercise() -> None:
+        provider = TrackedProvider(_answer("noted"))
+        async with FakeRpcServer(_responses(_secret_context())) as server:
+            app = AgentApp(server.url, AgentSettings(provider))
+            async with app.run_test(size=(110, 45)) as pilot:
+                await _until(pilot, lambda: app._connected)
+                await _type(pilot, app, "/sessions")
+                await _until(pilot, lambda: "No journaled agent session" in _output(app))
+                await _type(pilot, app, "remember 42")
+                await _until(pilot, lambda: "Agent request completed" in _output(app))
+                assert "Redacted before disclosure: 1 value(s)" in _output(app)
+                first = provider.sessions[0].session_id
+                for command in ("/status", "/compact", "/sessions", "/resume", "/resume a b"):
+                    await _type(pilot, app, command)
+                    await app.workers.wait_for_complete()
+                await _type(pilot, app, f"/RESUME {first}")
+                await app.workers.wait_for_complete()
+                await _type(pilot, app, "/resume missing")
+                await app.workers.wait_for_complete()
+                output = _output(app)
+                assert "Agent session context:" in output
+                assert f"Continues {first}:" in output
+                assert "Journaled agent sessions (oldest first)" in output
+                assert f"continues {first}" in output
+                assert output.count("Unknown agent command: /resume") == 2
+                assert "unknown stored session: missing" in output
+                assert len(provider.sessions) == 3
 
     asyncio.run(exercise())
