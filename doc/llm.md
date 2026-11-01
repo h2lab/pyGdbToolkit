@@ -12,10 +12,12 @@ the dashboard, contact a model, collect target data, or execute commands.
 The existing command prompt, RPC protocol, and dashboard behaviour are unchanged.
 No new dependency is required.
 
-Subsequent increments will add an independent client test suite, structured
-target-context RPC, SQLite persistence, a tool catalogue, target protection,
-auditor approval, orchestration, the Copilot adapter, and the second dashboard
-prompt. Long-context management and end-to-end simulated audit workflows follow.
+The second increment isolates client tests from GDB (see
+[Client test suite](#client-test-suite)). Subsequent increments will add a
+structured target-context RPC, SQLite persistence, a tool catalogue, target
+protection, auditor approval, orchestration, the Copilot adapter, and the second
+dashboard prompt. Long-context management and end-to-end simulated audit
+workflows follow.
 
 ## Trust boundaries
 
@@ -127,14 +129,31 @@ between events so cancellation can be exercised deterministically. Cancelling
 or abandoning a turn consumes that scripted turn; it is not silently replayed.
 It performs no network, filesystem, target, or tool execution.
 
-The focused contract tests can run without the repository's GDB test shim:
+The contract tests belong to the client suite, which runs without GDB, the
+toolkit, the server, or a target:
 
 ```console
-python -m pytest --noconftest tests/test_llm_contracts.py
+tox -e client
 ```
 
-A fresh-interpreter test also rejects imports of `gdb`, `pyGdbToolkit`, and
-`copilot`, rather than treating a fake GDB module as evidence of independence.
+The suite's import guard rejects `gdb`, `pyGdbToolkit`, and `pyGdbServer`, and
+refuses to start if any is already loaded, rather than treating a fake GDB
+module as evidence of independence. A fresh-interpreter test also rejects
+`copilot`.
+
+## Client test suite
+
+`tests_client/` holds the dashboard and LLM tests. It must run in its own pytest
+process, separate from the GDB-side suite in `tests/`, because that suite
+installs a fake `gdb` module at import time. Tox runs both in separate
+environments (`py312` and `client`).
+
+`tests_client/rpc_fakes.py` provides `FakeRpcServer`, a loopback WebSocket
+JSON-RPC double. Each method is scripted as a fixed result, an `RpcFailure`, or
+a callable receiving the request parameters; unscripted methods return
+`-32601`, so unexpected calls fail visibly. It records every request in arrival
+order and can broadcast notifications. Provider behaviour is scripted with
+`ScriptedProvider`.
 
 ## Copilot adapter feasibility
 

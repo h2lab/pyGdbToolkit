@@ -37,6 +37,16 @@ sample their endpoints. Confirmed fingerprints enrich the shared `SESSION`;
 manufacturer baselines remain separate hypotheses. See the
 [memory-mapping guide](doc/memmap.md) for confidence levels and safe probing limits.
 
+## Run the tests with tox
+
+```console
+tox -e py312     # GDB-side toolkit and server tests, using a fake gdb module
+tox -e client    # dashboard and LLM client tests, without GDB or a target
+```
+
+The two suites run in separate processes: the client suite rejects any import
+of `gdb`, `pyGdbToolkit`, or `pyGdbServer`.
+
 ## Build the documentation with tox
 
 The [user guide](doc/index.md) is generated from the Markdown sources in `doc/`.
