@@ -3,8 +3,6 @@
 
 """Read-only Arm trace capability probing through discovered CoreSight components."""
 
-from __future__ import annotations
-
 from ...target_memory import TargetMemory, TargetReadError
 from ..base import RegisterValue, TargetDescription
 from ..trace import TraceCapabilities, TraceComponent, TraceComponentKind

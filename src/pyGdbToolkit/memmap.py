@@ -3,8 +3,6 @@
 
 """Bounded, read-only memory sampling with explicit evidence and uncertainty."""
 
-from __future__ import annotations
-
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from time import monotonic

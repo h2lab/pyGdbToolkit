@@ -9,8 +9,6 @@ ST CMSIS device headers listed in ``README.md``; the headers themselves are
 not vendored here.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from ...coresight import CoreSightDiscovery, Jep106Identity

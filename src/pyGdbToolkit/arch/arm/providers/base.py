@@ -3,8 +3,6 @@
 
 """Manufacturer-agnostic Arm device-provider contracts and dispatch."""
 
-from __future__ import annotations
-
 from typing import Protocol
 
 from ..coresight import CoreSightDiscovery

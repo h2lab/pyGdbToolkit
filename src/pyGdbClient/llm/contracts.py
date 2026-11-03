@@ -3,8 +3,6 @@
 
 """Data exchanged across the provider, orchestrator, and target-policy boundaries."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, Protocol

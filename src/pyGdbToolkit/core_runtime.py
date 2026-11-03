@@ -3,8 +3,6 @@
 
 """Backend-neutral CPU-context orchestration shared by DAP commands and RPC."""
 
-from __future__ import annotations
-
 import gdb
 
 from .ocd import OCD, OcdDetector

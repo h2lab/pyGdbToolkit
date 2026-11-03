@@ -3,8 +3,6 @@
 
 """Fixed tool routes, argument schemas and locally owned effect classifications."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 import json
 import math

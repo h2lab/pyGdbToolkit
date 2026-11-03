@@ -3,8 +3,6 @@
 
 """J-Link attached-core and configured-endpoint CPU selection strategies."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 import re
 

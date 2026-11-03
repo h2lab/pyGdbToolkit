@@ -3,8 +3,6 @@
 
 """The GDB-side target context reuses session knowledge and never probes the target."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from types import SimpleNamespace

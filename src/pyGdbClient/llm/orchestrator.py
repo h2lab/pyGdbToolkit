@@ -3,8 +3,6 @@
 
 """Bounded agent loop between an untrusted provider and the policy-gated gateway."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from dataclasses import asdict, dataclass

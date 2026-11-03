@@ -3,11 +3,9 @@
 
 """Portable architecture target-description and register-reading contracts."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from typing import Protocol
+from typing import Protocol, Self
 
 from ..target_memory import TargetMemory
 
@@ -52,7 +50,7 @@ class RegisterValue:
             raise ValueError("a register width must be positive")
 
     @classmethod
-    def known(cls, name: str, address: int, width_bits: int, value: int) -> RegisterValue:
+    def known(cls, name: str, address: int, width_bits: int, value: int) -> Self:
         """Create an available register value."""
         return cls(name=name, address=address, width_bits=width_bits, value=value)
 
@@ -63,7 +61,7 @@ class RegisterValue:
         address: int,
         width_bits: int,
         reason: str,
-    ) -> RegisterValue:
+    ) -> Self:
         """Create an unavailable register result."""
         return cls(
             name=name,
@@ -111,12 +109,12 @@ class ProbeResult:
             raise ValueError("a successful probe result cannot contain an access error")
 
     @classmethod
-    def detected(cls, target: TargetDescription) -> ProbeResult:
+    def detected(cls, target: TargetDescription) -> Self:
         """Create a successful probe result."""
         return cls(target=target)
 
     @classmethod
-    def unavailable(cls, reason: str, *, access_error: bool = False) -> ProbeResult:
+    def unavailable(cls, reason: str, *, access_error: bool = False) -> Self:
         """Create an unsuccessful probe result."""
         return cls(unavailable_reason=reason, access_error=access_error)
 

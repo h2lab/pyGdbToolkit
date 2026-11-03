@@ -3,8 +3,6 @@
 
 """Identify and cache the connected debug server independently of CPU selection."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import StrEnum
 import re

@@ -3,8 +3,6 @@
 
 """Import guard keeping client tests independent of target-side packages."""
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 import importlib.abc
 import importlib.machinery

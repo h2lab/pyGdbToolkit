@@ -3,8 +3,6 @@
 
 """Fetch and strictly decode the ``target.context`` snapshot served by pyGdbServer."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Any, Protocol
 

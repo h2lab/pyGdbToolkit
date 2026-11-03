@@ -3,18 +3,12 @@
 
 """Cortex-M Secure Attribution Unit inspection."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum, unique
-from typing import TYPE_CHECKING
+from typing import Protocol, Self
 
 from ...target_memory import TargetMemory, TargetReadError, TargetWriteError, WritableTargetMemory
 from ..base import RegisterValue
-
-if TYPE_CHECKING:
-    from .cortex_m import CortexMTargetDescription
-
 
 SAU_BASE_ADDRESS = 0xE000EDD0
 
@@ -53,6 +47,24 @@ class SauDescription:
     registers: tuple[SauRegister, ...]
 
 
+class SauCoreDescription(Protocol):
+    """Structural view of a core description exposing an optional SAU description."""
+
+    @property
+    def sau(self) -> SauDescription | None:
+        """Return the core's SAU description, or ``None`` when it has no SAU."""
+        ...
+
+
+class SauTargetDescription(Protocol):
+    """Structural view of a Cortex-M target description with a SAU-capable core."""
+
+    @property
+    def core(self) -> SauCoreDescription | None:
+        """Return the known core description, or ``None`` for an unknown core."""
+        ...
+
+
 @dataclass(frozen=True)
 class SauStatus:
     """SAU implementation and enable-state information."""
@@ -76,7 +88,7 @@ class SauStatus:
         description: SauDescription | None,
         reason: str,
         registers: tuple[RegisterValue, ...] = (),
-    ) -> SauStatus:
+    ) -> Self:
         """Create an explicit unavailable SAU status."""
         return cls(description, registers, None, None, None, None, reason)
 
@@ -117,7 +129,7 @@ class SauRegionResult:
             raise ValueError("an SAU region result must be available or unavailable")
 
     @classmethod
-    def unavailable(cls, index: int, reason: str) -> SauRegionResult:
+    def unavailable(cls, index: int, reason: str) -> Self:
         """Create an unavailable SAU region result."""
         return cls(index=index, unavailable_reason=reason)
 
@@ -139,7 +151,7 @@ class SauDump:
 ARMV8_M_SAU = SauDescription(tuple(SauRegister))
 
 
-def read_sau_status(reader: TargetMemory, target: CortexMTargetDescription) -> SauStatus:
+def read_sau_status(reader: TargetMemory, target: SauTargetDescription) -> SauStatus:
     """Read SAU implementation and control status for a known Cortex-M core."""
     description = target.core.sau if target.core is not None else None
     if description is None:
@@ -173,7 +185,7 @@ def read_sau_status(reader: TargetMemory, target: CortexMTargetDescription) -> S
 
 def dump_sau_regions(
     reader: WritableTargetMemory,
-    target: CortexMTargetDescription,
+    target: SauTargetDescription,
     status: SauStatus | None = None,
 ) -> SauDump:
     """Read and decode SAU regions, restoring the target's original selector.

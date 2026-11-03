@@ -3,8 +3,6 @@
 
 """Asynchronous LLM provider contract and provider-independent turn events."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum

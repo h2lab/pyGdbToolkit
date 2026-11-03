@@ -3,8 +3,6 @@
 
 """Intrusive opt-in A53 cluster validation through real pyGdbServer and GDB."""
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import replace
 import os

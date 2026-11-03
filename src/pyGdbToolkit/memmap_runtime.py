@@ -3,8 +3,6 @@
 
 """GDB metadata adapters for portable memory-map discovery."""
 
-from __future__ import annotations
-
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager

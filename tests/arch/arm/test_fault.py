@@ -3,8 +3,6 @@
 
 """Tests for the Arm Cortex-M fault-analysis diagnostic service."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
 import pytest

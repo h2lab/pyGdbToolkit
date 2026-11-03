@@ -9,8 +9,6 @@ is derived from the content, so it changes whenever the target, the selected
 core, the SVD file or the memory map changes.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 from pathlib import Path

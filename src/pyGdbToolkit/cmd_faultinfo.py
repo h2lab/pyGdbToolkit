@@ -3,8 +3,6 @@
 
 """The architecture-neutral ``fault_info`` GDB command entry point."""
 
-from __future__ import annotations
-
 import gdb
 from rich import box
 from rich.console import Console

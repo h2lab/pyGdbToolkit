@@ -3,8 +3,6 @@
 
 """Architecture-neutral debug-port contracts and OCD monitor transports."""
 
-from __future__ import annotations
-
 from contextlib import contextmanager
 from dataclasses import dataclass
 import re

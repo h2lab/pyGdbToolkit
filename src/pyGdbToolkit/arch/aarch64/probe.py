@@ -3,8 +3,6 @@
 
 """Recognize AArch64 from GDB metadata without probing Cortex-M registers."""
 
-from __future__ import annotations
-
 from ...target_memory import TargetMemory
 from ..base import Architecture, ProbeResult, SystemRegisterSet, TargetDescription
 from .target import AArch64TargetDescription

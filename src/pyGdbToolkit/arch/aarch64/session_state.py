@@ -3,8 +3,6 @@
 
 """Bind AArch64 lscpu inspection to the active toolkit session."""
 
-from __future__ import annotations
-
 import re
 
 import gdb

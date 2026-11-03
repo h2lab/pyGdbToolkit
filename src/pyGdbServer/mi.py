@@ -3,8 +3,6 @@
 
 """GDB Machine Interface session and private loopback endpoint."""
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
 import json

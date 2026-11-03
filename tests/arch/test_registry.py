@@ -3,8 +3,6 @@
 
 """Tests for portable architecture probe registry behavior."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from pyGdbToolkit.arch import Architecture, ArchitectureRegistry, ProbeResult, TargetDescription

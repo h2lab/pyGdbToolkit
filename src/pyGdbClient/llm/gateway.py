@@ -3,8 +3,6 @@
 
 """Fail-closed, policy-gated RPC dispatch for complete agent action plans."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import math

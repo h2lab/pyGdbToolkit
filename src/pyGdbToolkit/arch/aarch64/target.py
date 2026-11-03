@@ -3,8 +3,6 @@
 
 """Architecture identity supplied by GDB for an AArch64 target."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from ..base import TargetDescription

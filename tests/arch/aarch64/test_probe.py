@@ -3,8 +3,6 @@
 
 """Tests for minimal AArch64 recognition and session loading."""
 
-from __future__ import annotations
-
 from types import SimpleNamespace
 
 import pytest

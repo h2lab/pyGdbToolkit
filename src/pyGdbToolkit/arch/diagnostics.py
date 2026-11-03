@@ -3,11 +3,9 @@
 
 """Portable diagnostic-service contracts, reports, and runtime dispatch."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import StrEnum, auto, unique
-from typing import Protocol, TypeAlias
+from typing import Protocol, Self, TypeAlias
 
 from ..target_memory import TargetMemory
 from .base import Architecture, TargetDescription
@@ -127,7 +125,7 @@ class DiagnosticResult:
             raise ValueError("a completed diagnostic result cannot contain an access error")
 
     @classmethod
-    def completed(cls, report: DiagnosticReport) -> DiagnosticResult:
+    def completed(cls, report: DiagnosticReport) -> Self:
         """Create a completed diagnostic result."""
         return cls(report=report, target=report.target)
 
@@ -138,7 +136,7 @@ class DiagnosticResult:
         target: TargetDescription | None = None,
         *,
         access_error: bool = False,
-    ) -> DiagnosticResult:
+    ) -> Self:
         """Create an explicitly unavailable diagnostic result."""
         return cls(target=target, unavailable_reason=reason, access_error=access_error)
 
@@ -146,26 +144,6 @@ class DiagnosticResult:
     def is_available(self) -> bool:
         """Whether the requested diagnostic completed."""
         return self.report is not None
-
-
-class DiagnosticService(Protocol):
-    """An architecture-specific collector behind a portable diagnostic service."""
-
-    architecture: Architecture
-    service: DiagnosticServiceName
-
-    def supports(self, target: TargetDescription) -> bool:
-        """Return whether the service can collect this target description."""
-        ...
-
-    def collect(
-        self,
-        reader: TargetMemory,
-        target: TargetDescription,
-        access: DiagnosticRuntimeAccess | None = None,
-    ) -> DiagnosticReport:
-        """Collect one report for a compatible target."""
-        ...
 
 
 class DiagnosticRegisterReader(Protocol):
@@ -190,6 +168,26 @@ class DiagnosticRuntimeAccess:
 
     registers: DiagnosticRegisterReader | None = None
     symbols: DiagnosticSymbolResolver | None = None
+
+
+class DiagnosticService(Protocol):
+    """An architecture-specific collector behind a portable diagnostic service."""
+
+    architecture: Architecture
+    service: DiagnosticServiceName
+
+    def supports(self, target: TargetDescription) -> bool:
+        """Return whether the service can collect this target description."""
+        ...
+
+    def collect(
+        self,
+        reader: TargetMemory,
+        target: TargetDescription,
+        access: DiagnosticRuntimeAccess | None = None,
+    ) -> DiagnosticReport:
+        """Collect one report for a compatible target."""
+        ...
 
 
 class DiagnosticRuntime(Protocol):

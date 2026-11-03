@@ -3,12 +3,11 @@
 
 """Masking of recognizable secrets before data is disclosed to an LLM provider."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 import json
 import re
+from typing import Self
 
 from .contracts import (
     ContextFact,
@@ -88,7 +87,7 @@ class Redactor:
         return self._rules
 
     @classmethod
-    def with_patterns(cls, patterns: Iterable[str], *, defaults: bool = True) -> Redactor:
+    def with_patterns(cls, patterns: Iterable[str], *, defaults: bool = True) -> Self:
         """Add auditor expressions, named ``custom-N``, to the optional defaults."""
         rules = list(DEFAULT_RULES if defaults else ())
         for index, pattern in enumerate(patterns, start=1):

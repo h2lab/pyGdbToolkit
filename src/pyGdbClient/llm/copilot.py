@@ -3,8 +3,6 @@
 
 """Optional Copilot SDK adapter; target operations remain declaration-only."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import AsyncIterator, Awaitable
 from contextvars import ContextVar
@@ -17,7 +15,7 @@ import math
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from .contracts import JsonValue, TargetContext, ToolCall, ToolDefinition, ToolResult
@@ -43,6 +41,11 @@ if TYPE_CHECKING:
     from copilot.generated.rpc import AccountGetQuotaResult, PermissionDecisionReject
     from copilot.session import CopilotSession, PermissionInvocation
     from copilot.session_events import PermissionRequest, SessionEvent
+else:
+    # Runtime placeholders keep the SDK an optional dependency: annotations are
+    # evaluated eagerly before Python 3.14, and the SDK is only imported lazily.
+    CopilotClient = AccountGetQuotaResult = PermissionDecisionReject = Any
+    CopilotSession = PermissionInvocation = PermissionRequest = SessionEvent = Any
 
 SDK_VERSION = "1.0.27"
 RUNTIME_VERSION = "1.0.104"

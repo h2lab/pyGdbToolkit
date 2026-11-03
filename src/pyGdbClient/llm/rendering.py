@@ -3,8 +3,6 @@
 
 """Literal console rendering of agent events, independent of the dashboard toolkit."""
 
-from __future__ import annotations
-
 import json
 
 from rich.text import Text

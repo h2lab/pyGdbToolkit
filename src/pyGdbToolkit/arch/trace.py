@@ -3,8 +3,6 @@
 
 """Architecture-neutral, read-only trace capability descriptions."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable, Mapping

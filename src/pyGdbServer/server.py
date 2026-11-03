@@ -3,8 +3,6 @@
 
 """pyGdbServer orchestration and JSON-RPC 2.0 WebSocket API."""
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import binascii

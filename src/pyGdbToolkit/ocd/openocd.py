@@ -3,8 +3,6 @@
 
 """OpenOCD named hardware-thread CPU selection strategy."""
 
-from __future__ import annotations
-
 import re
 
 import gdb

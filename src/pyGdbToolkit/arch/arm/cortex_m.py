@@ -3,8 +3,6 @@
 
 """Cortex-M core descriptions, CPUID decoding, and SCB inspection."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum, unique
 

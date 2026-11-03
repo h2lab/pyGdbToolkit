@@ -3,8 +3,6 @@
 
 """The client decodes ``target.context`` strictly before giving it to an agent."""
 
-from __future__ import annotations
-
 import asyncio
 import copy
 from typing import Any

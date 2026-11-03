@@ -3,13 +3,11 @@
 
 """Scriptable loopback JSON-RPC server standing in for pyGdbServer."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
 from types import TracebackType
-from typing import Any
+from typing import Any, Self
 
 from websockets.asyncio.server import Server, ServerConnection, serve
 
@@ -45,7 +43,7 @@ class FakeRpcServer:
         """Received method names, in arrival order."""
         return [method for method, _ in self.requests]
 
-    async def __aenter__(self) -> FakeRpcServer:
+    async def __aenter__(self) -> Self:
         """Listen on an ephemeral loopback port."""
         self._server = await serve(self._handle, "127.0.0.1", 0)
         port = self._server.sockets[0].getsockname()[1]

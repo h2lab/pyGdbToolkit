@@ -3,8 +3,6 @@
 
 """The ``target.context`` RPC merges GDB facts and configuration into a versioned snapshot."""
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import replace
 import json

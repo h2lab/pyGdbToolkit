@@ -3,8 +3,6 @@
 
 """Broad ARM manufacturer candidate windows, not physical memory capacities."""
 
-from __future__ import annotations
-
 from ..memmap import MemoryBaseline
 
 

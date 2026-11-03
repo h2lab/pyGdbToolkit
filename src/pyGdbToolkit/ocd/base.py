@@ -3,8 +3,6 @@
 
 """Common CPU-context models and debug-server backend contract."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Protocol

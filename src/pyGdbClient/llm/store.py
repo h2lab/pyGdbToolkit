@@ -3,8 +3,6 @@
 
 """Local, provider-independent conversation journal backed by SQLite."""
 
-from __future__ import annotations
-
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -13,6 +11,7 @@ import math
 from pathlib import Path
 import sqlite3
 from types import TracebackType
+from typing import Self
 
 from .context import parse_target_context
 from .contracts import JsonObject, JsonValue, TargetContext
@@ -168,7 +167,7 @@ class ContextStore:
             self._connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
             self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
-    def __enter__(self) -> ContextStore:
+    def __enter__(self) -> Self:
         """Return the store, whose connection is closed on leaving the block."""
         return self
 

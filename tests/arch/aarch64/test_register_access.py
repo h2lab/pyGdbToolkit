@@ -3,8 +3,6 @@
 
 """Tests for GDB CPU registers and the explicitly limited J-Link CP15 fallback."""
 
-from __future__ import annotations
-
 from types import SimpleNamespace
 
 import pytest
