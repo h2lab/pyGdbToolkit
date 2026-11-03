@@ -4,7 +4,7 @@
 """Cortex-M PMSAv7 and PMSAv8 Memory Protection Unit inspection."""
 
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum, unique
+from enum import IntEnum, StrEnum, auto, unique
 from typing import Protocol, Self
 
 from ...target_memory import TargetReadError, TargetWriteError, WritableTargetMemory
@@ -63,7 +63,7 @@ class MpuAccessPermission(StrEnum):
     READ_WRITE = "read-write"
     PRIVILEGED_READ_ONLY = "privileged-read-only"
     READ_ONLY = "read-only"
-    RESERVED = "reserved"
+    RESERVED = auto()
 
 
 @unique
@@ -71,9 +71,9 @@ class MpuMemoryType(StrEnum):
     """Memory types represented by PMSA MPU attributes."""
 
     STRONGLY_ORDERED = "strongly-ordered"
-    DEVICE = "device"
-    NORMAL = "normal"
-    UNKNOWN = "unknown"
+    DEVICE = auto()
+    NORMAL = auto()
+    UNKNOWN = auto()
 
 
 @dataclass(frozen=True)

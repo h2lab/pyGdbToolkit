@@ -5,7 +5,7 @@
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import StrEnum, auto
 import json
 import math
 from pathlib import Path
@@ -53,12 +53,12 @@ class StoreError(RuntimeError):
 class EntryKind(StrEnum):
     """Kinds of observations stored locally, never executable instructions."""
 
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL_CALL = "tool_call"
-    TOOL_RESULT = "tool_result"
-    SUMMARY = "summary"
-    ERROR = "error"
+    USER = auto()
+    ASSISTANT = auto()
+    TOOL_CALL = auto()
+    TOOL_RESULT = auto()
+    SUMMARY = auto()
+    ERROR = auto()
 
 
 @dataclass(frozen=True)

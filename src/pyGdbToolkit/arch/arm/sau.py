@@ -4,7 +4,7 @@
 """Cortex-M Secure Attribution Unit inspection."""
 
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum, unique
+from enum import IntEnum, StrEnum, auto, unique
 from typing import Protocol, Self
 
 from ...target_memory import TargetMemory, TargetReadError, TargetWriteError, WritableTargetMemory
@@ -28,7 +28,7 @@ class SauRegister(IntEnum):
 class SauDefaultSecurity(StrEnum):
     """Security attribution outside enabled SAU regions."""
 
-    SECURE = "secure"
+    SECURE = auto()
     NON_SECURE = "non-secure"
 
 

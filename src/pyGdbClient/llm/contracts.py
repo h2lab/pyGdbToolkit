@@ -4,7 +4,7 @@
 """Data exchanged across the provider, orchestrator, and target-policy boundaries."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, auto
 from typing import Literal, Protocol
 
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
@@ -126,12 +126,12 @@ class ToolResult:
 class ActionEffect(StrEnum):
     """Possible effects to display; provider claims are not policy authority."""
 
-    OBSERVE = "observe"
-    READ_MEMORY = "read_memory"
-    WRITE_MEMORY = "write_memory"
-    EXECUTION_CONTROL = "execution_control"
-    PERSISTENT_CHANGE = "persistent_change"
-    UNKNOWN = "unknown"
+    OBSERVE = auto()
+    READ_MEMORY = auto()
+    WRITE_MEMORY = auto()
+    EXECUTION_CONTROL = auto()
+    PERSISTENT_CHANGE = auto()
+    UNKNOWN = auto()
 
 
 @dataclass(frozen=True)
@@ -164,9 +164,9 @@ class ActionPlan:
 class PolicyOutcome(StrEnum):
     """Decisions made by local policy, not by the model."""
 
-    ALLOW = "allow"
-    REQUIRE_APPROVAL = "require_approval"
-    DENY = "deny"
+    ALLOW = auto()
+    REQUIRE_APPROVAL = auto()
+    DENY = auto()
 
 
 @dataclass(frozen=True)

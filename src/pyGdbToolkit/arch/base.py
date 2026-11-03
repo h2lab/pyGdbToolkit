@@ -4,7 +4,7 @@
 """Portable architecture target-description and register-reading contracts."""
 
 from dataclasses import dataclass
-from enum import StrEnum, unique
+from enum import StrEnum, auto, unique
 from typing import Protocol, Self
 
 from ..target_memory import TargetMemory
@@ -14,10 +14,10 @@ from ..target_memory import TargetMemory
 class Architecture(StrEnum):
     """Architectures supported by the target-description registry."""
 
-    ARM = "arm"
-    AARCH64 = "aarch64"
-    RISCV = "riscv"
-    XTENSA = "xtensa"
+    ARM = auto()
+    AARCH64 = auto()
+    RISCV = auto()
+    XTENSA = auto()
 
 
 @dataclass(frozen=True)

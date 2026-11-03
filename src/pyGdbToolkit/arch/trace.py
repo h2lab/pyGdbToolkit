@@ -4,7 +4,7 @@
 """Architecture-neutral, read-only trace capability descriptions."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, auto
 from typing import Callable, Mapping
 
 from ..target_memory import TargetMemory
@@ -14,10 +14,10 @@ from .base import Architecture, RegisterValue, TargetDescription
 class TraceComponentKind(StrEnum):
     """Trace sources and embedded sinks recognized by the toolkit."""
 
-    ETM = "etm"
-    ETB = "etb"
-    MTB = "mtb"
-    ETF = "etf"
+    ETM = auto()
+    ETB = auto()
+    MTB = auto()
+    ETF = auto()
 
 
 @dataclass(frozen=True)
