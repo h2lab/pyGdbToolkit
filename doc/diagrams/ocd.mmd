@@ -5,8 +5,10 @@ flowchart TD
     Registry --> JLink["ocd/jlinkgdbserver.py / configured endpoints and identity"]
     Registry --> OpenOCD["ocd/openocd.py / hardware threads and monitor target"]
     Registry --> PyOCD["ocd/pyocd.py / inventory and per-core endpoints"]
+    Registry --> QEMU["ocd/qemu.py / emulated CPU threads and checked HMP"]
     Base["ocd/base.py / CoreBackend and CoreContextAccess contracts"] -.-> JLink
     Base -.-> OpenOCD
     Base -.-> PyOCD
+    Base -.-> QEMU
     JLink --> Context["ocd/context.py / shared inferior lifecycle and rollback"]
     PyOCD --> Context

@@ -1,0 +1,20 @@
+{
+    "gdb-path": "gdb-multiarch",
+    "gdb-args": ["-q"],
+    "ocd-path": "/usr/bin/socat",
+    "ocd-identifier": "pyocd",
+    "ocd-args": [
+        "TCP-LISTEN:{gdb_port},fork,reuseaddr,bind=127.0.0.1",
+	"TCP:127.0.0.1:3333"
+    ],
+    "listen-address": "localhost:1234",
+    "gdb-init": [
+        "set arch arm",
+        "monitor reset halt",
+	"maintenance packet Qemu.PhyMemMode=1",
+        "set mem inaccessible-by-default off",
+        "svd load"
+    ],
+    "log-directory": ".pygdbserver-logs",
+    "startup-timeout": 15
+}

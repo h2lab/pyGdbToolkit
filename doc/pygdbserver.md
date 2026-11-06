@@ -40,9 +40,9 @@ finally the public API. A failed stage stops the complete stack.
 |---|---|
 | `gdb-path` | GDB executable. |
 | `gdb-args` | Extra GDB arguments. They must not establish the target connection. |
-| `ocd-path` | pyOCD, OpenOCD, SEGGER JLinkGDBServer (including JLinkGDBServerCLExe), or another GDB-server executable. |
-| `ocd-identifier` | Backend protocol: `jlinkgdbserver`, `openocd`, or `pyocd`. Overrides executable-name inference, including for wrappers. Legacy files may omit it. |
-| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. J-Link also supports `{swo_port}`. pyOCD, OpenOCD, and J-Link receive GDB port arguments automatically when `{gdb_port}` is omitted; Telnet and SWO arguments must be supplied explicitly outside cluster mode. |
+| `ocd-path` | pyOCD, OpenOCD, SEGGER JLinkGDBServer (including JLinkGDBServerCLExe), QEMU, or another GDB-server executable. |
+| `ocd-identifier` | Backend protocol: `jlinkgdbserver`, `openocd`, `pyocd`, or `qemu`. Overrides executable-name inference, including for wrappers. Legacy files may omit it. |
+| `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. J-Link also supports `{swo_port}`. Known backends receive GDB port arguments automatically when omitted; QEMU requires `-gdb tcp:{loopback}:{gdb_port}` when supplied explicitly. Telnet and SWO arguments must be supplied explicitly outside cluster mode. |
 | `listen-address` | Public WebSocket address. Port `0` requests a dynamic API port. |
 | `gdb-init` | GDB CLI commands run after connection and toolkit loading. |
 | `log-directory` | Parent of timestamped run-log directories. |
@@ -54,6 +54,80 @@ The OCD GDB endpoint and raw MI adapter always bind to `127.0.0.1` with dynamic
 ports. The raw MI adapter is for local diagnostics; clients should use the API.
 When exposing the public API beyond loopback, place it behind a trusted network
 or a TLS and authentication reverse proxy.
+
+### QEMU: hardware-free targets and CI
+
+Set `ocd-path` to `qemu-system-arm` and `ocd-identifier` to `qemu`.
+QEMU occupies the OCD process slot: it emulates the board and provides the
+GDB remote endpoint itself. No OpenOCD, pyOCD, proxy or physical debug probe is
+needed. pyGdbServer runs on the host and supervises QEMU, then GDB, then the
+WebSocket API using its normal startup/shutdown sequence.
+
+The backend adds `-gdb tcp:127.0.0.1:<dynamic-port>` when `-gdb` is absent,
+and adds `-S` when omitted so the CPU is stopped before GDB connects.
+An explicit endpoint must be `-gdb tcp:{loopback}:{gdb_port}` (literal
+`127.0.0.1` is also accepted). Fixed/public endpoints, duplicate endpoints,
+`-s` and `-daemonize` are rejected. GDB uses `extended-remote`; startup readiness
+checks the loopback socket. No Telnet port is passed to QEMU.
+
+Use the [QEMU STM32 example](configuration-examples.md#qemu-with-stm32f405-no-probe).
+Supply firmware built for the emulated board, with a valid vector table.
+`-kernel` loads the target image; `symbol-file` in `gdb-init` loads its ELF
+symbols into GDB. Relative image and symbol paths are resolved from the server's
+working directory, not the configuration directory.
+
+Monitor requests use QEMU's HMP dialect, not OpenOCD Tcl or pyOCD commands:
+
+```gdb
+monitor help
+monitor info registers
+monitor system_reset
+```
+
+For QEMU, `command.execute` (including `gdb monitor ...`) and
+`mi.execute` console requests route monitor commands through the checked OCD
+backend. This routing belongs to the QEMU OCD adapter, not the generic MI
+transport; other OCD modes keep their commands unchanged.
+The same check applies to `gdb-init`. An HMP `unknown command` response
+becomes an explicit GDB error and JSON-RPC `-32000` error, for example:
+`QEMU mode does not support monitor command 'reset halt'`.
+Invalid monitor arguments also become errors rather than successful results.
+Startup fails if a configured initialization command is rejected.
+`system_reset` resets the emulated system; it is not an alias for
+OpenOCD's `reset halt`. Use it while stopped when a stopped reset is required.
+After a successful reset, the backend flushes GDB's register/frame cache and
+invalidates cached toolkit inspection so subsequent reads reflect the reset.
+
+The toolkit detects QEMU independently from HMP help and reports CPU contexts
+from GDB threads in the currently attached emulated CPU cluster. It does not
+automatically attach other clusters or claim a physical-core inventory.
+DP/AP commands fail explicitly because QEMU does not expose a physical debug
+port. Unsupported STM32 registers and CoreSight tables can prevent automatic
+MCU/SVD identification; use `svd read <file.svd>` for an explicit SVD. Loading
+an SVD does not implement missing peripherals.
+
+This mode supports reproducible CI tests of the real GDB/MI/WebSocket stack,
+memory access, breakpoints, execution and error handling without hardware:
+
+```console
+tox -e qemu
+```
+
+The dedicated environment runs only the new QEMU functional suite with real
+QEMU and Python-enabled GDB. It generates a tiny bootable firmware without a
+cross-compiler, uses dynamic ports and temporary logs, and terminates both
+processes after each test. Install `qemu-system-arm` and `gdb-multiarch` on the
+CI runner; GDB must embed Python 3.12+ with the toolkit's Python dependencies
+available. The suite supplies the test environment's pure-Python dependencies
+to GDB. A QEMU build must provide `netduinoplus2`, `stm32vldiscovery` and
+`b-l475e-iot01a` (`qemu-system-arm -machine help`).
+Use `PYGDB_QEMU` and `PYGDB_QEMU_GDB` to override executable names or paths.
+Requested functional tests fail if tools are missing; ordinary test runs skip
+them unless `PYGDB_QEMU_TESTS=1`. Existing tests remain unchanged.
+
+This is not a substitute for hardware validation of Flash programming,
+electrical debug access, STM32-specific security protections, or real-time
+peripheral behavior. The listed STM32 models do not emulate STM32U5 or STM32N6.
 
 ### J-Link
 
@@ -224,6 +298,8 @@ Runs a pyGdbToolkit or GDB CLI command. Commands are serialized. Optional
 
 The `gdb ` prefix is removed. `monitor` is forwarded unchanged to the OCD.
 Commands without a prefix are resolved by GDB, including toolkit commands.
+QEMU monitor requests use the checked HMP backend described above; other
+backends retain their existing forwarding behavior.
 This includes every `memmap` operation: discovery, verification, baselines,
 sampling, display, help and JSON report export. It uses the same
 `command.execute` route, not a dedicated `memmap.*` execution API. For example:

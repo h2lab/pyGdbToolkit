@@ -16,7 +16,7 @@ interface call probes the connected server.
 
 ![OCD package hierarchy and shared backend contracts](diagrams/ocd.png)
 
-`CoreBackend` defines the same external CPU interface for all three strategies:
+`CoreBackend` defines the same external CPU interface for all four strategies:
 `list_cores()`, `current_core()`, and `select_core(core)`. Registration methods
 are explicit capabilities: a backend that does not accept configured cluster
 or attached-core metadata rejects them rather than inventing an inventory.
@@ -43,6 +43,8 @@ and `CoreSessionState` models live in `ocd/base.py`; J-Link connection and clust
 states live in `ocd/jlinkgdbserver.py`. Their historical imports from
 `core_runtime.py` remain aliases to the same classes, not duplicate state types.
 The former `core_jlink.py` helper has been merged into the J-Link backend.
+`ocd/qemu.py` owns emulated CPU-thread selection and checked HMP monitor
+execution; it does not expose a physical debug-port transport.
 
 The package root exports detection only, keeping session initialization free of
 eager backend imports and circular dependencies. Backend strategies are composed
@@ -68,10 +70,10 @@ if info.identifier == OcdIdentifier.OPENOCD:
 
 `OcdInfo` contains:
 
-- `identifier`: `OcdIdentifier.PYOCD`, `OPENOCD`, `JLINK`, or `UNKNOWN`, whose string
-  values are `pyocd`, `openocd`, `jlink`, and `unknown`.
-- `version`: the OpenOCD version banner or J-Link version (for example `9.82`),
-  or `None` when unavailable. No pyOCD
+- `identifier`: `OcdIdentifier.PYOCD`, `OPENOCD`, `JLINK`, `QEMU`, or `UNKNOWN`,
+  whose string values are `pyocd`, `openocd`, `jlink`, `qemu`, and `unknown`.
+- `version`: the OpenOCD version banner, J-Link version (for example `9.82`),
+  QEMU version from `monitor info version`, or `None` when unavailable. No pyOCD
   version is inferred from the target.
 - `evidence`: the server response or reasons why identification failed.
 
@@ -84,11 +86,42 @@ subsequent calls. The interface is also exported at package level.
 functions for tests and other integrations. Detection uses OpenOCD's
 `monitor echo [version]` banner, then pyOCD's `monitor show aps` inventory,
 then the `SEGGER J-Link GDB Server V...` banner from `monitor help`.
+QEMU is recognized from its HMP help entries `qemu-io` and `system_reset`;
+only after that positive identification is `monitor info version` requested.
 The explicit `echo` publishes the Tcl result even on OpenOCD builds whose
 target availability callbacks overwrite ordinary monitor command results.
 If no recognizable response is returned, the module reports `unknown`
 rather than assuming a backend. A locked or unsupported target can prevent
 pyOCD's inventory response and leave detection unknown.
+
+## QEMU Connection
+
+QEMU runs in the supervised OCD slot with `ocd-identifier: qemu` and GDB's
+`extended-remote` protocol. `QemuCoreBackend` lists the selected inferior's
+GDB threads as emulated CPUs (`scope: emulated-cpu-cluster`,
+`identity_source: qemu-gdb-thread`). IDs are the inferior-local GDB thread
+number minus one; they are not physical processor identities.
+Selection switches an existing thread without creating an inferior or endpoint.
+Other CPU clusters are outside this inventory until explicitly attached.
+
+`QemuMonitorCommand` provides the private `pygdb-qemu-monitor` GDB command.
+The host-side QEMU OCD adapter (`pyGdbServer/ocd/qemu.py`) routes `monitor`
+console requests (including normal abbreviations) through it, for initialization,
+CLI RPCs and raw `-interpreter-exec console` RPCs. The adapter is selected by
+the OCD registry; other backends retain plain `MiSession`. The common MI
+transport neither inspects nor rewrites commands. The GDB-side backend executes native
+HMP and converts unsupported commands and invalid arguments into `gdb.GdbError`.
+Native GDB `monitor` is not replaced; standalone GDB users can call
+`pygdb-qemu-monitor <HMP command>` for the same checks.
+Arbitrary GDB Python/scripts and the private raw MI socket are low-level
+interfaces, not wrappers around every possible nested monitor invocation.
+
+For example, `monitor reset halt` returns a clear QEMU-mode error rather than
+an apparently successful MI result containing `unknown command: 'reset'`.
+`monitor help`, `monitor info registers`, and `monitor system_reset` remain
+available. DP/AP access fails explicitly because QEMU exposes no physical
+debug port. See [server configuration and CI](pygdbserver.md#qemu-hardware-free-targets-and-ci)
+and the [STM32 example](configuration-examples.md#qemu-with-stm32f405-no-probe).
 
 ## J-Link Connection
 

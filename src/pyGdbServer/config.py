@@ -38,7 +38,8 @@ class ServerConfig:
             return self.ocd_identifier
         executable = Path(self.ocd_path).name.lower()
         return next(
-            (name for name in ("jlinkgdbserver", "openocd", "pyocd") if name in executable), ""
+            (name for name in ("jlinkgdbserver", "openocd", "pyocd", "qemu") if name in executable),
+            "",
         )
 
     def jlink_cluster(self) -> dict[int, str]:
@@ -172,6 +173,31 @@ class ServerConfig:
                 if "-port" in arguments or "-p" in arguments:
                     raise ValueError("J-Link port must use the {gdb_port} placeholder")
                 arguments.extend(("-port", str(gdb_port)))
+        elif identifier == "qemu":
+            options = [
+                argument.split("=", 1)[0].lstrip("-")
+                for argument in arguments
+                if argument.startswith("-")
+            ]
+            if "s" in options:
+                raise ValueError("QEMU -s is forbidden; use -gdb tcp:{loopback}:{gdb_port}")
+            if "daemonize" in options:
+                raise ValueError("QEMU -daemonize is forbidden for a supervised process")
+            endpoint = f"tcp:127.0.0.1:{gdb_port}"
+            if "gdb" in options:
+                if options.count("gdb") != 1 or "-gdb" not in arguments:
+                    raise ValueError("QEMU requires one -gdb tcp:{loopback}:{gdb_port}")
+                position = arguments.index("-gdb")
+                if (
+                    not has_dynamic_port
+                    or position + 1 >= len(arguments)
+                    or arguments[position + 1] != endpoint
+                ):
+                    raise ValueError("QEMU -gdb must use tcp:{loopback}:{gdb_port}")
+            else:
+                arguments.extend(("-gdb", endpoint))
+            if "-S" not in arguments:
+                arguments.append("-S")
         else:
             if not has_dynamic_port or not any(
                 "{loopback}" in argument for argument in self.ocd_args
@@ -243,9 +269,10 @@ def load_config(path: str | Path) -> ServerConfig:
 
     identifier = data.get("ocd-identifier", "")
     if not isinstance(identifier, str) or (
-        "ocd-identifier" in data and identifier not in ("jlinkgdbserver", "openocd", "pyocd")
+        "ocd-identifier" in data
+        and identifier not in ("jlinkgdbserver", "openocd", "pyocd", "qemu")
     ):
-        raise ValueError("ocd-identifier must be jlinkgdbserver, openocd or pyocd")
+        raise ValueError("ocd-identifier must be jlinkgdbserver, openocd, pyocd or qemu")
     core_ids: tuple[int, ...] = ()
     core_devices = data.get("jlink-core-devices", [])
     if isinstance(core_devices, dict):
