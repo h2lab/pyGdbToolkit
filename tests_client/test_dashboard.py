@@ -383,7 +383,16 @@ def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) ->
 
 
 @pytest.mark.parametrize(
-    "command", ["upload", "upload a b c", "upload /nonexistent/file", "ls a b", 'ls "unfinished']
+    "command",
+    [
+        "download",
+        "download a b c",
+        "upload",
+        "upload a b c",
+        "upload /nonexistent/file",
+        "ls a b",
+        'ls "unfinished',
+    ],
 )
 def test_invalid_workspace_commands_never_reach_gdb(command: str) -> None:
     """Syntax and local file errors stay in the client output panel."""
@@ -412,6 +421,36 @@ def test_client_rejects_oversized_upload_before_sending(tmp_path: Path) -> None:
 
     app.client.request.assert_not_awaited()
     app._append_output.assert_called_with("upload size must not exceed 5 MiB", error=True)
+
+
+def test_client_download_uses_chunked_rpc_and_replaces_the_destination(tmp_path: Path) -> None:
+    """Downloads validate chunks and atomically replace a local file."""
+    content = b"\x00\xffdump data"
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    app.client.request = AsyncMock(
+        return_value={
+            "filename": "dump.bin",
+            "offset": 0,
+            "size": len(content),
+            "content": base64.b64encode(content).decode("ascii"),
+        }
+    )
+    app._append_output = Mock()
+    destination = tmp_path / "dump.bin"
+    destination.write_bytes(b"old content")
+
+    asyncio.run(app.execute_command(f'download "dump.bin" "{tmp_path}"'))
+
+    app.client.request.assert_awaited_once_with(
+        "workspace.download",
+        {"filename": "dump.bin", "offset": 0, "chunk_size": 1024 * 1024},
+        timeout=300,
+    )
+    assert destination.read_bytes() == content
+    app._append_output.assert_called_with(
+        f"Downloaded dump.bin to {destination} ({len(content)} bytes)"
+    )
 
 
 @pytest.mark.parametrize(
