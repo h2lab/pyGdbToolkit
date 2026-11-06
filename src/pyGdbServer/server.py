@@ -22,6 +22,20 @@ from .mi import MiSession
 from .process import ManagedProcess
 from .target_context import build_target_context
 
+_WORKSPACE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+def _workspace_filename(filename: object) -> str:
+    """Validate a filename that must not contain directory components."""
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or filename in {".", ".."}
+        or Path(filename).name != filename
+    ):
+        raise ValueError("filename must be a file name without directory components")
+    return filename
+
 
 class PyGdbServer:
     """Supervise the debug stack and expose it through JSON-RPC."""
@@ -269,6 +283,8 @@ class PyGdbServer:
             return self.status(), False
         if method == "workspace.upload":
             return await asyncio.to_thread(self._upload_file, params), False
+        if method == "workspace.download":
+            return await asyncio.to_thread(self._download_file, params), False
         if method == "workspace.list":
             return await asyncio.to_thread(self._list_directory, params), False
         if method == "command.execute":
@@ -330,15 +346,8 @@ class PyGdbServer:
         return path
 
     def _upload_file(self, params: dict[str, Any]) -> dict[str, Any]:
-        filename = params["filename"]
+        filename = _workspace_filename(params["filename"])
         content = params["content"]
-        if (
-            not isinstance(filename, str)
-            or not filename
-            or filename in {".", ".."}
-            or Path(filename).name != filename
-        ):
-            raise ValueError("filename must be a file name without directory components")
         if not isinstance(content, str):
             raise ValueError("content must be a base64 string")
         if len(content) > 4 * ((5 * 1024 * 1024 + 2) // 3):
@@ -360,6 +369,44 @@ class PyGdbServer:
             finally:
                 temporary_path.unlink(missing_ok=True)
         return {"path": str(destination), "size": len(data)}
+
+    def _download_file(self, params: dict[str, Any]) -> dict[str, Any]:
+        filename = _workspace_filename(params.get("filename"))
+        offset = params.get("offset")
+        chunk_size = params.get("chunk_size")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        if (
+            isinstance(chunk_size, bool)
+            or not isinstance(chunk_size, int)
+            or not 1 <= chunk_size <= _WORKSPACE_DOWNLOAD_CHUNK_SIZE
+        ):
+            raise ValueError(f"chunk_size must be between 1 and {_WORKSPACE_DOWNLOAD_CHUNK_SIZE}")
+
+        directory = self._workspace_directory(params)
+        if not directory.is_relative_to(self.workspace):
+            raise ValueError("download directory must be within the server workspace")
+        path = (directory / filename).resolve()
+        if not path.is_relative_to(self.workspace):
+            raise ValueError("download file must be within the server workspace")
+        if not path.is_file():
+            raise FileNotFoundError(f"Not a file: {path}")
+
+        size = path.stat().st_size
+        if offset > size:
+            raise ValueError("offset must not exceed the file size")
+        expected_size = min(chunk_size, size - offset)
+        with path.open("rb") as source:
+            source.seek(offset)
+            content = source.read(expected_size)
+        if len(content) != expected_size:
+            raise OSError(f"File changed while downloading: {path}")
+        return {
+            "filename": filename,
+            "offset": offset,
+            "size": size,
+            "content": base64.b64encode(content).decode("ascii"),
+        }
 
     def _list_directory(self, params: dict[str, Any]) -> dict[str, Any]:
         directory = self._workspace_directory(params)
