@@ -33,6 +33,16 @@ reference are in [LLM integration](llm.md).
        --llm-store audit.sqlite
    ```
 
+   Alternatively, use a local OpenAI-compatible server (Ollama, llama.cpp,
+   vLLM) running on trusted equipment:
+
+   ```console
+   python -m pip install '.[openai]'
+   pyGdbClient ws://localhost:1234 --llm openai \
+       --openai-url http://ollama.lan:11434/v1 --openai-model qwen3 \
+       --llm-store audit.sqlite
+   ```
+
 4. Type `/status` in the agent prompt (the second prompt, below the command
    prompt) to check readiness and authentication, then type a request.
 
@@ -151,18 +161,20 @@ dumps and test cryptographic material, use
 disclosure warning; the policy and approvals still apply.
 
 GitHub Copilot is an external service. **For production data, use a local model
-running on trusted equipment instead of an external provider.** No local
-provider is shipped yet; one can be added through the
-[provider registry](llm.md#adding-a-provider). Protect the `--llm-store` file:
-it holds unmasked prompts, snapshots and observations.
+running on trusted equipment instead of an external provider.** The
+[OpenAI-compatible provider](llm.md#openai-compatible-provider) can attach a
+LAN inference server such as Ollama or llama.cpp; verify what that server logs
+and retains before sending production data. Additional providers can be added
+through the [provider registry](llm.md#adding-a-provider). Protect the
+`--llm-store` file: it holds unmasked prompts, snapshots and observations.
 
 ## Troubleshooting
 
 | Symptom | Action |
 | ------- | ------ |
-| The agent prompt only explains how to enable it | Start the client with `--llm github-copilot`. |
-| `/status` reports the provider unavailable | Install the `copilot` extra, run `python -m copilot download-runtime` and pass the printed path with `--copilot-runtime` or `PYGDB_COPILOT_RUNTIME`. |
-| `/status` reports authentication required | Run `copilot login`, or use `--copilot-token-env NAME`. |
+| The agent prompt only explains how to enable it | Start the client with `--llm github-copilot` or `--llm openai`. |
+| `/status` reports the provider unavailable | Copilot: install the `copilot` extra, run `python -m copilot download-runtime` and pass the printed path with `--copilot-runtime` or `PYGDB_COPILOT_RUNTIME`. OpenAI-compatible: install the `openai` extra and check `--openai-url` and the server. |
+| `/status` reports authentication required | Copilot: run `copilot login`, or use `--copilot-token-env NAME`. OpenAI-compatible: use `--openai-key-env NAME`. |
 | Requests are refused after `/cancel` | The conversation has unanswered tool calls; use `/new`. |
 | `/sessions` is empty after a restart | Use the same `--llm-store` file in each run. |
 | The agent lost earlier details | Continuation keeps a bounded recollection; ask the agent to observe the target again. |

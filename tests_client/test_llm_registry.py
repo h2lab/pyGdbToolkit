@@ -13,8 +13,10 @@ import pytest
 from pyGdbClient.cli import _parser, agent_settings
 from pyGdbClient.llm.copilot import CopilotProvider
 from pyGdbClient.llm.provider import LlmProvider
+from pyGdbClient.llm.openai_compat import OpenAiProvider
 from pyGdbClient.llm.registry import (
     CopilotProviderFactory,
+    OpenAiProviderFactory,
     ProviderConfigurationError,
     ProviderRegistry,
     default_registry,
@@ -45,10 +47,11 @@ def _parse(
     return parser, parser.parse_args(list(argv))
 
 
-def test_default_registry_offers_copilot() -> None:
+def test_default_registry_offers_copilot_and_openai() -> None:
     registry = default_registry()
-    assert registry.ids == ("github-copilot",)
+    assert registry.ids == ("github-copilot", "openai")
     assert isinstance(registry.get("github-copilot"), CopilotProviderFactory)
+    assert isinstance(registry.get("openai"), OpenAiProviderFactory)
 
 
 def test_registry_rejects_duplicates_invalid_and_unknown_ids() -> None:
@@ -133,12 +136,24 @@ def test_test_data_mode_is_explicit() -> None:
         ("--llm", "github-copilot", "--copilot-runtime", "/bin/x", "--copilot-token-env", "A-B"),
         ("--llm", "github-copilot", "--copilot-runtime", "/bin/x", "--copilot-token-env", "UNSET"),
         ("--llm", "github-copilot", "--copilot-runtime", "/bin/x", "--copilot-model", " "),
+        ("--llm", "openai"),
+        ("--llm", "openai", "--openai-url", "http://host.lan:11434/v1"),
+        ("--llm", "openai", "--openai-url", "ftp://host/v1", "--openai-model", "m"),
+        ("--llm", "openai", "--openai-url", "http://h/v1", "--openai-model", " "),
+        ("--llm", "openai", "--openai-url", "http://h/v1", "--openai-model", "m",
+         "--openai-key-env", "A-B"),
+        ("--llm", "openai", "--openai-url", "http://h/v1", "--openai-model", "m",
+         "--openai-key-env", "UNSET"),
+        ("--llm", "openai", "--openai-url", "http://h/v1", "--openai-model", "m",
+         "--openai-timeout", "0"),
     ],
 )
 def test_invalid_agent_options_exit_through_the_parser(
     argv: tuple[str, ...], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    registry = ProviderRegistry((CopilotProviderFactory(), ScriptedFactory()))
+    registry = ProviderRegistry(
+        (CopilotProviderFactory(), OpenAiProviderFactory(), ScriptedFactory())
+    )
     parser, arguments = _parse(registry, *argv)
     with pytest.raises(SystemExit):
         agent_settings(parser, arguments, registry, {"EMPTY": " "})
@@ -190,3 +205,45 @@ def test_copilot_reads_runtime_and_token_from_the_environment_only() -> None:
     assert config.github_token == "secret-token"
     assert "secret-token" not in repr(config)
     assert "secret-token" not in _parser(registry).format_help()
+
+
+def test_openai_reads_endpoint_and_key_from_options_and_environment() -> None:
+    registry = default_registry()
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "openai",
+        "--openai-url",
+        "http://ollama.lan:11434/v1",
+        "--openai-model",
+        "qwen3",
+        "--openai-key-env",
+        "KEY",
+        "--openai-timeout",
+        "30",
+    )
+    settings = agent_settings(parser, arguments, registry, {"KEY": " secret-key "})
+    assert settings is not None
+    provider = settings.provider
+    assert isinstance(provider, OpenAiProvider)
+    config = provider._config
+    assert config.base_url == "http://ollama.lan:11434/v1"
+    assert config.model == "qwen3"
+    assert config.api_key == "secret-key"
+    assert config.request_timeout == 30
+    assert "secret-key" not in repr(config)
+    assert "secret-key" not in _parser(registry).format_help()
+
+
+def test_openai_defaults_come_from_the_environment_without_a_key() -> None:
+    registry = default_registry()
+    parser, arguments = _parse(registry, "--llm", "openai")
+    environ = {"PYGDB_OPENAI_URL": " http://llama.lan:8080/v1 ", "PYGDB_OPENAI_MODEL": " m "}
+    settings = agent_settings(parser, arguments, registry, environ)
+    assert settings is not None
+    assert isinstance(settings.provider, OpenAiProvider)
+    config = settings.provider._config
+    assert config.base_url == "http://llama.lan:8080/v1"
+    assert config.model == "m"
+    assert config.api_key is None
+    assert config.request_timeout == 120.0

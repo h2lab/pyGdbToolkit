@@ -10,6 +10,7 @@ import re
 from typing import Protocol
 
 from .copilot import CopilotConfig, CopilotProvider
+from .openai_compat import OpenAiConfig, OpenAiProvider
 from .provider import LlmProvider
 
 _PROVIDER_ID = re.compile(r"[a-z][a-z0-9-]{0,63}")
@@ -139,6 +140,75 @@ class CopilotProviderFactory:
         return CopilotProvider(config)
 
 
+class OpenAiProviderFactory:
+    """OpenAI-compatible endpoint, such as an Ollama or llama.cpp server on the LAN."""
+
+    provider_id = OpenAiProvider.provider_id
+    description = "OpenAI-compatible endpoint (requires the pyGdbToolkit[openai] extra)"
+
+    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+        """Declare the endpoint, model, credential source and timeout options."""
+        group = parser.add_argument_group("OpenAI-compatible provider (--llm openai)")
+        group.add_argument(
+            "--openai-url",
+            metavar="URL",
+            help=(
+                "Base URL of the /v1 API, e.g. http://ollama.lan:11434/v1 "
+                "(default: $PYGDB_OPENAI_URL)"
+            ),
+        )
+        group.add_argument(
+            "--openai-model",
+            metavar="MODEL",
+            help="Model served by the endpoint (default: $PYGDB_OPENAI_MODEL)",
+        )
+        group.add_argument(
+            "--openai-key-env",
+            metavar="NAME",
+            help="Environment variable holding the API key (default: anonymous access)",
+        )
+        group.add_argument(
+            "--openai-timeout",
+            type=float,
+            metavar="SECONDS",
+            help="Timeout of each request or stream read (default: 120)",
+        )
+
+    def create(self, arguments: argparse.Namespace, environ: Mapping[str, str]) -> LlmProvider:
+        """Resolve the endpoint, model and in-memory key, then build the provider."""
+        url: str | None = getattr(arguments, "openai_url", None)
+        if url is None and environ.get("PYGDB_OPENAI_URL", "").strip():
+            url = environ["PYGDB_OPENAI_URL"].strip()
+        if url is None:
+            raise ProviderConfigurationError(
+                "the OpenAI-compatible provider requires --openai-url or PYGDB_OPENAI_URL"
+            )
+        model: str | None = getattr(arguments, "openai_model", None)
+        if model is None and environ.get("PYGDB_OPENAI_MODEL", "").strip():
+            model = environ["PYGDB_OPENAI_MODEL"].strip()
+        if model is None:
+            raise ProviderConfigurationError(
+                "the OpenAI-compatible provider requires --openai-model or PYGDB_OPENAI_MODEL"
+            )
+        key: str | None = None
+        key_env: str | None = getattr(arguments, "openai_key_env", None)
+        if key_env is not None:
+            if not _ENVIRONMENT_NAME.fullmatch(key_env):
+                raise ProviderConfigurationError("--openai-key-env must name a variable")
+            key = environ.get(key_env, "").strip()
+            if not key:
+                raise ProviderConfigurationError(f"environment variable {key_env} is not set")
+        timeout: float | None = getattr(arguments, "openai_timeout", None)
+        try:
+            if timeout is None:
+                config = OpenAiConfig(url, model, api_key=key)
+            else:
+                config = OpenAiConfig(url, model, api_key=key, request_timeout=timeout)
+        except ValueError as error:
+            raise ProviderConfigurationError(str(error)) from None
+        return OpenAiProvider(config)
+
+
 def default_registry() -> ProviderRegistry:
     """Return the built-in providers; applications may register more."""
-    return ProviderRegistry((CopilotProviderFactory(),))
+    return ProviderRegistry((CopilotProviderFactory(), OpenAiProviderFactory()))

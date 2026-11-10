@@ -7,7 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 ## Status and scope
 
 `pyGdbClient.llm` connects an LLM agent to the dashboard through
-provider-neutral contracts, with GitHub Copilot as the first optional provider.
+provider-neutral contracts, with GitHub Copilot and OpenAI-compatible
+endpoints as optional providers.
 The agent works on the target only through a controlled tool gateway, a
 deterministic protection policy and one-attempt auditor approvals. The
 [agent-assisted audit guide](agent.md) covers day-to-day use; this page
@@ -32,6 +33,8 @@ auditor approval, with output in the central console. The eleventh adds
 [long context and confidentiality](#long-context-and-confidentiality) controls.
 The twelfth adds end-to-end simulated audit workflows
 (`tests_client/test_llm_scenarios.py`) and the [user guide](agent.md).
+The thirteenth adds the optional [OpenAI-compatible provider](#openai-compatible-provider)
+for LAN inference servers such as Ollama or llama.cpp.
 
 ## Trust boundaries
 
@@ -766,6 +769,79 @@ directory. Do not send sensitive audit data without authorization. Recognizable
 secrets are [masked before disclosure](#long-context-and-confidentiality), but
 raw memory and register values are disclosed as read.
 
+## OpenAI-compatible provider
+
+`pyGdbClient.llm.openai_compat.OpenAiProvider` implements `LlmProvider` for
+servers exposing the OpenAI chat-completions API, such as Ollama
+(`http://host:11434/v1`), llama.cpp's `llama-server` or vLLM on the LAN.
+Importing the adapter or running the dashboard does not import `httpx`; the
+base installation remains usable without it. The same orchestrator, protection
+policy, auditor approvals, masking and journaling apply unchanged: only the
+conversation transport differs from the Copilot adapter.
+
+### Installation and configuration
+
+Install the extra, then select the provider with its endpoint and model:
+
+```console
+python -m pip install '.[openai]'
+pyGdbClient ws://192.0.2.15:1234 --llm openai \
+    --openai-url http://ollama.lan:11434/v1 --openai-model qwen3
+```
+
+`OpenAiConfig` requires an absolute `http(s)` base URL and a nonempty model
+name; both can also come from `$PYGDB_OPENAI_URL` and `$PYGDB_OPENAI_MODEL`.
+An API key is optional and read from the environment variable named by
+`--openai-key-env`, never from the command line; it is sent as a bearer token,
+excluded from the configuration's representation and never journaled. Each
+request and each stream read is bounded by `--openai-timeout` (120 seconds by
+default: a LAN server may need to load the model before the first token).
+Proxy environment variables are ignored: audit data goes to the configured
+endpoint directly, never through an ambient intermediary.
+
+`status()` probes `GET /models` without inference. An unreachable endpoint or
+an unexpected status is `unavailable` with neutral guidance; HTTP 401/403 maps
+to `required` (no key configured) or `expired` (rejected key). The adapter
+does not implement the optional `UsageReporter` capability, so the credits
+panel shows `credits not reported`.
+
+### Stateless sessions and tool handoff
+
+The chat-completions API keeps no server-side conversation: each
+`OpenAiLlmSession` owns its message history locally and replays it on every
+turn. The history starts with the same system instructions as the Copilot
+adapter, including the complete masked `TargetContext` snapshot, and the
+declared tool schemas are passed as `tools` function definitions; catalogue
+names are used as-is and must match the API's `[A-Za-z0-9_-]{1,64}`
+constraint.
+
+Text deltas are streamed as received. Fragmented `tool_calls` deltas are
+assembled and validated as one complete batch: unknown tools, missing or
+reused call IDs, non-object or non-finite arguments, and a `tool_calls` finish
+without any call raise `ProviderError` before any `ToolCallProposed` is
+emitted. Each gateway result returns as one `role: tool` message correlated by
+`tool_call_id`; failed results are prefixed as explicit failures because the
+API carries no error flag. A turn that does not reach `TurnFinished` —
+transport failure, malformed stream, truncated (`length`) or filtered
+response, cancellation — rolls the local history back to the previous turn,
+and a pending batch stays pending so gateway results are not lost; the session
+remains usable. Vendor exception text and response bodies are never forwarded
+in error messages.
+
+### Validation and confidentiality limits
+
+Client tests exercise the adapter over an offline `httpx.MockTransport`:
+reachability and credential probes, history replay, fragmented tool batches,
+correlated feedback, rollback, sanitized failures, timeouts and cancellation.
+They require no inference server, GDB module or target.
+
+A LAN endpoint is still a disclosure boundary: snapshots, prompts and approved
+observations are sent to whatever serves the configured URL, and plain
+`http://` URLs are not encrypted in transit. Default masking applies
+unchanged. A local model on trusted equipment is the recommended setup for
+production data, but only after verifying what the server logs and retains: an
+OpenAI-compatible URL is not by itself proof of a local or trustworthy model.
+
 ## Dashboard agent CLI
 
 The dashboard has a second prompt, below the command prompt, dedicated to the
@@ -806,7 +882,7 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 
 | Option | Purpose |
 | ------ | ------- |
-| `--llm PROVIDER` | Enable the agent CLI with a registered provider (`github-copilot`). |
+| `--llm PROVIDER` | Enable the agent CLI with a registered provider (`github-copilot`, `openai`). |
 | `--llm-store FILE` | Retain conversations and target snapshots in this SQLite file (created with mode `0600`). By default they are journaled in memory only, for the dashboard's lifetime. |
 | `--llm-redact REGEX` | Also mask matches of this Python regular expression before disclosure (repeatable, at most 512 characters). |
 | `--llm-test-data` | Analyse test data without automatic masking, including test cryptographic material. Cannot be combined with `--llm-redact`. |
@@ -814,6 +890,10 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 | `--copilot-runtime PATH` | Copilot runtime executable; defaults to `$PYGDB_COPILOT_RUNTIME`. Relative paths are made absolute; nothing is downloaded. |
 | `--copilot-model MODEL` | Model requested from Copilot (default: the runtime's choice). |
 | `--copilot-token-env NAME` | Read a GitHub token from environment variable `NAME`. Without it, the `copilot login` account is used. |
+| `--openai-url URL` | Base URL of an OpenAI-compatible `/v1` API; defaults to `$PYGDB_OPENAI_URL`. |
+| `--openai-model MODEL` | Model served by the endpoint; defaults to `$PYGDB_OPENAI_MODEL`. |
+| `--openai-key-env NAME` | Read an API key from environment variable `NAME`. Without it, access is anonymous. |
+| `--openai-timeout SECONDS` | Bound of each request and stream read (default `120`). |
 
 A token is never accepted on the command line, where other local users could
 read it from the process list. Invalid provider options stop the launcher with
@@ -951,12 +1031,12 @@ observations through the same controlled tools.
 **For production data, use a local model running on trusted equipment instead
 of an external provider**, including when analysing real keys or other
 cryptographic material. Default masking cannot detect every secret in target
-state. The currently supplied provider is GitHub Copilot, an external service;
-`--llm-test-data` does not make it local or establish a local security boundary.
-A local provider must be integrated through the provider abstraction and its
-execution environment and data retention verified before production use.
-Do not treat an unverified endpoint or an external-service proxy as a trusted
-local model.
+state. GitHub Copilot is an external service; `--llm-test-data` does not make
+it local or establish a local security boundary. A local model can be attached
+through the [OpenAI-compatible provider](#openai-compatible-provider), but its
+execution environment and data retention must be verified before production
+use. Do not treat an unverified endpoint or an external-service proxy as a
+trusted local model.
 
 ### Context budget and continuation
 
