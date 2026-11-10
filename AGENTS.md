@@ -1,3 +1,8 @@
+<!--
+SPDX-FileType: DOCUMENTATION
+SPDX-FileCopyrightText: 2026 H2Lab Development Team
+SPDX-License-Identifier: Apache-2.0
+-->
 # Python implementation guidelines
 
 These guidelines apply to Python code in `src/` and `tests/`. Preserve existing
