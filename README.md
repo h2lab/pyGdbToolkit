@@ -37,6 +37,14 @@ sample their endpoints. Confirmed fingerprints enrich the shared `SESSION`;
 manufacturer baselines remain separate hypotheses. See the
 [memory-mapping guide](doc/memmap.md) for confidence levels and safe probing limits.
 
+## Agent-assisted audit
+
+The dashboard can attach an LLM agent (GitHub Copilot first) that uses the OCD,
+GDB and toolkit commands to answer the auditor's natural-language requests.
+Risky plans require explicit approval, and production data should only be
+analysed with a local model on trusted equipment. See the
+[agent-assisted audit guide](doc/agent.md).
+
 ## Run the tests with tox
 
 ```console

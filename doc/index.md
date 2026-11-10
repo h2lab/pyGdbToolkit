@@ -39,6 +39,7 @@ rtos
 :caption: Server and client
 
 pygdbserver
+agent
 llm
 ```
 

@@ -6,12 +6,17 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Status and scope
 
-The first LLM-support increment defines provider-neutral Python contracts and a
-local scripted provider in `pyGdbClient.llm`. It does **not** enable an agent in
-the dashboard, contact a model, collect target data, or execute commands.
-The existing command prompt, RPC protocol, and dashboard behaviour are unchanged.
-No new dependency is required.
+`pyGdbClient.llm` connects an LLM agent to the dashboard through
+provider-neutral contracts, with GitHub Copilot as the first optional provider.
+The agent works on the target only through a controlled tool gateway, a
+deterministic protection policy and one-attempt auditor approvals. The
+[agent-assisted audit guide](agent.md) covers day-to-day use; this page
+describes the contracts and their trust boundaries. Without `--llm`, the
+dashboard, command prompt and RPC protocol behave as before, and the base
+installation needs no new dependency.
 
+The feature was delivered in increments. The first defined the provider-neutral
+contracts and a local scripted provider.
 The second increment isolates client tests from GDB (see
 [Client test suite](#client-test-suite)). The third adds the structured
 [`target.context`](#target-context) RPC. The fourth adds local SQLite
@@ -25,7 +30,8 @@ The tenth adds the [dashboard agent CLI](#dashboard-agent-cli), a second prompt
 that routes natural-language requests through the orchestrator, the policy and
 auditor approval, with output in the central console. The eleventh adds
 [long context and confidentiality](#long-context-and-confidentiality) controls.
-End-to-end simulated audit workflows follow.
+The twelfth adds end-to-end simulated audit workflows
+(`tests_client/test_llm_scenarios.py`) and the [user guide](agent.md).
 
 ## Trust boundaries
 

@@ -61,6 +61,9 @@ registers` for a native GDB command and `monitor help` for OCD commands. Enter
 See [server and client reference](pygdbserver.md) for configuration, logs,
 remote-access precautions and automation.
 
+To work with an LLM agent in the dashboard, see
+[agent-assisted audit](agent.md).
+
 ## Direct GDB
 
 Start your board's pyOCD or OpenOCD GDB server separately. Start GDB with your
