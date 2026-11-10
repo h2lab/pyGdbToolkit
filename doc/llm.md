@@ -18,8 +18,9 @@ The second increment isolates client tests from GDB (see
 [conversation persistence](#conversation-persistence). The fifth supplies the
 [tool catalogue and controlled RPC gateway](#tool-catalogue-and-rpc-gateway).
 The sixth adds the [deterministic protection policy](#deterministic-protection-policy).
+The seventh adds [one-attempt auditor approval](#auditor-approval) and its Textual modal.
 There is still no automatic dashboard execution. Subsequent increments will add
-auditor approval, orchestration, the Copilot adapter, and the second dashboard
+orchestration, the Copilot adapter, and the second dashboard
 prompt. Long-context management and end-to-end simulated audit workflows follow.
 
 ## Trust boundaries
@@ -55,9 +56,9 @@ classify the actual operation and its arguments independently.
 
 Frozen dataclasses prevent field reassignment but JSON dictionaries and lists
 inside tool payloads remain mutable. They are data-transfer objects, not signed
-or immutable authorization records. The future approval/execution layer must
-snapshot the exact validated arguments, bind approval to their canonical digest
-and target context, and recheck them before dispatch. A changed plan or stale
+or immutable authorization records. The approval/execution layer snapshots
+the exact validated arguments, binds approval to their canonical digest
+and target context, and rechecks them before dispatch. A changed plan or stale
 target context must not inherit a previous approval.
 
 Reads of MMIO can change hardware state, including clearing status bits or
@@ -251,18 +252,20 @@ and log subscriptions are not exposed by the catalogue.
    with catalogue-owned classifications and making default arguments explicit.
 3. Rejects a plan bound to a different supplied target-context ID.
 4. Asks the application-owned `TargetPolicy` to assess the **whole** plan.
-   No configured policy, `deny`, or `require_approval` blocks dispatch.
-   This increment has no approval flag or bypass.
+   No configured policy and `deny` always block dispatch. `require_approval`
+   blocks unless an application-owned auditor callback returns matching,
+   explicit consent before its deadline.
 5. Before **each** operation, fetches the live target context and checks that
    both its ID and facts equal the supplied snapshot. A mismatch or unavailable
-   context blocks the remaining steps.
+   context blocks the remaining steps. It also reassesses the entire plan and
+   blocks if the policy decision or explanation changed since review.
 6. Dispatches sequentially under a per-gateway lock. Arguments cannot be changed
    by mutating the original proposal after validation. The first failed
    operation stops the chain, with no automatic retry.
 
 Effects describe operation classes, not an unconditional safe-read policy.
 The [deterministic policy](#deterministic-protection-policy) is available in
-`pyGdbClient.llm.policy`; auditor approval and the orchestrator follow separately.
+`pyGdbClient.llm.policy`; the auditor callback is described below.
 Neither the store nor the provider receives this gateway or its transport.
 
 Results are correlated `ToolResult` objects whose `content` is valid JSON.
@@ -367,19 +370,80 @@ It assesses the whole chain: a safe prefix is not dispatched before an unsafe
 or prohibited later step is resolved. `evaluate()` returns that aggregate
 decision for the existing gateway protocol.
 
-Assessment objects and `require_approval` are **not auditor consent**. The
-gateway still blocks both `deny` and `require_approval`; there is no approved
-flag, persisted authorization or allowing fallback. Its no-policy default also
-remains disabled. Applications must explicitly supply `ProtectionPolicy` to
-enable its metadata-only automatic path. The current dashboard is unchanged.
+Assessment objects and `require_approval` are **not auditor consent**. Without
+an auditor callback, the gateway still blocks both `deny` and `require_approval`.
+There is no approved flag, persisted authorization or allowing fallback.
+Its no-policy default also remains disabled. Applications must explicitly
+supply `ProtectionPolicy` to enable its metadata-only automatic path.
 Local restrictions are not automatically persisted in conversation history;
 the application must reapply them when reopening an audit.
 
-Auditor approval UI, binding approval to an exact plan/context digest, execution
-budgets and orchestration are subsequent increments. Until then, memory reads,
-register-value reads, core changes and opaque commands do not execute through
-this policy. The gateway's live-context refresh remains mandatory for allowed
-plans and retains its documented multi-client check/execute limitation.
+The gateway's live-context refresh remains mandatory, including after consent,
+and retains its documented multi-client check/execute limitation.
+
+## Auditor approval
+
+`pyGdbClient.llm.approval` defines immutable `ApprovalRequest` and
+`ApprovalResponse` objects. For `require_approval`, the gateway creates a new
+request **inside its execution lock**, before dispatching even a metadata prefix.
+The request contains a canonical, detached JSON snapshot of:
+
+- the complete ordered plan, its ID, rationale and each step's purpose;
+- validated arguments with defaults and catalogue-owned effects, never model risk labels;
+- exact RPC methods, parameters and timeouts;
+- the complete target context (identity, facts and provenance);
+- the local policy outcome and reasons.
+
+A SHA-256 digest binds all these data. A unique request ID additionally binds
+consent to **one execution attempt**, even if the plan and digest are identical
+to a previous attempt. Both must match in the response, and `approved` must be
+explicitly `True`. Mutating the original proposal after validation changes
+neither the displayed snapshot nor the dispatched calls.
+
+The callback is an **application-owned trust boundary**, not an LLM tool. The
+digest is an integrity binding, not a signature authenticating the auditor.
+Only the local UI may return consent; providers must not receive the callback,
+the gateway, or its transport.
+
+For the dashboard, wire the existing application instance as follows:
+
+```python
+from pyGdbClient.llm.gateway import ToolGateway
+from pyGdbClient.llm.policy import ProtectionPolicy
+
+gateway = ToolGateway(
+    app.client,
+    ProtectionPolicy(),
+    approver=app.request_plan_approval,
+    approval_timeout=120.0,
+)
+# A later orchestrator calls await gateway.execute(plan, context).
+```
+
+`PyGdbClientApp.request_plan_approval()` opens `ApprovalScreen`, displaying the
+entire snapshot in a scrollable modal. All proposed text is literal, without
+Rich markup or ANSI interpretation. **Reject** has initial focus: Enter rejects,
+Escape rejects, and only the explicit **Approve entire chain** button approves.
+Request/decision messages use the central output console. Overlapping dashboard
+dialogs fail explicitly rather than mixing two auditor decisions.
+
+The default deadline is **120 seconds** and must be finite and positive.
+Rejection, mismatch and expiry raise `GatewayError` before any plan RPC.
+Cancellation closes the modal without consent; closing the dashboard cancels a
+pending request. Once the auditor responds, the gateway verifies the live
+context and reassesses policy before every action. A changed context or changed
+policy decision requires a fresh plan/assessment, never an inherited approval.
+A `deny` decision cannot be overridden by consent.
+
+There are no stored approval tokens, session-wide allowances or automatic
+replay. A repeated execution always requests new consent. Conversation history,
+restored plans and old `ApprovalResponse` objects cannot authorize a new request.
+Failure or cancellation during dispatch retains the gateway's partial-results
+and uncertain-in-flight semantics; consent does not imply rollback or safe retry.
+
+This increment supplies the approval API and modal, but does not yet create a
+gateway automatically in the dashboard or add an agent prompt. Orchestration,
+execution budgets and the second CLI remain separate increments.
 
 ## Provider lifecycle and events
 
