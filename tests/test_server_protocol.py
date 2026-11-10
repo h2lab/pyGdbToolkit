@@ -251,6 +251,35 @@ def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
         assert (tmp_path / "empty").read_bytes() == b""
         await request("workspace.upload", {"filename": "firmware.bin", "content": ""})
         assert (tmp_path / "firmware.bin").read_bytes() == b""
+        dump = bytes(range(256)) * 5_000
+        (directory / "dump.bin").write_bytes(dump)
+        first_chunk = await request(
+            "workspace.download",
+            {
+                "filename": "dump.bin",
+                "directory": "remote files",
+                "offset": 0,
+                "chunk_size": 1024 * 1024,
+            },
+        )
+        second_chunk = await request(
+            "workspace.download",
+            {
+                "filename": "dump.bin",
+                "directory": "remote files",
+                "offset": len(base64.b64decode(first_chunk["content"])),
+                "chunk_size": 1024 * 1024,
+            },
+        )
+        assert first_chunk["size"] == len(dump)
+        assert base64.b64decode(first_chunk["content"]) + base64.b64decode(
+            second_chunk["content"]
+        ) == dump
+        empty = await request(
+            "workspace.download",
+            {"filename": "empty", "offset": 0, "chunk_size": 1024},
+        )
+        assert base64.b64decode(empty["content"]) == b""
 
     asyncio.run(exercise())
     assert fake_mi.calls == []
@@ -267,6 +296,21 @@ def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
         ("workspace.list", {"directory": 42}, -32602),
         ("workspace.list", {"directory": "missing"}, -32000),
         ("workspace.upload", {"filename": "file", "content": "", "directory": "missing"}, -32000),
+        (
+            "workspace.download",
+            {"filename": "../outside", "offset": 0, "chunk_size": 1024},
+            -32602,
+        ),
+        (
+            "workspace.download",
+            {"filename": "file", "offset": -1, "chunk_size": 1024},
+            -32602,
+        ),
+        (
+            "workspace.download",
+            {"filename": "file", "offset": 0, "chunk_size": 1024},
+            -32000,
+        ),
     ],
 )
 def test_workspace_errors_do_not_call_gdb(
@@ -314,6 +358,33 @@ def test_workspace_upload_size_limit(tmp_path: Path) -> None:
     assert fake_mi.calls == []
 
 
+def test_workspace_download_rejects_directories_outside_the_workspace(tmp_path: Path) -> None:
+    """Downloads cannot be used to read arbitrary server filesystem paths."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server, _ = _server(workspace)
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "workspace.download",
+                    "params": {
+                        "filename": "outside.bin",
+                        "directory": str(tmp_path),
+                        "offset": 0,
+                        "chunk_size": 1024,
+                    },
+                }
+            )
+        )
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32602
+
+
 def test_client_workspace_commands_over_websocket_do_not_call_gdb(tmp_path: Path) -> None:
     """Actual client commands install and list files through the server transport."""
     server, fake_mi = _server(tmp_path)
@@ -324,6 +395,10 @@ def test_client_workspace_commands_over_websocket_do_not_call_gdb(tmp_path: Path
     source.write_bytes(content)
     remote_directory = tmp_path / "server"
     remote_directory.mkdir()
+    dump = bytes(range(256)) * 5_000
+    (remote_directory / "memory dump.bin").write_bytes(dump)
+    local_directory = source_directory / "downloads"
+    local_directory.mkdir()
     server.workspace = remote_directory
 
     async def exercise() -> None:
@@ -342,6 +417,8 @@ def test_client_workspace_commands_over_websocket_do_not_call_gdb(tmp_path: Path
                 await app.execute_command(f'ls "{remote_directory}"')
                 await app.execute_command("ls missing")
                 assert app._append_output.call_args.kwargs == {"error": True}
+                await app.execute_command(f'download "memory dump.bin" "{local_directory}"')
+                assert (local_directory / "memory dump.bin").read_bytes() == dump
             finally:
                 await app.client.close()
 
