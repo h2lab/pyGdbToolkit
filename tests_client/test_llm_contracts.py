@@ -262,7 +262,10 @@ class RejectTargetDependencies(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectTargetDependencies())
 sys.path.insert(0, sys.argv[1])
-from pyGdbClient.llm import contracts, controller, copilot, provider, registry, rendering, scripted
+from pyGdbClient.llm import (
+    confidentiality, contracts, controller, copilot, provider, recollection, registry, rendering,
+    scripted,
+)
 import pyGdbClient.cli
 assert scripted.ScriptedProvider.provider_id == "scripted"
 assert registry.default_registry().ids == ("github-copilot",)

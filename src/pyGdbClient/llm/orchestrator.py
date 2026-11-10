@@ -17,6 +17,7 @@ from websockets.exceptions import ConnectionClosed
 
 from pyGdbClient.rpc import RpcError
 
+from .confidentiality import Redactor
 from .context import RpcRequester, TargetContextError, fetch_target_context
 from .contracts import ActionPlan, JsonObject, PlannedAction, TargetContext, ToolCall, ToolResult
 from .gateway import GatewayCancelledError, GatewayError, ToolGateway
@@ -172,8 +173,13 @@ class AgentOrchestrator:
         budget: AgentBudget | None = None,
         store: ContextStore | None = None,
         context_client: RpcRequester | None = None,
+        redactor: Redactor | None = None,
     ) -> None:
-        """Bind one provider conversation to its gateway, target snapshot and sinks."""
+        """Bind one provider conversation to its gateway, target snapshot and sinks.
+
+        A ``redactor`` masks prompts and observations before disclosure; the
+        sink and the local store keep the unmasked values for the auditor.
+        """
         self._session = session
         self._gateway = gateway
         self._context = context
@@ -181,6 +187,7 @@ class AgentOrchestrator:
         self._budget = budget or AgentBudget()
         self._store = store
         self._context_client = context_client
+        self._redactor = redactor
         self._catalogue = ToolCatalogue()
         self._task: asyncio.Task[Any] | None = None
         self._cancel_requested = False
@@ -205,8 +212,12 @@ class AgentOrchestrator:
         """Return whether calls were left unanswered, making this conversation unusable."""
         return self._requires_new_session
 
-    async def submit(self, text: str) -> RunOutcome:
-        """Process one auditor request until completion, cancellation or a budget limit."""
+    async def submit(self, text: str, *, recollection: str | None = None) -> RunOutcome:
+        """Process one auditor request until completion, cancellation or a budget limit.
+
+        A ``recollection`` of an earlier conversation precedes the request in the
+        first prompt only; it is journaled as a summary and grants nothing.
+        """
         if self._closed:
             raise OrchestratorError("orchestrator is closed")
         if self._requires_new_session:
@@ -217,6 +228,8 @@ class AgentOrchestrator:
             raise ValueError("prompt must be a non-empty string")
         if len(text) > self._budget.max_prompt_chars:
             raise ValueError(f"prompt exceeds {self._budget.max_prompt_chars} characters")
+        if recollection is not None and not isinstance(recollection, str):
+            raise ValueError("recollection must be a string")
         task = asyncio.current_task()
         if task is None:
             raise OrchestratorError("submit must run inside an asyncio task")
@@ -225,7 +238,7 @@ class AgentOrchestrator:
         usage = _Usage()
         try:
             try:
-                reason, message = await self._run(text, usage)
+                reason, message = await self._run(text, usage, recollection)
             except _Stop as stop:
                 reason, message = stop.reason, stop.message
             except asyncio.CancelledError:
@@ -265,9 +278,16 @@ class AgentOrchestrator:
         await self.cancel()
         await self._session.close()
 
-    async def _run(self, text: str, usage: _Usage) -> tuple[RunReason, str]:
+    async def _run(
+        self, text: str, usage: _Usage, recollection: str | None
+    ) -> tuple[RunReason, str]:
+        if recollection:
+            self._record(EntryKind.SUMMARY, {"text": recollection})
+            text_to_send = f"{recollection}\n\nCurrent auditor request:\n{text}"
+        else:
+            text_to_send = text
         self._record(EntryKind.USER, {"text": text})
-        message: ProviderInput = UserPrompt(text)
+        message: ProviderInput = UserPrompt(self._disclose_text(text_to_send))
         final_turn = False
         while True:
             turn = await self._stream_turn(message, usage)
@@ -294,7 +314,7 @@ class AgentOrchestrator:
                 usage.tool_calls += len(calls)
                 results = await self._execute(turn, usage.rounds)
             self._report(results)
-            message = ToolResults(results)
+            message = ToolResults(self._disclose_results(results))
 
     async def _stream_turn(self, message: ProviderInput, usage: _Usage) -> _Turn:
         self._unanswered = ()
@@ -414,6 +434,24 @@ class AgentOrchestrator:
             self._store.save_context(self._session.session_id, context)
         self._context = context
         self._sink(AgentNotice(f"Target context changed; new plans use {context.context_id}"))
+
+    def _disclose_text(self, text: str) -> str:
+        if self._redactor is None:
+            return text
+        masked, count = self._redactor.text(text)
+        self._notify_redactions(count)
+        return masked
+
+    def _disclose_results(self, results: tuple[ToolResult, ...]) -> tuple[ToolResult, ...]:
+        if self._redactor is None:
+            return results
+        masked = [self._redactor.result(result) for result in results]
+        self._notify_redactions(sum(count for _, count in masked))
+        return tuple(result for result, _ in masked)
+
+    def _notify_redactions(self, count: int) -> None:
+        if count:
+            self._sink(AgentNotice(f"Redacted {count} value(s) before disclosure to the provider"))
 
     def _report(self, results: tuple[ToolResult, ...]) -> None:
         if not results:

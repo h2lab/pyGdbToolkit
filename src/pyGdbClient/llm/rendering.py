@@ -10,6 +10,7 @@ import json
 from rich.text import Text
 
 from .contracts import ContextFact, TargetContext
+from .controller import ContextUsage, OpenedSession
 from .orchestrator import (
     AgentEvent,
     AgentNotice,
@@ -19,6 +20,7 @@ from .orchestrator import (
     AgentToolResults,
 )
 from .provider import AuthenticationState, ProviderStatus
+from .store import StoredSession
 
 MAX_RESULT_DISPLAY_CHARS = 2000
 MAX_DISPLAYED_REGIONS = 16
@@ -79,6 +81,54 @@ def describe_context(session_id: str, context: TargetContext) -> list[Text]:
         Text(printable(heading), style=_INFO_STYLE),
         *(Text(printable(entry)) for entry in entries),
     ]
+
+
+def describe_session(session: OpenedSession) -> list[Text]:
+    """Describe a newly opened conversation, its disclosure and its continuity."""
+    lines = describe_context(session.session_id, session.context)
+    if session.test_data:
+        lines.append(Text("  Test data analysis: automatic masking disabled", style="yellow"))
+    if session.redactions:
+        lines.append(
+            Text(
+                f"  Redacted before disclosure: {session.redactions} value(s)",
+                style="yellow",
+            )
+        )
+    if session.continues is not None:
+        detail = (
+            f"{session.recollection_chars} characters of recollection"
+            if session.recollection_chars
+            else "no recorded history to recollect"
+        )
+        lines.append(Text(printable(f"  Continues {session.continues}: {detail}"), style="yellow"))
+    return lines
+
+
+def describe_usage(usage: ContextUsage | None) -> Text:
+    """Summarize the open conversation's size against its continuation threshold."""
+    if usage is None:
+        return Text("Agent session: none open")
+    percent = min(100, usage.used * 100 // usage.limit)
+    return Text(f"Agent session context: {usage.used} / {usage.limit} characters ({percent}%)")
+
+
+def describe_sessions(sessions: tuple[StoredSession, ...]) -> list[Text]:
+    """List journaled conversations that ``/resume`` can continue."""
+    if not sessions:
+        return [Text("No journaled agent session")]
+    lines = [Text("Journaled agent sessions (oldest first)", style=_INFO_STYLE)]
+    for session in sessions:
+        title = f" · {session.title}" if session.title else ""
+        lines.append(
+            Text(
+                printable(
+                    f"  {session.session_id}  {session.created_at}  "
+                    f"{session.provider_id}{title}"
+                )
+            )
+        )
+    return lines
 
 
 def describe_status(provider_id: str, status: ProviderStatus) -> list[Text]:
