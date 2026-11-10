@@ -3,8 +3,6 @@
 
 """GDB commands to select an RTOS and load its project symbols."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -23,28 +21,6 @@ from .session import SESSION as TOOLKIT_SESSION
 from .session import CommandHelp, CommandUsage, SessionSlice
 
 CONSOLE = Console(force_terminal=True)
-
-
-@dataclass
-class RtosSessionState(SessionSlice):
-    """Encapsulate the RTOS selection, its loaded project, and the active trace."""
-
-    selected_rtos: ModuleType | None = None
-    project_path: Path | None = None
-    task_list: object | None = None
-    scheduler_trace: SchedulerTrace | None = None
-
-    def clear_project(self) -> None:
-        """Delete the active scheduler trace and drop the loaded project metadata."""
-        if self.scheduler_trace is not None:
-            self.scheduler_trace.delete()
-        self.project_path = None
-        self.task_list = None
-
-    def reset(self) -> None:
-        """Drop the loaded project metadata and the RTOS selection."""
-        self.clear_project()
-        self.selected_rtos = None
 
 
 class RtosCmd(gdb.Command):
@@ -225,6 +201,28 @@ class _ElectionReturn(gdb.FinishBreakpoint):
         gdb.post_event(trace.delete)
         CONSOLE.print(selected_rtos.scheduling_chart(trace.elections))
         return True
+
+
+@dataclass
+class RtosSessionState(SessionSlice):
+    """Encapsulate the RTOS selection, its loaded project, and the active trace."""
+
+    selected_rtos: ModuleType | None = None
+    project_path: Path | None = None
+    task_list: object | None = None
+    scheduler_trace: SchedulerTrace | None = None
+
+    def clear_project(self) -> None:
+        """Delete the active scheduler trace and drop the loaded project metadata."""
+        if self.scheduler_trace is not None:
+            self.scheduler_trace.delete()
+        self.project_path = None
+        self.task_list = None
+
+    def reset(self) -> None:
+        """Drop the loaded project metadata and the RTOS selection."""
+        self.clear_project()
+        self.selected_rtos = None
 
 
 class _RtosSubcommand(gdb.Command):

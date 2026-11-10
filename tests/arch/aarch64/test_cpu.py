@@ -3,8 +3,6 @@
 
 """Tests for portable AArch64 CPU register collection and decoding."""
 
-from __future__ import annotations
-
 import pytest
 
 from pyGdbToolkit.arch import Architecture

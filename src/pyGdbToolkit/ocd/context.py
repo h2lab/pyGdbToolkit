@@ -3,8 +3,6 @@
 
 """Backend-neutral GDB inferior attachment, reuse, and rollback."""
 
-from __future__ import annotations
-
 import json
 from typing import Any, Callable
 

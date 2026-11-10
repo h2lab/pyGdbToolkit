@@ -3,8 +3,6 @@
 
 """Command-line launcher for pyGdbClient."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 from collections.abc import Mapping

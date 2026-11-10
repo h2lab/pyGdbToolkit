@@ -9,8 +9,6 @@ plus host-side GDB state. It never probes the target to fill a missing field:
 every value carries its source, and every missing value carries a reason.
 """
 
-from __future__ import annotations
-
 from typing import Any, Callable
 
 import gdb

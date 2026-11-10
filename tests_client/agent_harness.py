@@ -3,8 +3,6 @@
 
 """Drive the dashboard agent CLI over a loopback server, without target polling."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 from textual.pilot import Pilot

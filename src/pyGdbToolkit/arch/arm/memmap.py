@@ -3,8 +3,6 @@
 
 """Cortex-M address-space hints, never a physical device memory map."""
 
-from __future__ import annotations
-
 from typing import Sequence
 
 from ...target_memory import TargetMemory, TargetReadError

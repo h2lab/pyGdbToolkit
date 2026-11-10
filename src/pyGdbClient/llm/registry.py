@@ -3,8 +3,6 @@
 
 """Named provider factories configured by the launcher, without importing vendor SDKs."""
 
-from __future__ import annotations
-
 import argparse
 from collections.abc import Iterable, Mapping
 from pathlib import Path

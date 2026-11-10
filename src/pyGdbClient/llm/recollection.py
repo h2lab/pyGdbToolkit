@@ -3,8 +3,6 @@
 
 """Bounded recollection of a stored conversation, used to continue it in a new session."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 import json
 

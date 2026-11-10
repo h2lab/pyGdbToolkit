@@ -3,8 +3,6 @@
 
 """Architecture-neutral GDB memory-map command."""
 
-from __future__ import annotations
-
 import argparse
 from dataclasses import dataclass
 import json

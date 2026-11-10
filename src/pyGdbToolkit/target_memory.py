@@ -3,8 +3,6 @@
 
 """Typed target-memory access shared by GDB commands."""
 
-from __future__ import annotations
-
 from typing import Protocol, runtime_checkable
 
 import gdb

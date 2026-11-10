@@ -3,8 +3,6 @@
 
 """GDB adapters for architecture-neutral diagnostic runtime contracts."""
 
-from __future__ import annotations
-
 import gdb
 
 from .arch.diagnostics import (

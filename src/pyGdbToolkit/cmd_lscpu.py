@@ -3,8 +3,6 @@
 
 """The ``lscpu`` GDB command for Cortex-M and AArch64 targets."""
 
-from __future__ import annotations
-
 import gdb
 from rich import box
 from rich.console import Console

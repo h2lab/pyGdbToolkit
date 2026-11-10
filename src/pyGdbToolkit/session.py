@@ -10,8 +10,6 @@ the per-command state slices registered through :meth:`ToolkitSession.state`,
 and the command help registered through :meth:`ToolkitSession.register_command`.
 """
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, TypeVar

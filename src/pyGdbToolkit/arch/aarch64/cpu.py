@@ -3,8 +3,6 @@
 
 """Portable ARMv8-A CPU identification from architected system registers."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Protocol
 

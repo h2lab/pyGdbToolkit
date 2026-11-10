@@ -3,8 +3,6 @@
 
 """Deterministic target protection using validated tools and local restrictions."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 from dataclasses import dataclass
 

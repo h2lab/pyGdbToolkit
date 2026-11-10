@@ -3,16 +3,15 @@
 
 """Local, provider-independent conversation journal backed by SQLite."""
 
-from __future__ import annotations
-
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import StrEnum, auto
 import json
 import math
 from pathlib import Path
 import sqlite3
 from types import TracebackType
+from typing import Self
 
 from .context import parse_target_context
 from .contracts import JsonObject, JsonValue, TargetContext
@@ -54,12 +53,12 @@ class StoreError(RuntimeError):
 class EntryKind(StrEnum):
     """Kinds of observations stored locally, never executable instructions."""
 
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL_CALL = "tool_call"
-    TOOL_RESULT = "tool_result"
-    SUMMARY = "summary"
-    ERROR = "error"
+    USER = auto()
+    ASSISTANT = auto()
+    TOOL_CALL = auto()
+    TOOL_RESULT = auto()
+    SUMMARY = auto()
+    ERROR = auto()
 
 
 @dataclass(frozen=True)
@@ -168,7 +167,7 @@ class ContextStore:
             self._connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
             self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
-    def __enter__(self) -> ContextStore:
+    def __enter__(self) -> Self:
         """Return the store, whose connection is closed on leaving the block."""
         return self
 

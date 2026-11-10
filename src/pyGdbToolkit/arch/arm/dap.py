@@ -3,8 +3,6 @@
 
 """Read-only ARM ADIv5/APv1 and ADIv6/APv2 capabilities."""
 
-from __future__ import annotations
-
 from ...debug_port import AccessPort, DebugPortError, DebugPortTransport
 from ..dap import AccessPortProfile
 

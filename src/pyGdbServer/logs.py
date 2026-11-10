@@ -3,8 +3,6 @@
 
 """Persistent structured logs shared by processes and network clients."""
 
-from __future__ import annotations
-
 from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass

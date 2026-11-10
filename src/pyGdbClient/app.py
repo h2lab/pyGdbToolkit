@@ -3,8 +3,6 @@
 
 """Textual dashboard for a remote pyGdbServer session."""
 
-from __future__ import annotations
-
 import asyncio
 import base64
 from pathlib import Path

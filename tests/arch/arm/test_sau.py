@@ -3,8 +3,6 @@
 
 """Tests for Cortex-M Secure Attribution Unit inspection."""
 
-from __future__ import annotations
-
 from pyGdbToolkit.arch.arm.cortex_m import CORTEX_M_CORES, CortexMPart, decode_cpuid
 from pyGdbToolkit.arch.arm.sau import (
     SAU_BASE_ADDRESS,

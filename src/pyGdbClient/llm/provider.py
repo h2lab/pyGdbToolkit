@@ -3,11 +3,9 @@
 
 """Asynchronous LLM provider contract and provider-independent turn events."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, auto
 from typing import Literal, Protocol, runtime_checkable
 
 from .contracts import TargetContext, ToolCall, ToolDefinition, ToolResult
@@ -16,11 +14,11 @@ from .contracts import TargetContext, ToolCall, ToolDefinition, ToolResult
 class AuthenticationState(StrEnum):
     """Credential state reported without exposing credential material."""
 
-    NOT_REQUIRED = "not_required"
-    REQUIRED = "required"
-    AUTHENTICATED = "authenticated"
-    EXPIRED = "expired"
-    UNAVAILABLE = "unavailable"
+    NOT_REQUIRED = auto()
+    REQUIRED = auto()
+    AUTHENTICATED = auto()
+    EXPIRED = auto()
+    UNAVAILABLE = auto()
 
 
 @dataclass(frozen=True)

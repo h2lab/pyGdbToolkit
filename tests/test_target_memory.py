@@ -3,8 +3,6 @@
 
 """Tests for typed selected-inferior memory access."""
 
-from __future__ import annotations
-
 import pytest
 
 from pyGdbToolkit.target_memory import TargetMemoryReader, TargetReadError, TargetWriteError

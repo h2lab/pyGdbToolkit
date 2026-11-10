@@ -3,8 +3,6 @@
 
 """Tests for Cortex-M target descriptions and SCB register inspection."""
 
-from __future__ import annotations
-
 import pytest
 
 from pyGdbToolkit.arch import DEFAULT_ARCHITECTURE_REGISTRY

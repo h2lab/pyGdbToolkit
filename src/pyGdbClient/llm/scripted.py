@@ -3,8 +3,6 @@
 
 """Deterministic provider for exercising contracts without a network or target."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import AsyncIterator
 from copy import deepcopy

@@ -3,8 +3,6 @@
 
 """Resolve debug-server strategies through one shared backend interface."""
 
-from __future__ import annotations
-
 import gdb
 
 from .base import CoreBackend, CoreContextAccess

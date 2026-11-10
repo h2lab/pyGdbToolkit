@@ -3,8 +3,6 @@
 
 """Tests for the architecture-neutral fault_info command adapter."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 import pytest

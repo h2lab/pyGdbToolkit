@@ -3,14 +3,12 @@
 
 """The architecture-neutral ``secscan`` GDB command entry point."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import html
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import gdb
 from rich import box
@@ -50,7 +48,7 @@ class SecscanFinding:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> SecscanFinding:
+    def from_dict(cls, data: dict[str, Any]) -> Self:
         """Rebuild a finding from its dictionary representation."""
         return cls(
             category=str(data["category"]),
@@ -89,7 +87,7 @@ class SecscanReport:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> SecscanReport:
+    def from_dict(cls, data: dict[str, Any]) -> Self:
         """Rebuild a report from its stable JSON schema."""
         return cls(
             core=str(data["core"]),

@@ -3,8 +3,6 @@
 
 """Command-line entry point for pyGdbServer."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import signal

@@ -3,8 +3,6 @@
 
 """The ``svd`` GDB command for CMSIS-SVD inspection, manipulation, and monitoring."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 import glob
 import json
@@ -34,6 +32,54 @@ from .svd import (
 from .target_memory import TargetMemory, TargetReadError
 
 CONSOLE = Console(force_terminal=True)
+
+
+class SvdWatchpoint(gdb.Breakpoint):
+    """A hardware or software watchpoint tracking modifications to an SVD register."""
+
+    def __init__(
+        self,
+        spec: str,
+        peripheral_name: str,
+        register_name: str,
+        register: SvdRegister,
+        address: int,
+        initial_value: int,
+    ) -> None:
+        super().__init__(spec, type=gdb.BP_WATCHPOINT, wp_class=gdb.WP_WRITE)
+        self.peripheral_name = peripheral_name
+        self.register_name = register_name
+        self.register = register
+        self.address = address
+        self.last_value = initial_value
+
+    def stop(self) -> bool:
+        """Handle watchpoint triggers and notify the user with decoded bitfield changes.
+
+        Returns
+        -------
+        bool
+            Always True to halt execution and return control to the GDB prompt.
+        """
+        new_val = self.last_value
+        try:
+            reader = TOOLKIT_SESSION.memory
+            size_bytes = max(1, (self.register.size + 7) // 8)
+            raw_bytes = reader.read_bytes(self.address, size_bytes)
+            new_val = int.from_bytes(raw_bytes, byteorder="little")
+        except TargetReadError:
+            pass
+
+        render_watchpoint_hit(
+            self.peripheral_name,
+            self.register_name,
+            self.register,
+            self.address,
+            self.last_value,
+            new_val,
+        )
+        self.last_value = new_val
+        return True
 
 
 @dataclass
@@ -148,54 +194,6 @@ def _write_register_value(base_address: int, reg: SvdRegister, value: int) -> No
     val_bytes = value.to_bytes(size_bytes, byteorder="little")
     inferior = gdb.selected_inferior()
     inferior.write_memory(reg_addr, val_bytes)
-
-
-class SvdWatchpoint(gdb.Breakpoint):
-    """A hardware or software watchpoint tracking modifications to an SVD register."""
-
-    def __init__(
-        self,
-        spec: str,
-        peripheral_name: str,
-        register_name: str,
-        register: SvdRegister,
-        address: int,
-        initial_value: int,
-    ) -> None:
-        super().__init__(spec, type=gdb.BP_WATCHPOINT, wp_class=gdb.WP_WRITE)
-        self.peripheral_name = peripheral_name
-        self.register_name = register_name
-        self.register = register
-        self.address = address
-        self.last_value = initial_value
-
-    def stop(self) -> bool:
-        """Handle watchpoint triggers and notify the user with decoded bitfield changes.
-
-        Returns
-        -------
-        bool
-            Always True to halt execution and return control to the GDB prompt.
-        """
-        new_val = self.last_value
-        try:
-            reader = TOOLKIT_SESSION.memory
-            size_bytes = max(1, (self.register.size + 7) // 8)
-            raw_bytes = reader.read_bytes(self.address, size_bytes)
-            new_val = int.from_bytes(raw_bytes, byteorder="little")
-        except TargetReadError:
-            pass
-
-        render_watchpoint_hit(
-            self.peripheral_name,
-            self.register_name,
-            self.register,
-            self.address,
-            self.last_value,
-            new_val,
-        )
-        self.last_value = new_val
-        return True
 
 
 def render_watchpoint_hit(

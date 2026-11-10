@@ -3,8 +3,6 @@
 
 """User-interface independent lifecycle of one agent conversation over pyGdbServer."""
 
-from __future__ import annotations
-
 import asyncio
 from collections import deque
 from collections.abc import Callable

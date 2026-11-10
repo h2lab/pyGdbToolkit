@@ -3,18 +3,12 @@
 
 """Cortex-M PMSAv7 and PMSAv8 Memory Protection Unit inspection."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum, unique
-from typing import TYPE_CHECKING
+from enum import IntEnum, StrEnum, auto, unique
+from typing import Protocol, Self
 
 from ...target_memory import TargetReadError, TargetWriteError, WritableTargetMemory
 from ..base import RegisterValue
-
-if TYPE_CHECKING:
-    from .cortex_m import CortexMTargetDescription
-
 
 MPU_BASE_ADDRESS = 0xE000ED90
 
@@ -69,7 +63,7 @@ class MpuAccessPermission(StrEnum):
     READ_WRITE = "read-write"
     PRIVILEGED_READ_ONLY = "privileged-read-only"
     READ_ONLY = "read-only"
-    RESERVED = "reserved"
+    RESERVED = auto()
 
 
 @unique
@@ -77,9 +71,9 @@ class MpuMemoryType(StrEnum):
     """Memory types represented by PMSA MPU attributes."""
 
     STRONGLY_ORDERED = "strongly-ordered"
-    DEVICE = "device"
-    NORMAL = "normal"
-    UNKNOWN = "unknown"
+    DEVICE = auto()
+    NORMAL = auto()
+    UNKNOWN = auto()
 
 
 @dataclass(frozen=True)
@@ -89,6 +83,24 @@ class MpuDescription:
     architecture: MpuArchitecture
     registers: tuple[MpuCommonRegister | MpuV7Register | MpuV8Register, ...]
     supports_pxn: bool
+
+
+class MpuCoreDescription(Protocol):
+    """Structural view of a core description exposing an optional MPU description."""
+
+    @property
+    def mpu(self) -> MpuDescription | None:
+        """Return the core's MPU description, or ``None`` when it has no MPU."""
+        ...
+
+
+class MpuTargetDescription(Protocol):
+    """Structural view of a Cortex-M target description with an MPU-capable core."""
+
+    @property
+    def core(self) -> MpuCoreDescription | None:
+        """Return the known core description, or ``None`` for an unknown core."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -146,7 +158,7 @@ class MpuRegionResult:
         return self.region is not None
 
     @classmethod
-    def unavailable(cls, index: int, reason: str) -> MpuRegionResult:
+    def unavailable(cls, index: int, reason: str) -> Self:
         """Create an unavailable region result."""
         return cls(index=index, unavailable_reason=reason)
 
@@ -173,7 +185,7 @@ class MpuDump:
         description: MpuDescription | None,
         reason: str,
         registers: tuple[RegisterValue, ...] = (),
-    ) -> MpuDump:
+    ) -> Self:
         """Create an explicit unavailable MPU inspection result."""
         return cls(
             description=description,
@@ -243,7 +255,7 @@ PMSA_V8_PXN_MPU = MpuDescription(
 )
 
 
-def dump_mpu_regions(reader: WritableTargetMemory, target: CortexMTargetDescription) -> MpuDump:
+def dump_mpu_regions(reader: WritableTargetMemory, target: MpuTargetDescription) -> MpuDump:
     """Read and decode MPU region configuration for a known Cortex-M core.
 
     The function writes each region index to ``MPU_RNR`` and restores the

@@ -3,8 +3,6 @@
 
 """Tests for Cortex-M PMSAv7 and PMSAv8 MPU inspection."""
 
-from __future__ import annotations
-
 import pytest
 
 from pyGdbToolkit.arch.arm.cortex_m import CORTEX_M_CORES, CortexMPart, ScbRegister, decode_cpuid

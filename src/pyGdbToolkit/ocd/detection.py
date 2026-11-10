@@ -3,10 +3,8 @@
 
 """Identify and cache the connected debug server independently of CPU selection."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, auto
 import re
 from typing import Callable
 
@@ -16,10 +14,10 @@ import gdb
 class OcdIdentifier(StrEnum):
     """Stable identifiers for supported debug servers."""
 
-    UNKNOWN = "unknown"
-    PYOCD = "pyocd"
-    OPENOCD = "openocd"
-    JLINK = "jlink"
+    UNKNOWN = auto()
+    PYOCD = auto()
+    OPENOCD = auto()
+    JLINK = auto()
 
 
 @dataclass(frozen=True)

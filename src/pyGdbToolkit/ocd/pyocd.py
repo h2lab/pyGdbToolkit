@@ -3,8 +3,6 @@
 
 """pyOCD CPU inventory and per-core endpoint strategy."""
 
-from __future__ import annotations
-
 import re
 
 import gdb

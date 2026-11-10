@@ -9,8 +9,6 @@ the Arm inspection results to the unified session, whereas the ``arch`` package
 stays independent from any session or GDB concern.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from ...session import SESSION, SessionSlice, ToolkitSession

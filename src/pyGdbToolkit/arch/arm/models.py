@@ -3,9 +3,8 @@
 
 """Arm target-report models shared by device providers and renderers."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
+from typing import Self
 
 from .coresight import CoreSightDiscovery
 from .cortex_m import CortexMTargetDescription
@@ -24,12 +23,12 @@ class FieldValue:
             raise ValueError("a field must have either a value or an unavailable reason")
 
     @classmethod
-    def known(cls, value: str) -> FieldValue:
+    def known(cls, value: str) -> Self:
         """Create a known report field."""
         return cls(value=value)
 
     @classmethod
-    def unavailable(cls, reason: str) -> FieldValue:
+    def unavailable(cls, reason: str) -> Self:
         """Create a field with an explicit unavailable-state reason."""
         return cls(unavailable_reason=reason)
 

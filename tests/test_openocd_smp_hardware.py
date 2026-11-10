@@ -3,8 +3,6 @@
 
 """Intrusive opt-in AArch64 SMP validation using OpenOCD and a J-Link adapter."""
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import replace
 import json
