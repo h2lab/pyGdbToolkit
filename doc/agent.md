@@ -39,7 +39,7 @@ reference are in [LLM integration](llm.md).
 The **LLM CREDITS** panel, below the OCD log, shows the used and remaining
 percentage of each provider quota and is refreshed after every request. When
 premium requests are exhausted, the model may stop answering; check this panel
-first. See [credits panel](llm.md#credits-panel).
+first.
 
 Without `--llm-store`, conversations are kept in memory only and cannot be
 resumed after the dashboard closes. See [launcher options](llm.md#launcher-options)
