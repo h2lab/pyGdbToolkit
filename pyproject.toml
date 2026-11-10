@@ -50,6 +50,9 @@ pyGdbServer = "pyGdbServer.cli:main"
 pyGdbClient = "pyGdbClient.cli:main"
 
 [project.optional-dependencies]
+copilot = [
+    "github-copilot-sdk==1.0.27",
+]
 dev = [
     "black",
     "flake8",

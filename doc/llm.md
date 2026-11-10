@@ -20,8 +20,9 @@ The second increment isolates client tests from GDB (see
 The sixth adds the [deterministic protection policy](#deterministic-protection-policy).
 The seventh adds [one-attempt auditor approval](#auditor-approval) and its Textual modal.
 The eighth adds the bounded [agent orchestrator](#agent-orchestrator).
-There is still no automatic dashboard execution. Subsequent increments will add
-the Copilot adapter and the second dashboard prompt. Long-context management and end-to-end simulated audit workflows follow.
+The ninth adds the optional [GitHub Copilot provider](#github-copilot-provider).
+There is still no automatic dashboard execution. The second dashboard prompt,
+long-context management and end-to-end simulated audit workflows follow.
 
 ## Trust boundaries
 
@@ -598,41 +599,159 @@ a callable receiving the request parameters; unscripted methods return
 order and can broadcast notifications. Provider behaviour is scripted with
 `ScriptedProvider`.
 
-## Copilot adapter feasibility
+## GitHub Copilot provider
 
-The official SDK documentation and Python manifest were inspected for the first
-increment, at upstream revision
-`26536883459ba4cb23c735db8cb3de2c7b899d88`:
+`pyGdbClient.llm.copilot.CopilotProvider` implements `LlmProvider` using the
+optional `github-copilot-sdk` package (imported as `copilot`). Importing the
+adapter or running the dashboard does not import the SDK or start a runtime.
+The base installation remains usable without Copilot.
 
-- [Python SDK and runtime documentation](https://github.com/github/copilot-sdk/blob/26536883459ba4cb23c735db8cb3de2c7b899d88/python/README.md)
-- [Python package requirements](https://github.com/github/copilot-sdk/blob/26536883459ba4cb23c735db8cb3de2c7b899d88/python/pyproject.toml)
-- [Authentication methods](https://github.com/github/copilot-sdk/blob/26536883459ba4cb23c735db8cb3de2c7b899d88/docs/auth/authenticate.md)
+### Installation and runtime
 
-The package is `github-copilot-sdk`, imported as `copilot`. Its manifest requires
-Python 3.11 or newer, compatible with this project's Python 3.12 minimum.
-The inspected manifest describes an alpha SDK. Its documented runtime uses
-JSON-RPC; published wheels provide a pinned runtime version with a separate
-download/provisioning step, potentially performed automatically on first use.
-Installation, runtime availability, platform support, and offline provisioning
-must therefore be diagnosed explicitly by the eventual optional adapter.
+This adapter pins [SDK 1.0.27](https://pypi.org/project/github-copilot-sdk/1.0.27/)
+and [runtime 1.0.104](https://github.com/github/copilot-cli/releases/tag/v1.0.104).
+The published wheel's API and embedded runtime pin were inspected; its Python
+minimum is 3.11, compatible with the project's 3.12 minimum. The SDK is still
+classified alpha. Upgrading either component requires revalidating the
+integration, not just loosening a dependency bound.
 
-Documented authentication includes existing Copilot CLI login credentials and
-explicit GitHub tokens through `github_token` / `use_logged_in_user`. Interactive
-CLI login uses GitHub's OAuth device flow. Subscription and organization policy
-requirements depend on the authentication mode. The adapter should initially
-guide the auditor through supported CLI authentication and report required or
-expired authentication without handling passwords or persisting tokens itself.
+Install the extra, then provision the runtime explicitly:
 
-The SDK documents custom tools, streaming, session lifecycle methods,
-`available_tools` / `excluded_tools`, and `on_permission_request`. The inspected
-API also documents declaration-only tools and an empty client mode. These are
-integration mechanisms, **not** a substitute for pyGdbClient's target policy.
-The adapter must expose only approved application tools, deny unexpected native
-tools, and prevent ambient shell, file, MCP, skill, or subagent capabilities from
-bypassing the executor. It must not use an approve-all permission handler.
-Creation and resumption must both enforce these restrictions.
+```console
+python -m pip install '.[copilot]'
+python -m copilot download-runtime
+```
 
-Before implementing that adapter, select and pin a released SDK/runtime pair
-and verify these controls against that release. This source inspection does
-not certify a released version, authenticate a real account, or test a live
-model. No SDK package or runtime is installed by this increment.
+The download command prints the cached executable path and verifies the
+release's checksums. On an offline workstation, provision the complete
+platform-specific bundle beforehand, including its adjacent native library
+and assets. Supplying only a copied executable is not enough.
+
+`CopilotConfig.runtime_path` must be an absolute executable path. The provider
+never invokes the SDK's automatic downloader: it passes that path explicitly
+to a managed stdio connection. `status()` checks the installed SDK version,
+runtime startup, the runtime's reported version and authentication. Missing or
+incompatible components return `unavailable` with guidance; they do not enable
+a degraded or unrestricted session. Transport operations have a finite
+`rpc_timeout` (30 seconds by default); inference itself is bounded by the
+orchestrator's turn timeout.
+
+### Authentication
+
+Two modes are supported:
+
+- **Existing CLI login** (no explicit token): sign in outside the dashboard
+  using `copilot login`, including its browser/device authorization flow.
+  The provider sets `use_logged_in_user=True`. Credentials remain managed by
+  the CLI; pyGdbClient does not run a shell login command, collect a password,
+  open a browser automatically or read the CLI's credential files.
+- **Explicit GitHub token**: pass `github_token` from an application-owned
+  secret source. It is passed to the SDK in memory, excluded from the
+  configuration's representation, and never included in the target snapshot,
+  prompts, tool arguments or SQLite journal. This disables logged-in-user
+  fallback (`use_logged_in_user=False`).
+
+For example, after explicitly provisioning the runtime:
+
+```python
+import os
+from pathlib import Path
+from pyGdbClient.llm.copilot import CopilotConfig, CopilotProvider
+
+provider = CopilotProvider(
+    CopilotConfig(
+        runtime_path=Path("/absolute/path/printed/by/download-runtime/copilot"),
+        github_token=os.environ["PYGDB_COPILOT_TOKEN"],
+        # Omit github_token to use existing CLI login instead.
+    )
+)
+try:
+    status = await provider.status()
+    # Show status.message; open a session only if authenticated.
+finally:
+    await provider.close()
+```
+
+`status()` does not initiate login or inference and does not echo the SDK's
+account name, status message or errors. A negative authentication probe returns
+`required` and login guidance; the SDK's boolean probe cannot reliably
+distinguish never-authenticated credentials from expired ones. Authentication
+is rechecked before each new conversation. A positive status does not
+guarantee model entitlement: subscription, token permissions, network access
+and organization policy can still prevent inference.
+
+### Session restrictions and tool handoff
+
+Every `open_session()` creates a new backend UUID, separate from the
+application-owned session ID. There is no backend resumption or automatic
+history replay. The full initial `TargetContext` is included as structured
+data in a replacement system message: MCU, revision, architecture, debug
+transport, OCD, core, memory map and SVD metadata, including provenance and
+unavailability reasons. An SVD path is server metadata, not a local attachment;
+the adapter does not read or upload that file.
+
+Both authentication modes enforce the same restrictions:
+
+- Only explicitly declared application tools appear in `available_tools`.
+  This release applies that allowlist to the **entire** merged catalogue,
+  including custom tools. The empty list would disable custom tools too.
+  The adapter maps them to collision-free `pygdb_N` names and maps proposals
+  back to their original catalogue names.
+- Every declaration has `handler=None`: the SDK cannot execute a target RPC.
+  `skip_permission=True` applies only to these inert declarations; target
+  consent belongs exclusively to `ToolGateway`. Every SDK permission request
+  is rejected, including unexpected custom-tool requests. There is no
+  approve-all permission handler.
+- Config and instruction discovery, file hooks, host Git operations, skills,
+  plugins, custom agents, MCP servers, memory, infinite sessions and session
+  store integration are disabled. Plugins and built-in skills are also cleared
+  through the mutable session options API; a negative acknowledgement blocks
+  session opening. The runtime starts in an empty temporary working directory,
+  not the auditor's repository.
+
+With an explicit token, SDK `mode="empty"` also isolates runtime storage in
+that temporary directory. CLI login uses `mode="copilot-cli"` because empty
+mode deliberately disables the system keychain. The explicit session
+restrictions above apply in either mode, rather than relying on mode defaults.
+
+Text deltas are streamed without duplicating the final assistant message.
+The complete `assistant.message` supplies the whole proposed action batch,
+which is validated before any `ToolCallProposed` is emitted. Partial tool JSON
+is not executable. Multi-chunk complete messages are currently rejected rather
+than risking approval of an incomplete chain.
+
+The orchestrator sends the resulting plan through the gateway and returns
+exactly one observation or error per call. Only then does the adapter answer
+the SDK's pending external requests. It verifies the session, request ID, call
+ID, name and arguments against the proposal. Requests may arrive together or
+sequentially; no target tool handler is installed in either case. Failed
+gateway results remain failures, not ordinary user messages or synthetic
+successful tool results.
+
+Malformed/reused calls, unsolicited tools, subagent activity, incomplete
+streams, queue overflow, transport failures and rejected feedback raise
+`ProviderError`, never successful completion. Vendor exception text is not
+forwarded, and Python SDK diagnostics emitted within adapter calls have their
+message and traceback suppressed to avoid leaking sensitive details.
+Cancellation aborts runtime inference; it never rolls back target operations.
+An interrupted pending batch requires a new session. `close()` detaches the
+session; `provider.close()` also stops the owned runtime and removes its
+temporary working directory.
+
+### Validation and confidentiality limits
+
+Client tests use the **installed pinned SDK** (real clients, sessions, events,
+permission dispatch and generated RPC serialization) over an offline
+transport double. They cover authentication, restriction payloads, complete
+and sequential tool batches, error sanitization, cancellation, and a simulated
+SDK-to-orchestrator-to-gateway round with auditor approval accepted or refused.
+They require no GitHub account, network model call, GDB module or target.
+These tests do not certify a live account, model or runtime sandbox.
+
+Opening a real conversation intentionally sends the snapshot, auditor prompts
+and approved observations to GitHub Copilot. CLI credentials, runtime-owned
+diagnostic/session files and service-side retention remain under their
+respective policies; the local SQLite store is not a guarantee of exclusive
+local persistence. In particular CLI-login mode retains the CLI's normal data
+directory. Do not send sensitive audit data without authorization. Dedicated
+long-context and confidentiality controls follow in a later increment.
