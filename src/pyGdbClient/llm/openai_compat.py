@@ -17,15 +17,15 @@ from dataclasses import dataclass, field
 import json
 import math
 import re
-from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from ._http import SSE_DONE, AsyncBaseTransport, AsyncClient, finite_json, open_client, sse_data
+from ._http import step as transport_step
 from .contracts import JsonObject, JsonValue, TargetContext, ToolCall, ToolDefinition
 from .instructions import agent_instructions
 from .provider import (
     AuthenticationState,
     LlmSession,
-    ProviderCancelledError,
     ProviderError,
     ProviderEvent,
     ProviderInput,
@@ -37,14 +37,9 @@ from .provider import (
     UserPrompt,
 )
 
-if TYPE_CHECKING:
-    from httpx import AsyncBaseTransport, AsyncClient, Response
-else:
-    # Runtime placeholders keep httpx an optional dependency: annotations are
-    # evaluated eagerly before Python 3.14, and httpx is only imported lazily.
-    AsyncBaseTransport = AsyncClient = Response = Any
-
 _KEY_GUIDANCE = "Supply an API key with --openai-key-env, or allow anonymous access on the server."
+_INSTALL_GUIDANCE = "Install pyGdbToolkit[openai] to enable the OpenAI-compatible provider."
+_LABEL = "OpenAI-compatible"
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
@@ -72,18 +67,6 @@ class OpenAiConfig:
             or self.request_timeout <= 0
         ):
             raise ValueError("request_timeout must be finite and positive")
-
-
-def _json(value: object) -> JsonValue:
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float) and math.isfinite(value):
-        return value
-    if isinstance(value, list):
-        return [_json(item) for item in value]
-    if isinstance(value, dict) and all(isinstance(key, str) for key in value):
-        return {key: _json(item) for key, item in value.items()}
-    raise ProviderError("the endpoint returned values that are not finite JSON")
 
 
 class OpenAiProvider:
@@ -114,24 +97,15 @@ class OpenAiProvider:
                 raise ProviderError("OpenAI provider is closed")
             if self._client is not None:
                 return self._client
-            try:
-                import httpx
-            except ImportError:
-                raise ProviderError(
-                    "Install pyGdbToolkit[openai] to enable the OpenAI-compatible provider."
-                ) from None
             headers: dict[str, str] = {}
             if self._config.api_key is not None:
                 headers["Authorization"] = f"Bearer {self._config.api_key}"
-            # trust_env=False ignores proxy variables: audit data must reach the
-            # configured LAN endpoint directly, never an ambient intermediary.
-            self._client = httpx.AsyncClient(
-                base_url=self._config.base_url,
-                headers=headers,
-                timeout=self._config.request_timeout,
-                transport=self._transport,
-                follow_redirects=False,
-                trust_env=False,
+            self._client = open_client(
+                self._config.base_url,
+                headers,
+                self._config.request_timeout,
+                self._transport,
+                _INSTALL_GUIDANCE,
             )
             return self._client
 
@@ -249,28 +223,9 @@ class OpenAiLlmSession:
 
     async def _step[T](self, operation: Awaitable[T], stage: str) -> T:
         """Await one transport step, racing cancellation and a finite timeout."""
-        waiter = asyncio.ensure_future(operation)
-        canceller = asyncio.ensure_future(self._cancel_event.wait())
-        try:
-            async with asyncio.timeout(self._timeout):
-                await asyncio.wait((waiter, canceller), return_when=asyncio.FIRST_COMPLETED)
-        except TimeoutError:
-            raise ProviderError(f"OpenAI-compatible {stage} timed out; check the server.") from None
-        finally:
-            waiter.cancel()
-            canceller.cancel()
-            await asyncio.gather(waiter, canceller, return_exceptions=True)
-        if not waiter.cancelled():
-            try:
-                return waiter.result()
-            except (StopAsyncIteration, ProviderError):
-                raise
-            except Exception:
-                # Vendor errors can echo prompts or the response; never forward them.
-                raise ProviderError(
-                    f"OpenAI-compatible {stage} failed; check the endpoint, network and key."
-                ) from None
-        raise ProviderCancelledError("the turn was cancelled")
+        return await transport_step(
+            operation, stage, timeout=self._timeout, cancel_event=self._cancel_event, label=_LABEL
+        )
 
     async def stream(self, message: ProviderInput) -> AsyncIterator[ProviderEvent]:
         """Yield one model response, rolling the local history back on failure."""
@@ -333,10 +288,10 @@ class OpenAiLlmSession:
                     line = await self._step(anext(lines), "stream read")
                 except StopAsyncIteration:
                     break
-                if not line.startswith("data:"):
+                data = sse_data(line)
+                if data is None:
                     continue
-                data = line[len("data:") :].strip()
-                if data == "[DONE]":
+                if data == SSE_DONE:
                     break
                 choice = self._chunk(data)
                 if choice is None:
@@ -366,7 +321,7 @@ class OpenAiLlmSession:
         choice = choices[0]
         if not isinstance(choice, dict):
             raise ProviderError("the endpoint streamed a malformed completion chunk")
-        result: JsonObject = {key: _json(value) for key, value in choice.items()}
+        result: JsonObject = {key: finite_json(value) for key, value in choice.items()}
         return result
 
     def _choice_events(
@@ -443,7 +398,7 @@ class OpenAiLlmSession:
                 arguments = json.loads(slot["arguments"] or "{}")
             except ValueError:
                 raise ProviderError("the model proposed malformed tool arguments") from None
-            validated = _json(arguments)
+            validated = finite_json(arguments)
             if not isinstance(validated, dict):
                 raise ProviderError("tool arguments must be a JSON object")
             proposed[call_id] = ToolCall(call_id, name, validated)
