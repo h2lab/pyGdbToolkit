@@ -27,12 +27,20 @@ from pyGdbClient.llm.orchestrator import (
     RunOutcome,
     RunReason,
 )
-from pyGdbClient.llm.provider import AuthenticationState, ProviderStatus
+from pyGdbClient.llm.provider import (
+    AuthenticationState,
+    ProviderError,
+    ProviderStatus,
+    ProviderUsage,
+    QuotaUsage,
+)
 from pyGdbClient.llm.rendering import (
     MAX_BUFFERED_TEXT_CHARS,
     MAX_DISPLAYED_REGIONS,
     AgentTranscript,
     describe_context,
+    describe_credits,
+    describe_credits_error,
     describe_session,
     describe_sessions,
     describe_status,
@@ -233,3 +241,44 @@ def test_sessions_are_listed_with_their_titles() -> None:
         "  a  2026-01-01T00:00:00Z  scripted",
         "  b  2026-01-02T00:00:00Z  scripted · continues a",
     ]
+
+
+def test_credits_show_limited_quotas_first_with_used_and_remaining_percentages() -> None:
+    usage = ProviderUsage(
+        (
+            QuotaUsage("chat", 100.0, 0, None),
+            QuotaUsage("premium_interactions", 37.5, 1875, 3000, "2026-11-01T00:00:00Z"),
+        )
+    )
+    lines = describe_credits("github-copilot", usage).plain.splitlines()
+    assert lines == [
+        "github-copilot",
+        "premium interactions",
+        "[██████····] remaining 37.5%",
+        "used 62.5% · 1875/3000 requests",
+        "resets 2026-11-01",
+        "chat: unlimited",
+    ]
+
+
+@pytest.mark.parametrize(("remaining", "style"), [(80.0, "green"), (20.0, "yellow"), (5.0, "red")])
+def test_credit_level_is_coloured_by_remaining_share(remaining: float, style: str) -> None:
+    text = describe_credits("p", ProviderUsage((QuotaUsage("q", remaining, 1, 10),)))
+    assert any(style in str(span.style) for span in text.spans)
+
+
+def test_missing_or_failed_credits_are_explicit_and_sanitized() -> None:
+    assert describe_credits("p", None).plain == "p: credits not reported"
+    assert describe_credits("p", ProviderUsage(())).plain == "p: no quota reported"
+    failed = describe_credits_error("p", ProviderError("Copilot quota query failed\x1b[2J"))
+    assert failed.plain == "p: credits unavailable\nCopilot quota query failed\ufffd[2J"
+    assert describe_credits_error("p", RuntimeError("secret")).plain.endswith("RuntimeError")
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [("", 1.0, 0, 1), ("q", -0.1, 0, 1), ("q", 100.1, 0, 1), ("q", 1.0, -1, 1), ("q", 1.0, 0, -1)],
+)
+def test_quota_values_are_validated(arguments: tuple[str, float, int, int]) -> None:
+    with pytest.raises(ValueError):
+        QuotaUsage(*arguments)

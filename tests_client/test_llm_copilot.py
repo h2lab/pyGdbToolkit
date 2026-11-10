@@ -15,6 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 from copilot import CopilotClient
+from copilot.generated.rpc import ServerRpc
 from copilot.session_events import SessionEvent
 import pytest
 
@@ -30,10 +31,13 @@ from pyGdbClient.llm.provider import (
     AuthenticationState,
     ProviderCancelledError,
     ProviderError,
+    ProviderUsage,
+    QuotaUsage,
     TextDelta,
     ToolCallProposed,
     ToolResults,
     TurnFinished,
+    UsageReporter,
     UserPrompt,
 )
 from test_llm_contracts import _context
@@ -45,6 +49,21 @@ _TOOLS = (
     ToolDefinition("target_status", "Read known state", {"type": "object"}),
     ToolDefinition("gdb_command", "Propose GDB command", {"type": "object"}),
 )
+
+
+def _quota(
+    *, remaining: float, used: int, entitlement: int, unlimited: bool = False
+) -> dict[str, Any]:
+    return {
+        "entitlementRequests": entitlement,
+        "isUnlimitedEntitlement": unlimited,
+        "overage": 0.0,
+        "overageAllowedWithExhaustedQuota": False,
+        "remainingPercentage": remaining,
+        "usageAllowedWithExhaustedQuota": False,
+        "usedRequests": used,
+        "resetDate": "2026-11-01T00:00:00Z",
+    }
 
 
 class Runtime:
@@ -64,6 +83,10 @@ class Runtime:
         self.sequential = False
         self.delayed: list[tuple[str, dict[str, Any]]] = []
         self.fail: str | None = None
+        self.quotas: dict[str, Any] = {
+            "premium_interactions": _quota(remaining=37.5, used=1875, entitlement=3000),
+            "chat": _quota(remaining=100.0, used=0, entitlement=-1, unlimited=True),
+        }
         self.started = 0
         self.stopped = 0
         self.sent = asyncio.Event()
@@ -86,6 +109,7 @@ class Runtime:
         self.started += 1
         if self.fail == "start":
             raise OSError(_SECRET)
+        self.clients[-1]._rpc = ServerRpc(self)  # type: ignore[arg-type]
 
     async def stop(self) -> None:
         self.stopped += 1
@@ -153,6 +177,8 @@ class Runtime:
             return {"success": True}
         if method == "session.permissions.handlePendingPermissionRequest":
             return {"success": True}
+        if method == "account.getQuota":
+            return {"quotaSnapshots": self.quotas}
         raise AssertionError(f"Unscripted SDK method {method}")
 
     @property
@@ -191,6 +217,56 @@ class Runtime:
 @pytest.fixture
 def runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Runtime:
     return Runtime(monkeypatch, tmp_path)
+
+
+def test_quota_snapshot_reports_percentages_without_account_identity(runtime: Runtime) -> None:
+    async def exercise() -> None:
+        provider = CopilotProvider(runtime.config)
+        usage = await provider.usage()
+        assert isinstance(provider, UsageReporter)
+        assert usage == ProviderUsage(
+            (
+                QuotaUsage("chat", 100.0, 0, None, "2026-11-01T00:00:00Z"),
+                QuotaUsage("premium_interactions", 37.5, 1875, 3000, "2026-11-01T00:00:00Z"),
+            )
+        )
+        assert usage.quotas[1].used_percentage == 62.5
+        assert runtime.params("account.getQuota") == [{}]
+        await provider.close()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "quotas",
+    [
+        {"premium": {"remainingPercentage": 50}},
+        {"": _quota(remaining=50.0, used=1, entitlement=10)},
+    ],
+)
+def test_invalid_quota_snapshot_is_an_explicit_provider_error(
+    runtime: Runtime, quotas: dict[str, Any]
+) -> None:
+    async def exercise() -> None:
+        runtime.quotas = quotas
+        provider = CopilotProvider(runtime.config)
+        with pytest.raises(ProviderError, match="quota"):
+            await provider.usage()
+        await provider.close()
+
+    asyncio.run(exercise())
+
+
+def test_quota_failure_never_leaks_vendor_details(runtime: Runtime) -> None:
+    async def exercise() -> None:
+        runtime.fail = "account.getQuota"
+        provider = CopilotProvider(runtime.config)
+        with pytest.raises(ProviderError) as error:
+            await provider.usage()
+        assert _SECRET not in str(error.value)
+        await provider.close()
+
+    asyncio.run(exercise())
 
 
 def _answer() -> list[tuple[str, dict[str, Any]]]:
