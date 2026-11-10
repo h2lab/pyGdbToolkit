@@ -14,6 +14,7 @@ from .cmd_secscan import SecscanCmd
 from . import cmd_svd
 from .cmd_svd import SvdCmd
 from .ocd import OCD, OcdIdentifier, OcdInfo, get_ocd, initialize_ocd
+from .ocd.qemu import QemuMonitorCommand
 from .session import (
     SESSION,
     CommandHelp,
@@ -25,6 +26,7 @@ from .session import (
 
 install_event_hooks()
 initialize_ocd()
+_QEMU_MONITOR_COMMAND = QemuMonitorCommand()
 
 _DAP_COMMAND = DapCmd()
 for _dap_name in ("list", "core", "select", "profile", "report", "help"):

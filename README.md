@@ -18,7 +18,7 @@ debug session with a terminal dashboard and a JSON-RPC automation interface.
 ## Installation
 
 Requires Python 3.12+, GDB with compatible embedded Python, and a debug probe
-with pyOCD or OpenOCD configured for your target. From a checkout:
+with a supported OCD, or QEMU for an emulated target. From a checkout:
 
 ```console
 python3 -m venv .venv
@@ -50,10 +50,14 @@ analysed with a local model on trusted equipment. See the
 ```console
 tox -e py312     # GDB-side toolkit and server tests, using a fake gdb module
 tox -e client    # dashboard and LLM client tests, without GDB or a target
+tox -e qemu      # opt-in functional tests with real QEMU/GDB, no physical probe
 ```
 
 The two suites run in separate processes: the client suite rejects any import
 of `gdb`, `pyGdbToolkit`, or `pyGdbServer`.
+The separate [QEMU mode](doc/pygdbserver.md#qemu-hardware-free-targets-and-ci)
+supports hardware-free CI with emulated STM32 targets; install QEMU and GDB
+with embedded Python 3.12+ before running its dedicated functional suite.
 
 ## Build the documentation with tox
 

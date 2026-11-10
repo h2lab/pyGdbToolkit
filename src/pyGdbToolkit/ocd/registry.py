@@ -10,6 +10,7 @@ from .detection import OcdIdentifier
 from .jlinkgdbserver import JLinkCoreBackend
 from .openocd import OpenOcdCoreBackend
 from .pyocd import PyOcdCoreBackend
+from .qemu import QemuCoreBackend
 
 
 class CoreBackendRegistry:
@@ -23,6 +24,7 @@ class CoreBackendRegistry:
                 JLinkCoreBackend(context),
                 OpenOcdCoreBackend(context),
                 PyOcdCoreBackend(context),
+                QemuCoreBackend(context),
             )
         }
 

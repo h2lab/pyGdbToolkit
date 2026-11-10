@@ -4,13 +4,14 @@
 """Identify and cache the connected debug server independently of CPU selection."""
 
 from dataclasses import dataclass
-from enum import StrEnum, auto
+from enum import StrEnum, auto, unique
 import re
 from typing import Callable
 
 import gdb
 
 
+@unique
 class OcdIdentifier(StrEnum):
     """Stable identifiers for supported debug servers."""
 
@@ -18,6 +19,7 @@ class OcdIdentifier(StrEnum):
     PYOCD = auto()
     OPENOCD = auto()
     JLINK = auto()
+    QEMU = auto()
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,19 @@ def probe_ocd(execute: Callable[[str], str]) -> OcdInfo:
         match = re.search(r"^\s*SEGGER J-Link GDB Server\s+V([^\s]+)", output, re.M | re.I)
         if match is not None:
             return OcdInfo(OcdIdentifier.JLINK, match[1], output.strip())
+        if re.search(r"^qemu-io\s", output, re.M) and re.search(
+            r"^system_reset\s+--", output, re.M
+        ):
+            evidence = "QEMU HMP help: qemu-io, system_reset"
+            try:
+                version = execute("monitor info version").strip()
+            except (gdb.error, RuntimeError) as error:
+                return OcdInfo(OcdIdentifier.QEMU, evidence=f"{evidence}; {error}")
+            return OcdInfo(
+                OcdIdentifier.QEMU,
+                version if re.fullmatch(r"\d+\.\d+[^\r\n]*", version) else None,
+                f"{evidence}; {version}",
+            )
         errors.append(output.strip())
     return OcdInfo(evidence="; ".join(error for error in errors if error) or "OCD unavailable")
 

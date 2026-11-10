@@ -41,6 +41,7 @@ model evidence; use `lscpu` for architectural CPU identification.
 |---|---|---|---|
 | Shared GDB connection | Named hardware-core threads | Switch GDB thread | OpenOCD |
 | Per-core GDB endpoints | One inferior per attached CPU | Attach or reuse an inferior | pyOCD, configured J-Link sessions |
+| Emulated CPU cluster | GDB threads in the selected inferior | Switch GDB thread | QEMU |
 
 The portable controller owns request validation, backend dispatch, result
 verification and session cache invalidation. The shared GDB context layer owns
@@ -50,7 +51,7 @@ by assuming a CPU model or interpreting an affinity value as an array index.
 
 ### Implementation Boundaries
 
-The `ocd/` package contains `jlinkgdbserver.py`, `openocd.py`, and `pyocd.py`,
+The `ocd/` package contains `jlinkgdbserver.py`, `openocd.py`, `pyocd.py`, and `qemu.py`,
 each implementing the same `CoreBackend` interface from `ocd/base.py`.
 `ocd/registry.py` resolves the detected server; `core_runtime.py` uses this
 contract without conditional branches for individual servers. Thread-name
@@ -88,12 +89,20 @@ identities remain valid. Listing does not create new GDB connections.
 }
 ```
 
-Valid identifiers are `jlinkgdbserver`, `openocd`, and `pyocd`. The declared
+Valid identifiers are `jlinkgdbserver`, `openocd`, `pyocd`, and `qemu`. The declared
 identifier controls startup arguments, readiness detection, and remote protocol
 selection even when the executable is renamed or wrapped. GDB-side detection
 still checks the connected server; configuration is not proof of a live backend.
 For legacy files without this field, known executable names are inferred.
 Unknown legacy executables retain the generic loopback/port-template rules.
+
+### QEMU
+
+QEMU exposes emulated CPU contexts, not physical debug cores. The inventory
+covers GDB threads in the selected inferior only and does not automatically
+attach other CPU clusters. IDs are local thread numbers minus one.
+See [QEMU backend details](ocd.md#qemu-connection) and the
+[hardware-free STM32 configuration](configuration-examples.md#qemu-with-stm32f405-no-probe).
 
 ### OpenOCD
 

@@ -18,7 +18,7 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 
 from .config import ServerConfig
 from .logs import LogEvent, LogStore
-from .mi import MiSession
+from .ocd import create_mi_session
 from .process import ManagedProcess
 from .target_context import build_target_context
 
@@ -47,7 +47,7 @@ class PyGdbServer:
         self.ocd: ManagedProcess | None = None
         self.core_ocds: dict[int, ManagedProcess] = {}
         self.core_endpoints: dict[int, str] = {}
-        self.mi = MiSession(config.gdb_path, config.gdb_args, self.logs)
+        self.mi = create_mi_session(config, self.logs)
         self.gdb_port = 0
         self.telnet_port = 0
         self.swo_port = 0

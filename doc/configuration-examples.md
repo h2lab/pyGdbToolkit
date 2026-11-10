@@ -10,8 +10,30 @@ values matching your installation. Initialization can reset the target and
 load an SVD over the network.
 
 All examples declare `ocd-identifier` separately from the executable path.
-Backend values are `jlinkgdbserver`, `openocd`, and `pyocd`. Multicore context
+Backend values are `jlinkgdbserver`, `openocd`, `pyocd`, and `qemu`. Multicore context
 models and the generic J-Link core mapping are described in [SMP support](smp.md).
+
+(qemu-stm32)=
+## QEMU with STM32F405 (no probe)
+
+Download {download}`servercfg-qemu.json <examples/servercfg-qemu.json>`.
+QEMU's `netduinoplus2` machine emulates an STM32F405 Cortex-M4F and supplies
+the GDB server directly. Replace `firmware.elf` with firmware built for this
+machine and run from the directory containing the firmware:
+
+```console
+pyGdbServer /path/to/servercfg-qemu.json
+```
+
+Adapt the executable paths to your installation. `-S` keeps the CPU stopped,
+and `{loopback}` / `{gdb_port}` keep the private GDB endpoint local and dynamic.
+pyGdbServer supervises both QEMU and GDB; no separately launched emulator or
+`socat` process is required. The same setup supports hardware-free CI tests.
+See [QEMU configuration and limitations](pygdbserver.md#qemu-hardware-free-targets-and-ci).
+
+```{literalinclude} examples/servercfg-qemu.json
+:language: json
+```
 
 ## OpenOCD with STM32U5
 

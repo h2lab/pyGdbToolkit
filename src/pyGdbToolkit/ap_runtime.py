@@ -32,6 +32,12 @@ class AutoDebugPortTransport:
 
     def _backend(self) -> DebugPortTransport:
         info = self._detector.get()
+        if info.identifier == OcdIdentifier.QEMU:
+            self._transport = None
+            self._info = None
+            raise DebugPortError(
+                "QEMU mode does not expose a physical debug port or DP/AP monitor commands"
+            )
         if info.identifier == OcdIdentifier.UNKNOWN:
             self._transport = None
             self._info = None
