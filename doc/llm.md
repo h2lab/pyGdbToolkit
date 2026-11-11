@@ -793,8 +793,30 @@ Install the extra, then select the provider with its endpoint and model:
 ```console
 python -m pip install '.[openai]'
 pyGdbClient ws://192.0.2.15:1234 --llm openai \
-    --openai-url http://ollama.lan:11434/v1 --openai-model qwen3
+    --openai-url http://ollama.lan:11434/v1 --openai-model llama3.2:latest
 ```
+
+For a local Ollama instance and persistent conversation storage:
+
+```console
+pyGdbClient --llm openai --llm-store llama.sqlite \
+    --openai-url http://localhost:11434/v1 --openai-model llama3.2:latest \
+    ws://localhost:1235
+```
+
+The model must be installed on that Ollama server and support tool calling.
+Check the exact installed name with `ollama list`. For example,
+`qwen2:0.5b-instruct` can answer plain chat requests but does not support tools;
+it cannot run this agent. The adapter reports that incompatibility explicitly,
+without silently dropping the tools or bypassing the protection gateway.
+Use a tool-capable model such as `llama3.2:latest`.
+
+An HTTP 404 from `/v1/chat/completions` can mean **model not found**, not only
+an absent API route. The adapter recognizes structured missing-model errors
+and recommends checking `--openai-model` against the server's installed models.
+For unrecognized 404 responses, check both that name and `--openai-url`,
+including its `/v1` prefix. These diagnostics never echo the server's raw
+response text; they do not retry requests automatically.
 
 `OpenAiConfig` requires an absolute `http(s)` base URL and a nonempty model
 name; both can also come from `$PYGDB_OPENAI_URL` and `$PYGDB_OPENAI_MODEL`.

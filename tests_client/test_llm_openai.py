@@ -343,6 +343,115 @@ def test_invalid_proposals_and_failed_completions_never_finish(turn: httpx.Respo
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize(
+    "code,body,expected",
+    [
+        (
+            404,
+            {"error": {"message": f"model '{_SECRET}' not found"}},
+            "The selected model was not found",
+        ),
+        (
+            404,
+            {"error": f"model '{_SECRET}' not found"},
+            "The selected model was not found",
+        ),
+        (404, {"error": {"message": _SECRET}}, "including /v1"),
+        (
+            400,
+            {"error": {"message": f"{_SECRET} does not support tools"}},
+            "The selected model does not support tool calling",
+        ),
+        (400, {"error": f"{_SECRET} does not support tools"}, "llama3.2:latest"),
+        (400, {"error": {"message": _SECRET}}, "HTTP 400"),
+        (401, {"error": _SECRET}, "--openai-key-env"),
+        (403, {"error": _SECRET}, "--openai-key-env"),
+        (500, {"error": _SECRET}, "HTTP 500"),
+    ],
+)
+def test_completion_errors_explain_configuration_without_disclosing_server_text(
+    code: int, body: dict[str, Any], expected: str
+) -> None:
+    """Missing models and unsupported tools are distinct from an absent API route."""
+
+    async def exercise() -> None:
+        script = _Script(httpx.Response(code, json=body), _text_turn("recovered"))
+        provider = _provider(script)
+        try:
+            session = await provider.open_session("s1", _context(), _TOOLS)
+            with pytest.raises(ProviderError, match=expected) as failure:
+                await _events(session, UserPrompt(_SECRET))
+            assert _SECRET not in str(failure.value)
+            assert len(script.bodies) == 1
+            assert script.bodies[0]["tools"]
+            events = await _events(session, UserPrompt("retry"))
+            assert events == [TextDelta("recovered"), TurnFinished()]
+            assert [message["role"] for message in script.bodies[-1]["messages"]] == [
+                "system",
+                "user",
+            ]
+        finally:
+            await provider.close()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"404 page not found",
+        b"\xff",
+        b'{"error":{"message":"does not support tools"}}' + b"x" * 5000,
+        b"[]",
+    ],
+)
+def test_unrecognized_error_bodies_remain_sanitized(body: bytes) -> None:
+    """Non-JSON, oversized and unexpected server bodies do not escape the adapter."""
+
+    async def exercise() -> None:
+        script = _Script(httpx.Response(404, content=body))
+        provider = _provider(script)
+        try:
+            session = await provider.open_session("s1", _context(), _TOOLS)
+            with pytest.raises(ProviderError, match="including /v1"):
+                await _events(session, UserPrompt("hello"))
+        finally:
+            await provider.close()
+
+    asyncio.run(exercise())
+
+
+def test_error_body_reads_are_bounded_and_response_is_closed() -> None:
+    """A streaming error response cannot make diagnostics read unlimited server data."""
+
+    class ErrorStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.reads = 0
+            self.closed = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for _ in range(10):
+                self.reads += 1
+                yield b"x" * 1024
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    async def exercise() -> None:
+        stream = ErrorStream()
+        provider = _provider(_Script(httpx.Response(404, stream=stream)))
+        try:
+            session = await provider.open_session("s1", _context(), _TOOLS)
+            with pytest.raises(ProviderError, match="HTTP 404"):
+                await _events(session, UserPrompt("hello"))
+            assert stream.reads == 4
+            assert stream.closed
+        finally:
+            await provider.close()
+
+    asyncio.run(exercise())
+
+
 def test_reused_call_ids_across_turns_are_rejected() -> None:
     """A recycled tool call ID cannot inherit an earlier correlation or approval."""
 
