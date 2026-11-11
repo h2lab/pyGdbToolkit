@@ -256,18 +256,19 @@ import sys
 
 class RejectTargetDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split(".")[0] in {"gdb", "pyGdbToolkit", "copilot"}:
+        if fullname.split(".")[0] in {"gdb", "pyGdbToolkit", "copilot", "httpx"}:
             raise AssertionError("Forbidden import: " + fullname)
         return None
 
 sys.meta_path.insert(0, RejectTargetDependencies())
 sys.path.insert(0, sys.argv[1])
 from pyGdbClient.llm import (
-    confidentiality, contracts, controller, copilot, provider, recollection, registry, rendering,
-    scripted,
+    _http, confidentiality, contracts, controller, copilot, openai_compat, provider, recollection,
+    registry, rendering, scripted,
 )
 import pyGdbClient.cli
 assert scripted.ScriptedProvider.provider_id == "scripted"
-assert registry.default_registry().ids == ("github-copilot",)
+assert _http.SSE_DONE == "[DONE]"
+assert registry.default_registry().ids == ("github-copilot", "openai")
 """
     subprocess.run([sys.executable, "-I", "-c", script, str(source)], check=True)
