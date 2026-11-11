@@ -313,7 +313,7 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
         "help",
         "history",
         "upload FILE",
-        "ls [DIR]",
+        "ls            List only the server workspace",
         "quit --all",
         "lscpu",
         "Display the CPU report",
@@ -329,6 +329,7 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     assert "https://pyocd.io/docs/" in pyocd_help
     assert "https://openocd.org/doc/html/" in openocd_help
     assert "not connected" in openocd_help
+    assert "ls [DIR]" not in pyocd_help
 
 
 def test_client_upload_uses_a_dedicated_rpc(tmp_path: Path) -> None:
@@ -350,11 +351,9 @@ def test_client_upload_uses_a_dedicated_rpc(tmp_path: Path) -> None:
     app._append_output.assert_called_with("Uploaded /workspace/firmware image.bin (9 bytes)")
 
 
-@pytest.mark.parametrize(
-    "command, params", [("ls", {}), ('ls "/tmp/remote files"', {"directory": "/tmp/remote files"})]
-)
-def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) -> None:
-    """Remote listings render entries and never request a target refresh."""
+@pytest.mark.parametrize("command", ["ls", "ls   "])
+def test_client_ls_uses_a_dedicated_rpc(command: str) -> None:
+    """Workspace listings take no arguments and never request a target refresh."""
     app = PyGdbClientApp("ws://127.0.0.1:1234")
     app._connected = True
     app.client.request = AsyncMock(
@@ -370,7 +369,7 @@ def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) ->
 
     asyncio.run(app.execute_command(command))
 
-    app.client.request.assert_awaited_once_with("workspace.list", params)
+    app.client.request.assert_awaited_once_with("workspace.list", {})
     app._append_output.assert_any_call("/workspace")
     app._append_output.assert_any_call("  firmware.bin")
     app._append_output.assert_any_call("  images/")
@@ -390,6 +389,10 @@ def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) ->
         "upload a b c",
         "upload /nonexistent/file",
         f'upload "/tmp/{"f" * 129}"',
+        "ls .",
+        "ls ..",
+        'ls "/tmp/remote files"',
+        'ls ""',
         "ls a b",
         'ls "unfinished',
     ],

@@ -246,8 +246,6 @@ def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
         assert default["path"] == str(tmp_path)
         assert {"name": "firmware.bin", "is_directory": False} in default["entries"]
         assert {"name": "remote files", "is_directory": True} in default["entries"]
-        listing = await request("workspace.list", {"directory": "remote files"})
-        assert listing == {"path": str(directory), "entries": []}
         await request("workspace.upload", {"filename": "empty", "content": ""})
         assert (tmp_path / "empty").read_bytes() == b""
         await request("workspace.upload", {"filename": "firmware.bin", "content": ""})
@@ -292,7 +290,7 @@ def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
         ("workspace.upload", {"filename": "file", "content": 42}, -32602),
         ("workspace.upload", {"filename": "file"}, -32602),
         ("workspace.list", {"directory": 42}, -32602),
-        ("workspace.list", {"directory": "missing"}, -32000),
+        ("workspace.list", {"directory": "missing"}, -32602),
         ("workspace.upload", {"filename": "file", "content": "", "directory": "."}, -32602),
         (
             "workspace.download",
@@ -338,6 +336,78 @@ def test_workspace_errors_do_not_call_gdb(
     )
     assert response is not None
     assert response["error"]["code"] == code
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"directory": "."},
+        {"directory": ".."},
+        {"directory": "/tmp"},
+        {"directory": "nested"},
+        {"directory": None},
+        {"filename": "file"},
+    ],
+)
+def test_workspace_list_rejects_all_parameters(tmp_path: Path, params: dict[str, Any]) -> None:
+    """Even existing directories and unrelated parameters are refused by the RPC."""
+    server, fake_mi = _server(tmp_path)
+    (tmp_path / "nested").mkdir()
+
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "workspace.list", "params": params})
+        )
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32602
+    assert response["error"]["message"] == "workspace.list does not accept parameters"
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize("include_params", [False, True])
+def test_workspace_list_only_returns_sorted_direct_children(
+    tmp_path: Path, include_params: bool
+) -> None:
+    """Lists the workspace without descending into subdirectories or the parent."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server, fake_mi = _server(tmp_path)
+    server.workspace = workspace
+    (workspace / "z.bin").write_bytes(b"data")
+    (workspace / "images").mkdir()
+    (workspace / "images" / "hidden.bin").write_bytes(b"nested")
+    (tmp_path / "outside.bin").write_bytes(b"outside")
+    request: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": "workspace.list"}
+    if include_params:
+        request["params"] = {}
+    response, _ = asyncio.run(server.handle_rpc_message(json.dumps(request)))
+
+    assert response is not None
+    assert response["result"] == {
+        "path": str(workspace),
+        "entries": [
+            {"name": "images", "is_directory": True},
+            {"name": "z.bin", "is_directory": False},
+        ],
+    }
+    assert fake_mi.calls == []
+
+
+def test_workspace_list_reports_unavailable_workspace(tmp_path: Path) -> None:
+    """A missing workspace is an RPC error, not a successful empty listing."""
+    server, fake_mi = _server(tmp_path)
+    server.workspace = tmp_path / "missing"
+
+    response, _ = asyncio.run(
+        server.handle_rpc_message('{"jsonrpc":"2.0","id":1,"method":"workspace.list"}')
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32000
+    assert str(server.workspace) in response["error"]["message"]
     assert fake_mi.calls == []
 
 
@@ -431,8 +501,9 @@ def test_client_workspace_commands_over_websocket_do_not_call_gdb(tmp_path: Path
                 await app.execute_command(f'upload "{source}" "{remote_directory}"')
                 assert app._append_output.call_args.kwargs == {"error": True}
                 await app.execute_command(f'ls "{remote_directory}"')
+                app._append_output.assert_called_with("Usage: ls", error=True)
                 await app.execute_command("ls missing")
-                assert app._append_output.call_args.kwargs == {"error": True}
+                app._append_output.assert_called_with("Usage: ls", error=True)
                 await app.execute_command(f'download "memory dump.bin" "{local_directory}"')
                 assert (local_directory / "memory dump.bin").read_bytes() == dump
             finally:

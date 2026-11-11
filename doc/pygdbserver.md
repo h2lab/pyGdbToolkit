@@ -355,16 +355,18 @@ and the base64-encoded chunk `content`.
 
 ### `workspace.list`
 
-Lists the server workspace by default, or an existing `directory` resolved
-from that workspace. Entries are sorted by name and identify directories.
+Lists only the direct contents of the server workspace, without descending
+into subdirectories. Entries are sorted by name and identify directories.
+This method takes no parameters: omit `params` or use `{}`. Any non-empty
+parameter object, including `directory`, is rejected with `-32602`.
 This method does not send any GDB or OCD command.
 
 ```json
-{"jsonrpc":"2.0","id":13,"method":"workspace.list","params":{"directory":"/tmp"}}
-{"jsonrpc":"2.0","id":13,"result":{"path":"/tmp","entries":[{"name":"example.txt","is_directory":false}]}}
+{"jsonrpc":"2.0","id":13,"method":"workspace.list"}
+{"jsonrpc":"2.0","id":13,"result":{"path":"/workspace","entries":[{"name":"example.txt","is_directory":false}]}}
 ```
 
-File transfers are confined to the server workspace, but these methods still
+File transfers and listings are confined to the server workspace, but these methods still
 use the server process's filesystem permissions: expose the API only to
 trusted clients.
 
@@ -604,9 +606,10 @@ server-side name must be a plain file name of at most 128 characters without
 directory separators; uploads cannot target any other server directory.
 Uploads support binary files up to 5 MiB and replace existing files. Enter
 `download <server-file> [local-dir]` to copy a workspace file to a local
-directory; the server-side name follows the same rules. Enter `ls [dir]` to
-display the workspace or the specified server directory; directory names are
-shown with a trailing `/`. Quote paths containing spaces. None of these
+directory; the server-side name follows the same rules. Enter `ls` without
+arguments to display only the direct contents of the server workspace;
+directory names are shown with a trailing `/`, but their contents are not listed.
+Quote paths containing spaces. None of these
 commands interacts with GDB or OCD; the dashboard's existing periodic
 target-status polling remains unchanged.
 
@@ -615,7 +618,6 @@ upload firmware.elf
 upload "local files/device.svd"
 download memory.bin ./dumps
 ls
-ls /tmp
 ```
 
 `rtos load-project --from <path>` is executed by GDB on the **server**. The path

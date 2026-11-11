@@ -356,18 +356,6 @@ class PyGdbServer:
             return {"stopping": True}, False
         raise RpcMethodNotFound(f"Method not found: {method}")
 
-    def _workspace_directory(self, params: dict[str, Any]) -> Path:
-        directory = params.get("directory", ".")
-        if not isinstance(directory, str) or not directory:
-            raise ValueError("directory must be a non-empty string")
-        path = Path(directory).expanduser()
-        if not path.is_absolute():
-            path = self.workspace / path
-        path = path.resolve()
-        if not path.is_dir():
-            raise NotADirectoryError(f"Not a directory: {path}")
-        return path
-
     def _upload_file(self, params: dict[str, Any]) -> dict[str, Any]:
         if "directory" in params:
             raise ValueError("uploads are restricted to the server workspace")
@@ -433,7 +421,9 @@ class PyGdbServer:
         }
 
     def _list_directory(self, params: dict[str, Any]) -> dict[str, Any]:
-        directory = self._workspace_directory(params)
+        if params:
+            raise ValueError("workspace.list does not accept parameters")
+        directory = self.workspace
         entries = [
             {"name": entry.name, "is_directory": entry.is_dir()}
             for entry in sorted(directory.iterdir(), key=lambda entry: entry.name)

@@ -635,10 +635,9 @@ class PyGdbClientApp(App[None]):
             destination, size = await self._download_workspace_file(filename, local_directory)
             self._append_output(f"Downloaded {filename} to {destination} ({size} bytes)")
         else:
-            if len(arguments) > 1:
-                raise ValueError("Usage: ls [dir]")
-            params = {"directory": arguments[0]} if arguments else {}
-            response = await self.client.request("workspace.list", params)
+            if arguments:
+                raise ValueError("Usage: ls")
+            response = await self.client.request("workspace.list", {})
             self._append_output(response["path"])
             for entry in response["entries"]:
                 suffix = "/" if entry["is_directory"] else ""
@@ -872,7 +871,9 @@ def _help_text(
         ),
         Text("    Downloads replace existing files and use bounded chunks for large files."),
         Text("    Server-side names are plain file names (no directory), at most 128 characters."),
-        Text("  ls [DIR]      List a server directory (default: workspace), without calling GDB."),
+        Text(
+            "  ls            List only the server workspace, without calling GDB. Takes no arguments."
+        ),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
         Text("  Ctrl+Q        Same as quit."),
