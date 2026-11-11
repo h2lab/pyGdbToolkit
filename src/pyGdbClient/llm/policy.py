@@ -180,6 +180,14 @@ class ProtectionPolicy:
                     "later steps require a fresh context and a new assessment",
                 ),
             )
+        if call.name == "workspace_erase":
+            return PolicyDecision(
+                PolicyOutcome.REQUIRE_APPROVAL,
+                (
+                    "deleting a server workspace file is a persistent filesystem change; "
+                    "auditor approval is required and deletion cannot be rolled back",
+                ),
+            )
         if call.name in _METADATA_TOOLS and call.effects == (ActionEffect.OBSERVE,):
             return PolicyDecision(
                 PolicyOutcome.ALLOW,

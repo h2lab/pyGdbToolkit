@@ -26,6 +26,20 @@ from pyGdbClient.llm.tools import (
         ("target_cores", {}, "target.cores", {}, (ActionEffect.OBSERVE,)),
         ("target_core", {}, "target.core", {}, (ActionEffect.OBSERVE,)),
         (
+            "workspace_erase",
+            {"filename": "memory dump.bin"},
+            "workspace.erase",
+            {"filename": "memory dump.bin"},
+            (ActionEffect.PERSISTENT_CHANGE,),
+        ),
+        (
+            "workspace_erase",
+            {"filename": "f" * 128},
+            "workspace.erase",
+            {"filename": "f" * 128},
+            (ActionEffect.PERSISTENT_CHANGE,),
+        ),
+        (
             "target_select_core",
             {"core": 1},
             "target.select_core",
@@ -114,7 +128,7 @@ def test_definitions_and_prepared_calls_are_detached() -> None:
     """Mutating advertised schemas or proposed arguments cannot alter trusted routes."""
     catalogue = ToolCatalogue()
     definitions = catalogue.definitions()
-    assert len(definitions) == 15
+    assert len(definitions) == 16
     assert len({definition.name for definition in definitions}) == len(definitions)
     assert all(not hasattr(definition, "handler") for definition in definitions)
     definitions[0].input_schema.clear()
@@ -132,6 +146,19 @@ def test_definitions_and_prepared_calls_are_detached() -> None:
     [
         ("server.shutdown", {}),
         ("workspace.upload", {"filename": "x"}),
+        ("workspace_erase", {}),
+        ("workspace_erase", {"filename": None}),
+        ("workspace_erase", {"filename": ""}),
+        ("workspace_erase", {"filename": "."}),
+        ("workspace_erase", {"filename": ".."}),
+        ("workspace_erase", {"filename": "../file"}),
+        ("workspace_erase", {"filename": "sub/file"}),
+        ("workspace_erase", {"filename": "sub\\file"}),
+        ("workspace_erase", {"filename": "/tmp/file"}),
+        ("workspace_erase", {"filename": "f" * 129}),
+        ("workspace_erase", {"filename": "file\0"}),
+        ("workspace_erase", {"filename": "file", "directory": "/tmp"}),
+        ("workspace_erase", {"filename": "file", "approved": True}),
         ("target_context", {"method": "server.shutdown"}),
         ("target_context", {"effects": ["observe"]}),
         ("target_context", {1: "not a string key"}),

@@ -32,9 +32,9 @@ from .llm.rendering import (
     printable,
 )
 from .rpc import JsonRpcClient, RpcError
+from .workspace import validate_workspace_filename
 
 _WORKSPACE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
-_WORKSPACE_FILENAME_MAX_LENGTH = 128
 _COMMAND_HISTORY_LIMIT = 40
 _CREDITS_REFRESH_SECONDS = 60.0
 _AGENT_COMMANDS = {"/status", "/new", "/compact", "/sessions", "/cancel", "/end"}
@@ -615,14 +615,14 @@ class PyGdbClientApp(App[None]):
 
     async def _execute_workspace_command(self, command: str) -> bool:
         name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
-        if name not in {"download", "upload", "ls"}:
+        if name not in {"download", "upload", "ls", "erase"}:
             return False
         arguments = shlex.split(command)[1:]
         if name == "upload":
             if len(arguments) != 1:
                 raise ValueError("Usage: upload <file>")
             path = Path(arguments[0]).expanduser()
-            filename = _workspace_filename(path.name)
+            filename = validate_workspace_filename(path.name)
             content = await asyncio.to_thread(_read_upload_file, path)
             params = {"filename": filename, "content": base64.b64encode(content).decode("ascii")}
             response = await self.client.request("workspace.upload", params, timeout=300)
@@ -630,10 +630,16 @@ class PyGdbClientApp(App[None]):
         elif name == "download":
             if not 1 <= len(arguments) <= 2:
                 raise ValueError("Usage: download <server-file> [local-dir]")
-            filename = _workspace_filename(arguments[0])
+            filename = validate_workspace_filename(arguments[0])
             local_directory = Path(arguments[1]).expanduser() if len(arguments) == 2 else Path.cwd()
             destination, size = await self._download_workspace_file(filename, local_directory)
             self._append_output(f"Downloaded {filename} to {destination} ({size} bytes)")
+        elif name == "erase":
+            if len(arguments) != 1:
+                raise ValueError("Usage: erase <server-file>")
+            filename = validate_workspace_filename(arguments[0])
+            response = await self.client.request("workspace.erase", {"filename": filename})
+            self._append_output(f"Erased {response['path']}")
         else:
             if arguments:
                 raise ValueError("Usage: ls")
@@ -775,34 +781,6 @@ class PyGdbClientApp(App[None]):
         await self.client.close()
 
 
-def _workspace_filename(filename: str) -> str:
-    """Validate a server workspace file name before it is sent.
-
-    Parameters
-    ----------
-    filename : str
-        Candidate server-side file name.
-
-    Returns
-    -------
-    str
-        The validated file name.
-
-    Raises
-    ------
-    ValueError
-        If the name is empty, contains directory separators or components
-        (including ``.`` and ``..``), or exceeds 128 characters.
-    """
-    if not filename or filename in {".", ".."} or "/" in filename or "\\" in filename:
-        raise ValueError("server file must be a file name without directory components")
-    if len(filename) > _WORKSPACE_FILENAME_MAX_LENGTH:
-        raise ValueError(
-            f"server file name must not exceed {_WORKSPACE_FILENAME_MAX_LENGTH} characters"
-        )
-    return filename
-
-
 def _read_upload_file(path: Path) -> bytes:
     with path.open("rb") as source:
         content = source.read(5 * 1024 * 1024 + 1)
@@ -874,6 +852,8 @@ def _help_text(
         Text(
             "  ls            List only the server workspace, without calling GDB. Takes no arguments."
         ),
+        Text("  erase FILE    Delete one server workspace file (no directories or paths)."),
+        Text("    Agent use requires auditor approval; symbolic links are removed, not followed."),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
         Text("  Ctrl+Q        Same as quit."),

@@ -66,6 +66,12 @@ For example, after creating `memory.bin` on the server with GDB, enter
 Downloads use bounded chunks and can transfer files larger than the
 upload limit.
 
+Use `ls` without arguments to list the server workspace. Use `erase FILE` to
+delete one file there, with the same server-side filename restrictions.
+Directories cannot be deleted; symbolic links are removed without following
+their targets. When an LLM agent proposes this deletion, explicit auditor
+approval is required before execution.
+
 ![Terminal dashboard](pygdbclient.png)
 
 See [server and client reference](pygdbserver.md) for configuration, logs,

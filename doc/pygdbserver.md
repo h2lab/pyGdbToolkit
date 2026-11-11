@@ -366,9 +366,32 @@ This method does not send any GDB or OCD command.
 {"jsonrpc":"2.0","id":13,"result":{"path":"/workspace","entries":[{"name":"example.txt","is_directory":false}]}}
 ```
 
-File transfers and listings are confined to the server workspace, but these methods still
-use the server process's filesystem permissions: expose the API only to
-trusted clients.
+### `workspace.erase`
+
+Deletes one entry from the server workspace, independently of GDB and OCD.
+`filename` follows the transfer rules: a plain file name of at most 128
+characters, without `/`, `\`, `.` or `..` directory components. No `directory`
+or other path override is accepted. Directories cannot be removed and deletion
+is never recursive. Symbolic links, including dangling links, are unlinked
+without following or deleting their targets. A missing file, a directory or a
+filesystem permission failure returns `-32000`; invalid parameters return
+`-32602`. The optional `timeout` is accepted for agent-tool compatibility but
+does not impose a server-side filesystem deadline.
+
+```json
+{"jsonrpc":"2.0","id":15,"method":"workspace.erase","params":{"filename":"example.txt"}}
+{"jsonrpc":"2.0","id":15,"result":{"path":"/workspace/example.txt"}}
+```
+
+The agent's `workspace_erase` tool requires explicit, one-attempt auditor
+approval through the client protection policy and gateway. The approval
+displays the exact filename and persistent-change effect. Model claims of
+approval are not accepted. Direct `erase` commands entered by the auditor in
+the dashboard are executed without an additional confirmation.
+
+File transfers, listings and deletions are confined to the server workspace,
+but these methods still use the server process's filesystem permissions:
+expose the API only to trusted clients.
 
 ### `server.status`
 
@@ -609,6 +632,9 @@ Uploads support binary files up to 5 MiB and replace existing files. Enter
 directory; the server-side name follows the same rules. Enter `ls` without
 arguments to display only the direct contents of the server workspace;
 directory names are shown with a trailing `/`, but their contents are not listed.
+Enter `erase <server-file>` to delete one workspace file using the same filename
+rules. Deletion is not recursive and cannot be undone. Agent use requires
+auditor approval; symbolic links are removed without following their targets.
 Quote paths containing spaces. None of these
 commands interacts with GDB or OCD; the dashboard's existing periodic
 target-status polling remains unchanged.
@@ -618,6 +644,7 @@ upload firmware.elf
 upload "local files/device.svd"
 download memory.bin ./dumps
 ls
+erase obsolete-dump.bin
 ```
 
 `rtos load-project --from <path>` is executed by GDB on the **server**. The path

@@ -314,6 +314,8 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
         "history",
         "upload FILE",
         "ls            List only the server workspace",
+        "erase FILE",
+        "Agent use requires auditor approval",
         "quit --all",
         "lscpu",
         "Display the CPU report",
@@ -375,6 +377,20 @@ def test_client_ls_uses_a_dedicated_rpc(command: str) -> None:
     app._append_output.assert_any_call("  images/")
 
 
+@pytest.mark.parametrize("filename", ["firmware image.bin", "f" * 128])
+def test_client_erase_uses_a_dedicated_rpc(filename: str) -> None:
+    """Direct auditor commands erase exactly one named workspace entry without GDB."""
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    app.client.request = AsyncMock(return_value={"path": f"/workspace/{filename}"})
+    app._append_output = Mock()
+
+    asyncio.run(app.execute_command(f'erase "{filename}"'))
+
+    app.client.request.assert_awaited_once_with("workspace.erase", {"filename": filename})
+    app._append_output.assert_called_with(f"Erased /workspace/{filename}")
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -395,6 +411,16 @@ def test_client_ls_uses_a_dedicated_rpc(command: str) -> None:
         'ls ""',
         "ls a b",
         'ls "unfinished',
+        "erase",
+        "erase a b",
+        "erase .",
+        "erase ..",
+        "erase ../file",
+        "erase sub/file",
+        "erase /tmp/file",
+        'erase "sub\\\\file"',
+        'erase ""',
+        f'erase "{"f" * 129}"',
     ],
 )
 def test_invalid_workspace_commands_never_reach_gdb(command: str) -> None:

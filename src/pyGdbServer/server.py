@@ -310,6 +310,8 @@ class PyGdbServer:
             return await asyncio.to_thread(self._download_file, params), False
         if method == "workspace.list":
             return await asyncio.to_thread(self._list_directory, params), False
+        if method == "workspace.erase":
+            return await asyncio.to_thread(self._erase_file, params), False
         if method == "command.execute":
             command = params["command"]
             if not isinstance(command, str) or not command.strip():
@@ -419,6 +421,14 @@ class PyGdbServer:
             "size": size,
             "content": base64.b64encode(content).decode("ascii"),
         }
+
+    def _erase_file(self, params: dict[str, Any]) -> dict[str, Any]:
+        if set(params) - {"filename", "timeout"}:
+            raise ValueError("workspace.erase accepts only filename and timeout")
+        filename = _workspace_filename(params.get("filename"))
+        path = self.workspace / filename
+        path.unlink()
+        return {"path": str(path)}
 
     def _list_directory(self, params: dict[str, Any]) -> dict[str, Any]:
         if params:
