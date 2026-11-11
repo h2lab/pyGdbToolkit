@@ -23,17 +23,40 @@ from .process import ManagedProcess
 from .target_context import build_target_context
 
 _WORKSPACE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+_WORKSPACE_FILENAME_MAX_LENGTH = 128
 
 
 def _workspace_filename(filename: object) -> str:
-    """Validate a filename that must not contain directory components."""
+    """Validate a workspace file name.
+
+    Parameters
+    ----------
+    filename : object
+        Candidate file name supplied by the client.
+
+    Returns
+    -------
+    str
+        The validated file name.
+
+    Raises
+    ------
+    ValueError
+        If the name is not a string, is empty, contains directory
+        separators or components (including ``.`` and ``..``), or exceeds
+        128 characters.
+    """
     if (
         not isinstance(filename, str)
         or not filename
         or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
         or Path(filename).name != filename
     ):
         raise ValueError("filename must be a file name without directory components")
+    if len(filename) > _WORKSPACE_FILENAME_MAX_LENGTH:
+        raise ValueError(f"filename must not exceed {_WORKSPACE_FILENAME_MAX_LENGTH} characters")
     return filename
 
 
@@ -346,6 +369,8 @@ class PyGdbServer:
         return path
 
     def _upload_file(self, params: dict[str, Any]) -> dict[str, Any]:
+        if "directory" in params:
+            raise ValueError("uploads are restricted to the server workspace")
         filename = _workspace_filename(params["filename"])
         content = params["content"]
         if not isinstance(content, str):
@@ -358,7 +383,7 @@ class PyGdbServer:
             raise ValueError("content must be valid base64") from error
         if len(data) > 5 * 1024 * 1024:
             raise ValueError("upload size must not exceed 5 MiB")
-        directory = self._workspace_directory(params)
+        directory = self.workspace
         destination = directory / filename
         with NamedTemporaryFile(dir=directory, delete=False) as temporary:
             temporary_path = Path(temporary.name)
@@ -371,6 +396,8 @@ class PyGdbServer:
         return {"path": str(destination), "size": len(data)}
 
     def _download_file(self, params: dict[str, Any]) -> dict[str, Any]:
+        if "directory" in params:
+            raise ValueError("downloads are restricted to the server workspace")
         filename = _workspace_filename(params.get("filename"))
         offset = params.get("offset")
         chunk_size = params.get("chunk_size")
@@ -383,10 +410,7 @@ class PyGdbServer:
         ):
             raise ValueError(f"chunk_size must be between 1 and {_WORKSPACE_DOWNLOAD_CHUNK_SIZE}")
 
-        directory = self._workspace_directory(params)
-        if not directory.is_relative_to(self.workspace):
-            raise ValueError("download directory must be within the server workspace")
-        path = (directory / filename).resolve()
+        path = (self.workspace / filename).resolve()
         if not path.is_relative_to(self.workspace):
             raise ValueError("download file must be within the server workspace")
         if not path.is_file():

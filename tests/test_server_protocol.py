@@ -216,7 +216,7 @@ def test_memmap_execution_rpcs_are_not_special_cases(tmp_path: Path) -> None:
 
 
 def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
-    """Binary uploads and default, relative, and absolute listings bypass MI."""
+    """Binary uploads, workspace listings, and chunked downloads bypass MI."""
     server, fake_mi = _server(tmp_path)
     directory = tmp_path / "remote files"
     directory.mkdir()
@@ -231,42 +231,37 @@ def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
         return response["result"]
 
     async def exercise() -> None:
-        for destination in (None, "remote files", str(directory)):
-            params = {"filename": "firmware.bin", "content": base64.b64encode(content).decode()}
-            if destination is not None:
-                params["directory"] = destination
-            result = await request("workspace.upload", params)
-            assert Path(result["path"]).read_bytes() == content
-            assert result["size"] == len(content)
+        params = {"filename": "firmware.bin", "content": base64.b64encode(content).decode()}
+        result = await request("workspace.upload", params)
+        assert Path(result["path"]) == tmp_path / "firmware.bin"
+        assert Path(result["path"]).read_bytes() == content
+        assert result["size"] == len(content)
+        boundary_name = "f" * 128
+        result = await request(
+            "workspace.upload",
+            {"filename": boundary_name, "content": base64.b64encode(content).decode()},
+        )
+        assert Path(result["path"]) == tmp_path / boundary_name
         default = await request("workspace.list", {})
         assert default["path"] == str(tmp_path)
+        assert {"name": "firmware.bin", "is_directory": False} in default["entries"]
         assert {"name": "remote files", "is_directory": True} in default["entries"]
-        for destination in ("remote files", str(directory)):
-            listing = await request("workspace.list", {"directory": destination})
-            assert listing == {
-                "path": str(directory),
-                "entries": [{"name": "firmware.bin", "is_directory": False}],
-            }
+        listing = await request("workspace.list", {"directory": "remote files"})
+        assert listing == {"path": str(directory), "entries": []}
         await request("workspace.upload", {"filename": "empty", "content": ""})
         assert (tmp_path / "empty").read_bytes() == b""
         await request("workspace.upload", {"filename": "firmware.bin", "content": ""})
         assert (tmp_path / "firmware.bin").read_bytes() == b""
         dump = bytes(range(256)) * 5_000
-        (directory / "dump.bin").write_bytes(dump)
+        (tmp_path / "dump.bin").write_bytes(dump)
         first_chunk = await request(
             "workspace.download",
-            {
-                "filename": "dump.bin",
-                "directory": "remote files",
-                "offset": 0,
-                "chunk_size": 1024 * 1024,
-            },
+            {"filename": "dump.bin", "offset": 0, "chunk_size": 1024 * 1024},
         )
         second_chunk = await request(
             "workspace.download",
             {
                 "filename": "dump.bin",
-                "directory": "remote files",
                 "offset": len(base64.b64decode(first_chunk["content"])),
                 "chunk_size": 1024 * 1024,
             },
@@ -289,16 +284,34 @@ def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
     "method, params, code",
     [
         ("workspace.upload", {"filename": "../escape", "content": ""}, -32602),
+        ("workspace.upload", {"filename": "nested/escape", "content": ""}, -32602),
+        ("workspace.upload", {"filename": "nested\\escape", "content": ""}, -32602),
         ("workspace.upload", {"filename": ".", "content": ""}, -32602),
+        ("workspace.upload", {"filename": "f" * 129, "content": ""}, -32602),
         ("workspace.upload", {"filename": "file", "content": "!"}, -32602),
         ("workspace.upload", {"filename": "file", "content": 42}, -32602),
         ("workspace.upload", {"filename": "file"}, -32602),
         ("workspace.list", {"directory": 42}, -32602),
         ("workspace.list", {"directory": "missing"}, -32000),
-        ("workspace.upload", {"filename": "file", "content": "", "directory": "missing"}, -32000),
+        ("workspace.upload", {"filename": "file", "content": "", "directory": "."}, -32602),
+        (
+            "workspace.download",
+            {"filename": "file", "directory": ".", "offset": 0, "chunk_size": 1024},
+            -32602,
+        ),
         (
             "workspace.download",
             {"filename": "../outside", "offset": 0, "chunk_size": 1024},
+            -32602,
+        ),
+        (
+            "workspace.download",
+            {"filename": "nested/file", "offset": 0, "chunk_size": 1024},
+            -32602,
+        ),
+        (
+            "workspace.download",
+            {"filename": "f" * 129, "offset": 0, "chunk_size": 1024},
             -32602,
         ),
         (
@@ -358,10 +371,13 @@ def test_workspace_upload_size_limit(tmp_path: Path) -> None:
     assert fake_mi.calls == []
 
 
-def test_workspace_download_rejects_directories_outside_the_workspace(tmp_path: Path) -> None:
-    """Downloads cannot be used to read arbitrary server filesystem paths."""
+def test_workspace_download_rejects_files_resolving_outside_the_workspace(tmp_path: Path) -> None:
+    """Downloads cannot follow symbolic links out of the server workspace."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    secret = tmp_path / "secret.bin"
+    secret.write_bytes(b"secret")
+    (workspace / "link.bin").symlink_to(secret)
     server, _ = _server(workspace)
     response, _ = asyncio.run(
         server.handle_rpc_message(
@@ -371,8 +387,7 @@ def test_workspace_download_rejects_directories_outside_the_workspace(tmp_path: 
                     "id": 1,
                     "method": "workspace.download",
                     "params": {
-                        "filename": "outside.bin",
-                        "directory": str(tmp_path),
+                        "filename": "link.bin",
                         "offset": 0,
                         "chunk_size": 1024,
                     },
@@ -414,6 +429,7 @@ def test_client_workspace_commands_over_websocket_do_not_call_gdb(tmp_path: Path
                 await app.execute_command("ls")
                 app._append_output.assert_any_call(f"  {source.name}")
                 await app.execute_command(f'upload "{source}" "{remote_directory}"')
+                assert app._append_output.call_args.kwargs == {"error": True}
                 await app.execute_command(f'ls "{remote_directory}"')
                 await app.execute_command("ls missing")
                 assert app._append_output.call_args.kwargs == {"error": True}

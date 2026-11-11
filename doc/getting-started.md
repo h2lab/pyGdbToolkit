@@ -56,12 +56,14 @@ Enter `lscpu` in the client prompt to inspect the processor. Use `gdb info
 registers` for a native GDB command and `monitor help` for OCD commands. Enter
 `quit` to close only the client; `quit --all` also stops the supervised session.
 
-Use `upload FILE [DIR]` and `download FILE [DIR]` in the dashboard to transfer
-files between the client and server. Uploads go to the server workspace by
-default; downloads read from that workspace and save to the client's current
-directory by default. For example, after creating `memory.bin` on the server
-with GDB, enter `download memory.bin ./dumps`. Paths containing spaces can be
-quoted. Downloads use bounded chunks and can transfer files larger than the
+Use `upload FILE` and `download FILE [DIR]` in the dashboard to transfer
+files between the client and server. Transfers are confined to the server
+workspace: uploads install the file there, and downloads read from it and
+save to the client's current directory by default. Server-side names are
+plain file names of at most 128 characters, without directory components.
+For example, after creating `memory.bin` on the server with GDB, enter
+`download memory.bin ./dumps`. Local paths containing spaces can be quoted.
+Downloads use bounded chunks and can transfer files larger than the
 upload limit.
 
 ![Terminal dashboard](pygdbclient.png)

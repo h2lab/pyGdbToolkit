@@ -325,23 +325,38 @@ Runs a raw MI command, which must start with `-`.
 
 ### `workspace.upload`
 
-Installs a file in an existing server directory, independently of GDB and OCD.
-`filename` is a basename without directory components; `content` is strict
-base64-encoded binary data, limited to 5 MiB before encoding. Optional
-`directory` defaults to the server workspace: the working directory captured
-when the server is created. Relative directories are resolved from that
-workspace; absolute paths such as `/tmp` are also accepted. Existing files
-are replaced atomically. The destination directory must already exist.
+Installs a file in the server workspace: the working directory captured when
+the server is created. `filename` is a plain file name of at most 128
+characters, without directory separators or components (`.` and `..` are
+rejected); `content` is strict base64-encoded binary data, limited to 5 MiB
+before encoding. A `directory` parameter is rejected: uploads cannot target
+any other server directory. Existing files are replaced atomically. This
+method is independent of GDB and OCD.
 
 ```json
-{"jsonrpc":"2.0","id":12,"method":"workspace.upload","params":{"filename":"example.txt","content":"aGVsbG8K","directory":"/tmp"}}
-{"jsonrpc":"2.0","id":12,"result":{"path":"/tmp/example.txt","size":6}}
+{"jsonrpc":"2.0","id":12,"method":"workspace.upload","params":{"filename":"example.txt","content":"aGVsbG8K"}}
+{"jsonrpc":"2.0","id":12,"result":{"path":"/workspace/example.txt","size":6}}
+```
+
+### `workspace.download`
+
+Reads a file from the server workspace in bounded chunks. `filename` follows
+the same rules as uploads: a plain file name of at most 128 characters,
+without directory separators or components. A `directory` parameter is
+rejected, and files resolving outside the workspace (for example through a
+symbolic link) are refused. `offset` is a non-negative byte offset and
+`chunk_size` is limited to 1 MiB; the result reports the total file `size`
+and the base64-encoded chunk `content`.
+
+```json
+{"jsonrpc":"2.0","id":14,"method":"workspace.download","params":{"filename":"example.txt","offset":0,"chunk_size":1048576}}
+{"jsonrpc":"2.0","id":14,"result":{"filename":"example.txt","offset":0,"size":6,"content":"aGVsbG8K"}}
 ```
 
 ### `workspace.list`
 
-Lists the server workspace by default, or an existing `directory` using the
-same path rules as uploads. Entries are sorted by name and identify directories.
+Lists the server workspace by default, or an existing `directory` resolved
+from that workspace. Entries are sorted by name and identify directories.
 This method does not send any GDB or OCD command.
 
 ```json
@@ -349,8 +364,9 @@ This method does not send any GDB or OCD command.
 {"jsonrpc":"2.0","id":13,"result":{"path":"/tmp","entries":[{"name":"example.txt","is_directory":false}]}}
 ```
 
-These methods use the server process's filesystem permissions. They are not
-restricted to the workspace, so expose the API only to trusted clients.
+File transfers are confined to the server workspace, but these methods still
+use the server process's filesystem permissions: expose the API only to
+trusted clients.
 
 ### `server.status`
 
@@ -582,17 +598,22 @@ The command prompt retains the last 40 submitted commands. Use `Up` and `Down`
 to browse them; enter `history` to list the retained commands in the output
 panel. This history is local to the client session.
 
-Enter `upload <file> [dir]` to copy a local file to the server, preserving its
-basename. Without `dir`, it is installed in the server workspace; with `dir`,
-it is installed in that server directory. Uploads support binary files up to
-5 MiB and replace existing files. Enter `ls [dir]` to display the workspace or
-the specified server directory; directory names are shown with a trailing `/`.
-Quote paths containing spaces. Neither command interacts with GDB or OCD;
-the dashboard's existing periodic target-status polling remains unchanged.
+Enter `upload <file>` to copy a local file into the server workspace,
+preserving its basename. The local path is unrestricted, but the resulting
+server-side name must be a plain file name of at most 128 characters without
+directory separators; uploads cannot target any other server directory.
+Uploads support binary files up to 5 MiB and replace existing files. Enter
+`download <server-file> [local-dir]` to copy a workspace file to a local
+directory; the server-side name follows the same rules. Enter `ls [dir]` to
+display the workspace or the specified server directory; directory names are
+shown with a trailing `/`. Quote paths containing spaces. None of these
+commands interacts with GDB or OCD; the dashboard's existing periodic
+target-status polling remains unchanged.
 
 ```console
 upload firmware.elf
-upload "local files/device.svd" /tmp
+upload "local files/device.svd"
+download memory.bin ./dumps
 ls
 ls /tmp
 ```

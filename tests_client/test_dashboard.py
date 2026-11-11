@@ -312,7 +312,7 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     for expected in (
         "help",
         "history",
-        "upload FILE [DIR]",
+        "upload FILE",
         "ls [DIR]",
         "quit --all",
         "lscpu",
@@ -331,29 +331,23 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     assert "not connected" in openocd_help
 
 
-@pytest.mark.parametrize("directory", [None, "/tmp", "remote directory"])
-def test_client_upload_uses_a_dedicated_rpc(tmp_path: Path, directory: str | None) -> None:
-    """Quoted local and remote paths transfer binary data without any GDB RPC."""
+def test_client_upload_uses_a_dedicated_rpc(tmp_path: Path) -> None:
+    """Quoted local paths transfer binary data to the workspace without any GDB RPC."""
     source = tmp_path / "firmware image.bin"
     content = b"\x00\xffbinary\n"
     source.write_bytes(content)
     app = PyGdbClientApp("ws://127.0.0.1:1234")
     app._connected = True
     app.client.request = AsyncMock(
-        return_value={"path": "/tmp/firmware image.bin", "size": len(content)}
+        return_value={"path": "/workspace/firmware image.bin", "size": len(content)}
     )
     app._append_output = Mock()
-    command = f'upload "{source}"'
-    if directory is not None:
-        command += f' "{directory}"'
 
-    asyncio.run(app.execute_command(command))
+    asyncio.run(app.execute_command(f'upload "{source}"'))
 
     params = {"filename": source.name, "content": base64.b64encode(content).decode("ascii")}
-    if directory is not None:
-        params["directory"] = directory
     app.client.request.assert_awaited_once_with("workspace.upload", params, timeout=300)
-    app._append_output.assert_called_with("Uploaded /tmp/firmware image.bin (9 bytes)")
+    app._append_output.assert_called_with("Uploaded /workspace/firmware image.bin (9 bytes)")
 
 
 @pytest.mark.parametrize(
@@ -387,9 +381,15 @@ def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) ->
     [
         "download",
         "download a b c",
+        "download sub/dump.bin",
+        "download ../dump.bin",
+        "download ..",
+        f'download "{"f" * 129}"',
         "upload",
+        "upload a b",
         "upload a b c",
         "upload /nonexistent/file",
+        f'upload "/tmp/{"f" * 129}"',
         "ls a b",
         'ls "unfinished',
     ],
