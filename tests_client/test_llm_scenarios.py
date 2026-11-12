@@ -18,6 +18,7 @@ import pytest
 
 from pyGdbClient.llm.contracts import (
     ContextFact,
+    JsonObject,
     MemoryMapContext,
     MemoryRegion,
     TargetContext,
@@ -95,9 +96,13 @@ class RecordingProvider(ScriptedProvider):
         self.sessions: list[ScriptedSession] = []
 
     async def open_session(
-        self, session_id: str, context: TargetContext, tools: tuple[ToolDefinition, ...]
+        self,
+        session_id: str,
+        context: TargetContext,
+        tools: tuple[ToolDefinition, ...],
+        audit: JsonObject | None = None,
     ) -> LlmSession:
-        session = await super().open_session(session_id, context, tools)
+        session = await super().open_session(session_id, context, tools, audit)
         assert isinstance(session, ScriptedSession)
         self.sessions.append(session)
         return session

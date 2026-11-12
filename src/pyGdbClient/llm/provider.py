@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Literal, Protocol, runtime_checkable
 
-from .contracts import TargetContext, ToolCall, ToolDefinition, ToolResult
+from .contracts import JsonObject, TargetContext, ToolCall, ToolDefinition, ToolResult
 
 
 class AuthenticationState(StrEnum):
@@ -161,6 +161,11 @@ class LlmProvider(Protocol):
         session_id: str,
         context: TargetContext,
         tools: tuple[ToolDefinition, ...],
+        audit: JsonObject | None = None,
     ) -> LlmSession:
-        """Open an isolated conversation with explicit context and tool schemas."""
+        """Open an isolated conversation with explicit context and tool schemas.
+
+        ``audit`` is the disclosed audit context document, already masked, that
+        complements the target snapshot when the application maintains one.
+        """
         ...

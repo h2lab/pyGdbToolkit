@@ -121,6 +121,38 @@ RPC. Collection is split in three layers:
 
 Memory regions keep their optional `name` and `protection` metadata.
 
+## Audit context
+
+`pyGdbClient.audit` complements the policy-bound target snapshot with what an
+auditor, or an LLM backend assisting one, needs to know about the analysis.
+`AuditContextManager` keeps the project loaded by the dashboard
+[`project` command](rtos.md#projects-on-a-remote-client), which only the
+client knows, and `refresh(client)` gathers the rest concurrently from
+pyGdbServer's read-only status methods. `AuditContext` schema version 1
+contains:
+
+| Part | Source | Content |
+| ---- | ------ | ------- |
+| `project` | client | RTOS type, `local_root` (auditor workstation), `server_path`, load time, declared name, version and components (origin, revision, configuration, source tree, ELF files) and every transferred artifact with its size and SHA-256 digest. |
+| `rtos` | `rtos.status` | Selected RTOS, loaded project and task slots. |
+| `execution` | `target.status` | Execution state, thread, core and access ports. |
+| `cores` | `target.cores` | Discovered CPU cores. |
+| `svd` | `svd.peripherals` | Device name and peripheral base addresses with register counts, bounded to 1024 peripherals (`truncated` reports the excess). |
+| `server` | `server.status` | OCD and GDB processes and the server log file. |
+
+Each server part records its source method. A part that cannot be obtained
+(RPC error, disconnection, timeout, malformed answer, no SVD loaded, no project
+loaded) carries an `unavailable_reason` instead of data, never a default value.
+Component source trees missing from the local workstation are recorded as
+`null`. The dashboard `audit [FILE]` command refreshes and summarizes the
+context and, with `FILE`, writes its JSON document to that local file.
+
+When the agent is enabled, each new conversation receives a fresh audit
+context, [masked](#masking-before-disclosure) like the target snapshot, in its
+system instructions as data, not instructions. It is counted in the context
+usage but not journaled in the store. After loading another project during a
+conversation, use `/new` so the agent receives it.
+
 ## Conversation persistence
 
 `pyGdbClient.llm.store.ContextStore` is a synchronous, provider-independent
@@ -558,8 +590,11 @@ replayed as authorization.
 1. `provider_id`: a stable implementation identifier.
 2. `status()`: readiness, authentication state, and sanitized guidance. It must
    not initiate authentication or return credentials.
-3. `open_session(session_id, context, tools)`: an isolated conversation given
-   an application-owned ID, an explicit context snapshot, and tool schemas.
+3. `open_session(session_id, context, tools, audit=None)`: an isolated
+   conversation given an application-owned ID, an explicit context snapshot,
+   tool schemas and, optionally, the already masked
+   [audit context](#audit-context) document, which built-in providers append
+   to their system instructions.
 
 `LlmSession.stream()` accepts either a `UserPrompt` or correlated `ToolResults`.
 It yields ordered `TextDelta` and complete `ToolCallProposed` events, followed
@@ -952,8 +987,9 @@ of Textual, so other front ends can reuse it. Opening a session:
 1. checks the provider status; a provider that is unavailable, or whose
    authentication is `required` or `expired`, is reported with its guidance
    before any target access;
-2. reads a fresh [`target.context`](#target-context) snapshot;
-3. opens a provider conversation with that snapshot, after
+2. reads a fresh [`target.context`](#target-context) snapshot and, in the
+   dashboard, a fresh [audit context](#audit-context);
+3. opens a provider conversation with that snapshot and audit context, after
    [masking](#long-context-and-confidentiality), and the
    [tool catalogue](#tool-catalogue-and-rpc-gateway) definitions;
 4. registers the session, with the unmasked snapshot, in the store;
@@ -963,7 +999,8 @@ of Textual, so other front ends can reuse it. Opening a session:
 
 The console then lists the facts transmitted to the provider: MCU, revision,
 architecture, debug transport (JTAG or SWD), OCD, core, SVD file and memory
-map regions, each with its source or unavailability reason, followed by the
+map regions, each with its source or unavailability reason, then the audit
+context summary, followed by the
 number of masked values and, for a continuation, the recollection size. If any
 step fails after the provider conversation was opened, that conversation is
 closed.
@@ -1009,6 +1046,7 @@ the explicit [test-data analysis mode](#test-data-analysis-mode) below.
 `pyGdbClient.llm.confidentiality.Redactor` replaces every match of its rules
 with `[REDACTED:<rule>]` in everything the provider receives: the session
 snapshot (descriptive strings only; context identifier and addresses are kept),
+the audit context (every string value; keys, numbers and structure are kept),
 auditor prompts, recollections and tool observations. JSON observations keep
 their structure; only string values are masked. The console and the store keep
 the unmasked data, and each masking is reported by a notice such as
