@@ -19,14 +19,17 @@ from copilot.generated.rpc import ServerRpc
 from copilot.session_events import SessionEvent
 import pytest
 
+from pyGdbClient.audit import AuditContextManager
 from pyGdbClient.llm import copilot as adapter
 from pyGdbClient.llm.approval import ApprovalRequest, ApprovalResponse
-from pyGdbClient.llm.contracts import ToolCall, ToolDefinition, ToolResult
+from pyGdbClient.llm.contracts import JsonObject, ToolCall, ToolDefinition, ToolResult
+from pyGdbClient.llm.controller import AgentController, AgentSettings
 from pyGdbClient.llm.copilot import CopilotConfig, CopilotProvider, RUNTIME_VERSION
 from pyGdbClient.llm.gateway import ToolGateway
-from pyGdbClient.llm.orchestrator import AgentOrchestrator
+from pyGdbClient.llm.orchestrator import AgentNotice, AgentOrchestrator, AgentPlan, AgentToolResults
 from pyGdbClient.llm.policy import ProtectionPolicy
 from pyGdbClient.llm.store import ContextStore
+from pyGdbClient.llm.tools import ToolCatalogue
 from pyGdbClient.llm.provider import (
     AuthenticationState,
     ProviderCancelledError,
@@ -43,6 +46,7 @@ from pyGdbClient.llm.provider import (
 from test_llm_contracts import _context
 from pyGdbClient.rpc import JsonRpcClient
 from rpc_fakes import FakeRpcServer
+from test_audit import _loaded, _responses
 
 _SECRET = "do-not-disclose-token-or-provider-response"
 _TOOLS = (
@@ -797,6 +801,270 @@ def test_copilot_actions_can_only_reach_rpc_through_gateway_approval(
             finally:
                 await client.close()
         await provider.close()
+
+    asyncio.run(exercise())
+
+
+def _catalogue_batch(runtime: Runtime, *calls: ToolCall) -> list[tuple[str, dict[str, Any]]]:
+    names = [tool.name for tool in ToolCatalogue().definitions(include_sources=True)]
+    batch = runtime.tools(len(calls))
+    for index, call in enumerate(calls):
+        name = f"pygdb_{names.index(call.name)}"
+        proposal = batch[0][1]["toolRequests"][index]
+        proposal.update(toolCallId=call.call_id, name=name, arguments=call.arguments)
+        batch[index + 1][1].update(toolCallId=call.call_id, toolName=name, arguments=call.arguments)
+    return batch
+
+
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("read", {"path": "main.c"}),
+        ("glob", {"path": ".", "pattern": "**/*.c"}),
+        ("grep", {"path": ".", "pattern": "answer", "glob": "**/*.c"}),
+    ],
+)
+def test_copilot_project_tools_use_gateway_and_mask_results(
+    runtime: Runtime, tmp_path: Path, name: str, arguments: JsonObject
+) -> None:
+    secret = "synthetic-source-credential"
+    (tmp_path / "main.c").write_text(f"int answer = 42; // password={secret}\n", encoding="utf-8")
+
+    async def exercise() -> None:
+        manager = AuditContextManager()
+        manager.set_project(_loaded(tmp_path))
+        provider = CopilotProvider(runtime.config)
+        runtime.turns = [
+            _catalogue_batch(runtime, ToolCall("source", name, arguments)),
+            _answer(),
+        ]
+        events = []
+        approvals = []
+
+        async def approve(request: ApprovalRequest) -> ApprovalResponse:
+            approvals.append(request)
+            return request.respond(approved=False)
+
+        async with FakeRpcServer(_responses() | {"target.context": asdict(_context())}) as server:
+            client = JsonRpcClient(server.url)
+            await client.connect()
+            controller = AgentController(
+                AgentSettings(provider, copilot_allow_project_sources=True),
+                client,
+                approver=approve,
+                sink=events.append,
+                audit=manager,
+            )
+            try:
+                outcome = await controller.submit("Inspect the synthetic project")
+                assert outcome.reason == "completed" and outcome.tool_calls == 1
+                assert approvals == []
+                assert not any(method.startswith("local.source") for method in server.methods)
+                create = runtime.params("session.create")[0]
+                assert str(tmp_path) in create["systemMessage"]["content"]
+                tools = create["tools"]
+                assert len(tools) == len(ToolCatalogue().definitions(include_sources=True))
+                assert create["availableTools"] == [tool["name"] for tool in tools]
+                assert create["enableFileHooks"] is False
+                assert create["enableHostGitOperations"] is False
+                assert runtime.directory is not None
+                assert Path(runtime.directory) != tmp_path
+                feedback = runtime.params("session.tools.handlePendingToolCall")
+                assert len(feedback) == 1
+                assert feedback[0]["result"]["resultType"] == "success"
+                content = feedback[0]["result"]["textResultForLlm"]
+                document = json.loads(content)
+                assert document["truncated"] is False
+                result = document["result"]
+                assert result["truncated"] is False
+                masked_line = "int answer = 42; // [REDACTED:credential-assignment]"
+                if name == "read":
+                    assert result["content"] == f"1: {masked_line}"
+                elif name == "grep":
+                    assert result["matches"] == [{"path": "main.c", "line": 1, "text": masked_line}]
+                else:
+                    assert result["matches"] == [{"path": "main.c"}]
+                assert secret not in content
+                if name != "glob":
+                    assert "[REDACTED:credential-assignment]" in content
+                    assert any(
+                        secret in result.content
+                        for event in events
+                        if isinstance(event, AgentToolResults)
+                        for result in event.results
+                    )
+                assert any(
+                    isinstance(event, AgentNotice) and "sent to GitHub Copilot" in event.message
+                    for event in events
+                )
+            finally:
+                await controller.close()
+                await client.close()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("consent,loaded", [(False, True), (True, False), (False, False)])
+@pytest.mark.parametrize("unsolicited_source_call", [False, True])
+def test_copilot_does_not_expose_source_tools_without_consent_and_project(
+    runtime: Runtime,
+    tmp_path: Path,
+    consent: bool,
+    loaded: bool,
+    unsolicited_source_call: bool,
+) -> None:
+    async def exercise() -> None:
+        manager = AuditContextManager()
+        if loaded:
+            manager.set_project(_loaded(tmp_path))
+        runtime.turns = (
+            [_catalogue_batch(runtime, ToolCall("source", "read", {"path": "main.c"}))]
+            if unsolicited_source_call
+            else [_answer()]
+        )
+        provider = CopilotProvider(runtime.config)
+        events = []
+
+        async def approve(request: ApprovalRequest) -> ApprovalResponse:
+            raise AssertionError("no target operations were requested")
+
+        async with FakeRpcServer(_responses() | {"target.context": asdict(_context())}) as server:
+            client = JsonRpcClient(server.url)
+            await client.connect()
+            controller = AgentController(
+                AgentSettings(provider, copilot_allow_project_sources=consent, test_data=True),
+                client,
+                approver=approve,
+                sink=events.append,
+                audit=manager,
+            )
+            try:
+                outcome = await controller.submit("Explain the available context")
+                assert outcome.reason == (
+                    "provider_error" if unsolicited_source_call else "completed"
+                )
+                assert not runtime.params("session.tools.handlePendingToolCall")
+                assert not any(isinstance(event, AgentToolResults) for event in events)
+                create = runtime.params("session.create")[0]
+                assert len(create["tools"]) == len(ToolCatalogue().definitions())
+                if loaded:
+                    assert any(
+                        isinstance(event, AgentNotice)
+                        and "--copilot-allow-project-sources" in event.message
+                        for event in events
+                    )
+            finally:
+                await controller.close()
+                await client.close()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("case", ["traversal", "symlink", "project-change"])
+def test_copilot_source_refusals_are_returned_as_tool_failures(
+    runtime: Runtime, tmp_path: Path, case: str
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "main.c").write_text("int answer = 42;\n", encoding="utf-8")
+    (tmp_path / "outside").write_text("not authorized", encoding="utf-8")
+    (root / "link").symlink_to(tmp_path / "outside")
+    path = "../outside" if case == "traversal" else "link" if case == "symlink" else "main.c"
+
+    async def exercise() -> None:
+        manager = AuditContextManager()
+        manager.set_project(_loaded(root))
+        runtime.turns = [
+            _catalogue_batch(runtime, ToolCall("source", "read", {"path": path})),
+            _answer(),
+        ]
+
+        def sink(event: object) -> None:
+            if case == "project-change" and isinstance(event, AgentPlan):
+                manager.clear_project()
+
+        async def approve(request: ApprovalRequest) -> ApprovalResponse:
+            raise AssertionError("source-only plans must not ask for target approval")
+
+        provider = CopilotProvider(runtime.config)
+        async with FakeRpcServer(_responses() | {"target.context": asdict(_context())}) as server:
+            client = JsonRpcClient(server.url)
+            await client.connect()
+            controller = AgentController(
+                AgentSettings(provider, copilot_allow_project_sources=True),
+                client,
+                approver=approve,
+                sink=sink,
+                audit=manager,
+            )
+            try:
+                assert (await controller.submit("Read the requested source")).reason == "completed"
+                feedback = runtime.params("session.tools.handlePendingToolCall")[0]["result"]
+                assert feedback["resultType"] == "failure"
+                assert "not authorized" not in feedback["textResultForLlm"]
+                if case == "project-change":
+                    assert "loaded project changed" in feedback["textResultForLlm"]
+            finally:
+                await controller.close()
+                await client.close()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_copilot_source_and_target_plan_still_requires_whole_plan_approval(
+    runtime: Runtime, tmp_path: Path, approved: bool
+) -> None:
+    (tmp_path / "main.c").write_text("int answer = 42;\n", encoding="utf-8")
+
+    async def exercise() -> None:
+        manager = AuditContextManager()
+        manager.set_project(_loaded(tmp_path))
+        provider = CopilotProvider(runtime.config)
+        runtime.turns = [
+            _catalogue_batch(
+                runtime,
+                ToolCall("source", "read", {"path": "main.c"}),
+                ToolCall("target", "memory_read", {"address": 0x20000000, "length": 4}),
+            ),
+            _answer(),
+        ]
+        responses = _responses() | {
+            "target.context": asdict(_context()),
+            "mi.execute": {"class": "done", "record": "done", "output": ["observed"]},
+        }
+        approvals = []
+
+        async def approve(request: ApprovalRequest) -> ApprovalResponse:
+            approvals.append(request)
+            assert not runtime.params("session.tools.handlePendingToolCall")
+            return request.respond(approved=approved)
+
+        async with FakeRpcServer(responses) as server:
+            client = JsonRpcClient(server.url)
+            await client.connect()
+            controller = AgentController(
+                AgentSettings(provider, copilot_allow_project_sources=True),
+                client,
+                approver=approve,
+                sink=lambda event: None,
+                audit=manager,
+            )
+            try:
+                outcome = await controller.submit("Compare source and target")
+                assert outcome.reason == "completed"
+                assert len(approvals) == 1
+                assert ("mi.execute" in server.methods) is approved
+                feedback = runtime.params("session.tools.handlePendingToolCall")
+                assert len(feedback) == 2
+                assert all(
+                    result["result"]["resultType"] == ("success" if approved else "failure")
+                    for result in feedback
+                )
+                assert ("int answer = 42;" in str(feedback)) is approved
+            finally:
+                await controller.close()
+                await client.close()
 
     asyncio.run(exercise())
 

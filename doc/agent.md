@@ -61,8 +61,8 @@ reference are in [LLM integration](llm.md).
    Instead of an environment variable, use `--opencode-password-file FILE`
    to read the password from a protected local file; do not specify both.
 
-4. To let OpenCode inspect local project sources, load a project in the
-   **command** prompt, for example:
+4. To let OpenCode or Copilot inspect local project sources, load a project in
+   the **command** prompt, for example:
 
    ```text
    project /absolute/path/to/sample-project camelot
@@ -70,8 +70,12 @@ reference are in [LLM integration](llm.md).
 
    If an agent session is already open, enter `/new` in the agent prompt.
    The local `read`, `glob` and `grep` tools can then share bounded source
-   observations with OpenCode without another approval. Only load a project
-   whose non-hidden contents may be disclosed to OpenCode and its model.
+   observations without another approval. For **Copilot**, source tools are
+   disabled by default: restart the client with
+   `--copilot-allow-project-sources` in addition to `--llm github-copilot`
+   to explicitly authorize source disclosure to GitHub Copilot.
+   Only enable source tools for projects whose non-hidden contents may be
+   disclosed to the selected backend and its model.
    See [local project source access](llm.md#local-project-source-access)
    for path restrictions, limits and confidentiality caveats.
 
@@ -122,7 +126,7 @@ audit
 audit "audit context.json"
 ```
 
-The project path refers to the **client workstation**. OpenCode need not have
+The project path refers to the **client workstation**. The backend need not have
 access to that directory. Loading the project records its context; it does not
 send every source file to the model. The first agent request opens a conversation
 with the current project and target context. If a conversation was already open,
@@ -130,13 +134,29 @@ enter `/new` in the **agent prompt** after loading or changing the project.
 Running `audit` displays fresh information but does not update an existing
 agent conversation.
 
-## Reading project sources with OpenCode
+## Reading project sources
 
-With `--llm opencode` and a project loaded before the agent session opens,
-the model is offered three source tools. These are **not dashboard commands**
-or OpenCode's native filesystem tools: ask for them in natural language in
+With `--llm opencode`, or with `--llm github-copilot --copilot-allow-project-sources`,
+and a project loaded before the agent session
+opens, the model is offered three source tools. These are **not dashboard commands**
+or the backend's native filesystem tools: ask for them in natural language in
 the **agent prompt**, and pyGdbClient validates and executes the proposed calls.
 Paths are relative to the loaded project root; `.` denotes that root.
+
+For Copilot, launch with explicit consent to disclose source results:
+
+```console
+pyGdbClient ws://localhost:1235 --llm github-copilot \
+    --copilot-runtime /absolute/path/to/copilot-runtime \
+    --copilot-allow-project-sources
+```
+
+Then run `project /absolute/path/to/sample-project camelot` in the command
+prompt and request source analysis in the agent prompt. Use `/new` if a
+conversation was already open. Without the flag, Copilot still receives the
+project/target audit context and can propose target tools, but cannot use the
+source tools. `--llm-test-data` does **not** enable source access; it disables
+masking and is not appropriate for confidential sources.
 
 | Tool | Arguments and result |
 | ---- | -------------------- |
@@ -173,8 +193,8 @@ files in `skipped_non_text_or_large`. See
 
 - **No write capability in the source tools.** `read`, `glob` and `grep` cannot
   edit or delete files, run a shell, build the project, or change Git history.
-  OpenCode's native tools remain disabled for this integration; the model gets
-  tool definitions and observations, not a local filesystem handle.
+  OpenCode's and Copilot's native tools remain disabled for this integration;
+  the model gets tool definitions and observations, not a local filesystem handle.
 - **Restricted paths.** The client refuses absolute paths, `..` traversal and
   hidden path components, including `.git` and `.env`. It does not follow
   symbolic links or read special files such as devices or named pipes.
@@ -197,9 +217,11 @@ these path checks.
 
 All non-hidden regular files under the project root are potentially readable,
 not just tracked files or declared source directories. Git ignore rules are
-**not** an access policy. Do not load a tree containing data that OpenCode and
-its selected model must not receive. Results are masked on a best-effort basis
-before disclosure, but that cannot guarantee secret removal. The local
+**not** an access policy. Do not enable source access to a tree containing data
+that the selected backend and its model must not receive. In particular,
+GitHub Copilot is an **external service**: enabling the flag authorizes
+automatic source-result disclosure, not just local reading. Results are masked
+on a best-effort basis before disclosure, but that cannot guarantee secret removal. The local
 conversation store retains unmasked observations. Source text can also contain
 prompt-injection instructions; it remains untrusted data and grants no
 authorization. This is controlled read-only access, **not an OS sandbox or a
@@ -211,8 +233,9 @@ Each model turn proposes a plan: one or more calls executed as a single chain.
 The policy classifies the whole plan:
 
 - **allowed**: metadata reads such as `svd_peripherals` or `target_status` run
-  immediately; OpenCode project-source reads also run immediately when a
-  project was loaded before the agent session;
+  immediately; enabled project-source reads also run immediately when a
+  project was loaded before the agent session (Copilot requires the explicit
+  source-disclosure flag);
 - **approval required**: memory and register reads, core selection, and
   commands whose effects cannot be proven (`gdb_command`, `ocd_command`,
   `toolkit_command`, `mi_command`) open an approval dialog;

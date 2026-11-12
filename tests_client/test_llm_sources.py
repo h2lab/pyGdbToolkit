@@ -20,6 +20,7 @@ from pyGdbClient.llm.contracts import ActionPlan, PlannedAction, PolicyOutcome, 
 from pyGdbClient.llm.controller import AgentController, AgentSettings
 from pyGdbClient.llm.gateway import ToolGateway
 from pyGdbClient.llm.policy import ProtectionPolicy
+from pyGdbClient.llm.scripted import ScriptedProvider
 from pyGdbClient.llm.sources import MAX_FILE_BYTES, SourceBrowser, SourceError
 from pyGdbClient.llm.tools import ToolCatalogue, ToolValidationError
 from pyGdbClient.rpc import JsonRpcClient
@@ -110,6 +111,13 @@ def test_source_tools_are_advertised_only_when_requested() -> None:
     normal = {definition.name for definition in catalogue.definitions()}
     with_sources = {definition.name for definition in catalogue.definitions(include_sources=True)}
     assert with_sources - normal == {"read", "glob", "grep"}
+
+
+def test_source_consent_settings_cannot_enable_unrelated_providers() -> None:
+    with pytest.raises(ValueError, match="requires the github-copilot provider"):
+        AgentSettings(ScriptedProvider(()), copilot_allow_project_sources=True)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        AgentSettings(ScriptedProvider(()), copilot_allow_project_sources=1)
 
 
 def test_source_policy_still_applies_denials_and_mixed_plan_approvals() -> None:

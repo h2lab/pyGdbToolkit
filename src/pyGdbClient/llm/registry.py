@@ -143,6 +143,14 @@ class CopilotProviderFactory:
             metavar="NAME",
             help="Environment variable holding a GitHub token (default: 'copilot login' account)",
         )
+        group.add_argument(
+            "--copilot-allow-project-sources",
+            action="store_true",
+            help=(
+                "Allow read-only project tools to disclose source contents to GitHub Copilot; "
+                "requires --llm github-copilot and a loaded project"
+            ),
+        )
 
     def create(self, arguments: argparse.Namespace, environ: Mapping[str, str]) -> LlmProvider:
         """Resolve the runtime path and in-memory token, then build the provider."""
