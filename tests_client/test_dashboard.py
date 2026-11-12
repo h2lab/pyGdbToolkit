@@ -316,6 +316,16 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
         "ls            List only the server workspace",
         "erase FILE",
         "Agent use requires auditor approval",
+        "project <path> <type>",
+        "types: camelot",
+        "project /path/to/sample-project camelot",
+        "local source root and artifact digests",
+        "use /new in the agent input",
+        "audit [FILE]",
+        "unavailable parts include a reason",
+        "audit audit.json",
+        "local export is not masked",
+        "audit does not update an existing agent session",
         "quit --all",
         "lscpu",
         "Display the CPU report",
@@ -332,6 +342,8 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     assert "https://openocd.org/doc/html/" in openocd_help
     assert "not connected" in openocd_help
     assert "ls [DIR]" not in pyocd_help
+    assert "project <path> <type>" in openocd_help
+    assert "audit [FILE]" in openocd_help
 
 
 def test_client_upload_uses_a_dedicated_rpc(tmp_path: Path) -> None:
@@ -543,6 +555,8 @@ def test_help_command_is_handled_locally() -> None:
     methods, rendered = asyncio.run(exercise())
 
     assert "toolkit.help" in methods
+    assert "project <path> <type>" in rendered
+    assert "audit [FILE]" in rendered
     assert "rtos showsched <num>" in rendered
 
 

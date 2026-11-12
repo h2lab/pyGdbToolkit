@@ -103,6 +103,108 @@ through a fixed tool catalogue: target status and cores, SVD peripherals,
 memory and register reads, and toolkit, GDB, OCD and MI commands. It never
 receives the RPC connection, the approval decision or the local store.
 
+## Loading and inspecting the project context
+
+Use the **command prompt**, not the agent prompt, for these client commands:
+
+| Command | Purpose |
+| ------- | ------- |
+| `project <path> <type>` | Load a local source project; currently `camelot` is the supported type. Transfer the manifest-declared build artifacts to pyGdbServer and load the RTOS project in GDB. Keep the local source root, declared software identity and artifact SHA-256 digests in the audit context. |
+| `audit` | Refresh the audit context from server status queries and display its summary: project, RTOS, execution state, cores, SVD metadata and server session. Missing information includes an unavailability reason. |
+| `audit FILE` | Also save the complete context as local JSON, replacing `FILE` if it exists. This export is **not masked**; protect it like other audit data. |
+| `help` | Display these commands along with the toolkit, GDB, OCD and agent command reference. |
+
+For example:
+
+```text
+project "/absolute/path/to/sample-project" camelot
+audit
+audit "audit context.json"
+```
+
+The project path refers to the **client workstation**. OpenCode need not have
+access to that directory. Loading the project records its context; it does not
+send every source file to the model. The first agent request opens a conversation
+with the current project and target context. If a conversation was already open,
+enter `/new` in the **agent prompt** after loading or changing the project.
+Running `audit` displays fresh information but does not update an existing
+agent conversation.
+
+## Reading project sources with OpenCode
+
+With `--llm opencode` and a project loaded before the agent session opens,
+the model is offered three source tools. These are **not dashboard commands**
+or OpenCode's native filesystem tools: ask for them in natural language in
+the **agent prompt**, and pyGdbClient validates and executes the proposed calls.
+Paths are relative to the loaded project root; `.` denotes that root.
+
+| Tool | Arguments and result |
+| ---- | -------------------- |
+| `glob` | `path`: directory; `pattern`: filename glob such as `*.c` or `**/*.c`. Returns matching project-relative file paths. `**` matches zero or more directories. |
+| `grep` | `path`: directory; `pattern`: **literal, case-sensitive text**, not a regular expression; optional `glob`: filename filter, default `**`. Returns file paths, line numbers and matching line excerpts. |
+| `read` | `path`: file; optional `offset`: first line, **starting at 1**, default 1; optional `limit`: number of lines, default 100, maximum 200. Returns numbered UTF-8 text and the total line count. |
+
+For a Camelot project, try these requests in the agent prompt:
+
+```text
+Use glob with path output/src/sample_c_app/src and pattern *.c to list C files.
+
+Use grep with path output/src/sample_c_app/src, pattern handle_messages
+and glob *.c to find the function and its callers.
+
+Use read with path output/src/sample_c_app/src/main.c, offset 37 and limit 23.
+Summarize the function using the returned source text.
+```
+
+Inspect the proposed calls and observations in **COMMAND OUTPUT**: an answer
+merely describing a read is not proof that the file was read. Source-only plans
+run without another approval. Plans that also contain target operations retain
+their normal approval requirements.
+
+Start with a narrow directory or glob and read short line ranges. Each file
+must be at most 256 KiB; a read returns at most 12,000 characters. Scans are
+bounded by 20,000 entries, 24 path components, three seconds, 16 MiB of file
+content for `grep`, and 100 matches. A `truncated` result is incomplete, not
+proof that no other matches exist. `grep` reports skipped non-text or oversized
+files in `skipped_non_text_or_large`. See
+[source access limits](llm.md#local-project-source-access) for details.
+
+### How this protects the project repository
+
+- **No write capability in the source tools.** `read`, `glob` and `grep` cannot
+  edit or delete files, run a shell, build the project, or change Git history.
+  OpenCode's native tools remain disabled for this integration; the model gets
+  tool definitions and observations, not a local filesystem handle.
+- **Restricted paths.** The client refuses absolute paths, `..` traversal and
+  hidden path components, including `.git` and `.env`. It does not follow
+  symbolic links or read special files such as devices or named pipes.
+  File descriptors are checked before reading to resist replacement by a link
+  or special file between path validation and opening. This source access
+  requires Linux `O_PATH`, `O_NOFOLLOW` and procfs.
+- **Bounded, session-bound observations.** Size, depth, time and result limits
+  constrain each operation. A project change invalidates source access from
+  the old agent session; use `/new` to bind a new session to it.
+- **Target access stays separate.** Source tools do not issue hardware commands.
+  Target calls still pass through the local gateway and policy, with explicit
+  approval when required.
+
+These controls protect against writes **through the source tools**, not against
+every possible operation or disclosure. Raw GDB/OCD/toolkit commands are not
+sandboxed and can execute scripts or access host files; review their approval
+dialogs rather than assuming that a source-analysis request makes them safe.
+Mounts and hard links already present inside the project are not isolated by
+these path checks.
+
+All non-hidden regular files under the project root are potentially readable,
+not just tracked files or declared source directories. Git ignore rules are
+**not** an access policy. Do not load a tree containing data that OpenCode and
+its selected model must not receive. Results are masked on a best-effort basis
+before disclosure, but that cannot guarantee secret removal. The local
+conversation store retains unmasked observations. Source text can also contain
+prompt-injection instructions; it remains untrusted data and grants no
+authorization. This is controlled read-only access, **not an OS sandbox or a
+confidentiality guarantee**.
+
 ## Approving plans
 
 Each model turn proposes a plan: one or more calls executed as a single chain.
