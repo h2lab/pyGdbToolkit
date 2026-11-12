@@ -41,6 +41,7 @@ _KEY_GUIDANCE = "Supply an API key with --openai-key-env, or allow anonymous acc
 _INSTALL_GUIDANCE = "Install pyGdbToolkit[openai] to enable the OpenAI-compatible provider."
 _LABEL = "OpenAI-compatible"
 _TOOL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_MAX_ERROR_BODY_BYTES = 4096
 
 
 @dataclass(frozen=True)
@@ -276,8 +277,8 @@ class OpenAiLlmSession:
         response = await self._step(self._client.send(request, stream=True), "request")
         try:
             if response.status_code != 200:
-                raise ProviderError(
-                    f"OpenAI-compatible endpoint returned HTTP {response.status_code}."
+                raise await self._completion_error(
+                    response.status_code, aiter(response.aiter_bytes())
                 )
             text_parts: list[str] = []
             fragments: dict[int, dict[str, str]] = {}
@@ -306,6 +307,51 @@ class OpenAiLlmSession:
         finally:
             with contextlib.suppress(Exception):
                 await response.aclose()
+
+    async def _completion_error(
+        self, status_code: int, chunks: AsyncIterator[bytes]
+    ) -> ProviderError:
+        message = f"OpenAI-compatible endpoint returned HTTP {status_code}."
+        if status_code in (401, 403):
+            return ProviderError(f"{message} {_KEY_GUIDANCE}")
+        if status_code not in (400, 404):
+            return ProviderError(message)
+        body = bytearray()
+        while len(body) < _MAX_ERROR_BODY_BYTES:
+            try:
+                chunk = await self._step(anext(chunks), "error response read")
+            except StopAsyncIteration:
+                break
+            body.extend(chunk[: _MAX_ERROR_BODY_BYTES - len(body)])
+        try:
+            data = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            data = None
+        error = data.get("error") if isinstance(data, dict) else None
+        detail = error.get("message") if isinstance(error, dict) else error
+        if status_code == 400 and isinstance(detail, str) and "does not support tools" in detail:
+            return ProviderError(
+                f"{message} The selected model does not support tool calling, which the "
+                "agent requires. Select a tool-capable model with --openai-model "
+                "(for example llama3.2:latest on Ollama); no text-only fallback was used."
+            )
+        if status_code == 404:
+            if (
+                isinstance(detail, str)
+                and "model" in detail.lower()
+                and "not found" in detail.lower()
+            ):
+                return ProviderError(
+                    f"{message} The selected model was not found. Check the exact "
+                    "--openai-model name against the server's installed models "
+                    "(ollama list on Ollama) and install it on that server if needed."
+                )
+            return ProviderError(
+                f"{message} Check --openai-url (including /v1) and --openai-model. "
+                "Ollama also returns HTTP 404 when the requested model is not installed; "
+                "this does not necessarily mean /v1/chat/completions is missing."
+            )
+        return ProviderError(message)
 
     @staticmethod
     def _chunk(data: str) -> JsonObject | None:

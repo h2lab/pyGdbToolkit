@@ -175,6 +175,8 @@ through the [provider registry](llm.md#adding-a-provider). Protect the
 | The agent prompt only explains how to enable it | Start the client with `--llm github-copilot` or `--llm openai`. |
 | `/status` reports the provider unavailable | Copilot: install the `copilot` extra, run `python -m copilot download-runtime` and pass the printed path with `--copilot-runtime` or `PYGDB_COPILOT_RUNTIME`. OpenAI-compatible: install the `openai` extra and check `--openai-url` and the server. |
 | `/status` reports authentication required | Copilot: run `copilot login`, or use `--copilot-token-env NAME`. OpenAI-compatible: use `--openai-key-env NAME`. |
+| OpenAI-compatible completion returns HTTP 404 | Check both the `/v1` base URL and exact `--openai-model` name. Ollama returns 404 for an uninstalled model too; check `ollama list` on the server. |
+| The model does not support tool calling | Select an installed tool-capable model, for example `--openai-model llama3.2:latest` on Ollama. `qwen2:0.5b-instruct` supports plain chat, not this agent's tools. |
 | Requests are refused after `/cancel` | The conversation has unanswered tool calls; use `/new`. |
 | `/sessions` is empty after a restart | Use the same `--llm-store` file in each run. |
 | The agent lost earlier details | Continuation keeps a bounded recollection; ask the agent to observe the target again. |
