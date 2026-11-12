@@ -312,8 +312,10 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     for expected in (
         "help",
         "history",
-        "upload FILE [DIR]",
-        "ls [DIR]",
+        "upload FILE",
+        "ls            List only the server workspace",
+        "erase FILE",
+        "Agent use requires auditor approval",
         "quit --all",
         "lscpu",
         "Display the CPU report",
@@ -329,38 +331,31 @@ def test_help_lists_client_toolkit_gdb_and_selected_ocd_manual() -> None:
     assert "https://pyocd.io/docs/" in pyocd_help
     assert "https://openocd.org/doc/html/" in openocd_help
     assert "not connected" in openocd_help
+    assert "ls [DIR]" not in pyocd_help
 
 
-@pytest.mark.parametrize("directory", [None, "/tmp", "remote directory"])
-def test_client_upload_uses_a_dedicated_rpc(tmp_path: Path, directory: str | None) -> None:
-    """Quoted local and remote paths transfer binary data without any GDB RPC."""
+def test_client_upload_uses_a_dedicated_rpc(tmp_path: Path) -> None:
+    """Quoted local paths transfer binary data to the workspace without any GDB RPC."""
     source = tmp_path / "firmware image.bin"
     content = b"\x00\xffbinary\n"
     source.write_bytes(content)
     app = PyGdbClientApp("ws://127.0.0.1:1234")
     app._connected = True
     app.client.request = AsyncMock(
-        return_value={"path": "/tmp/firmware image.bin", "size": len(content)}
+        return_value={"path": "/workspace/firmware image.bin", "size": len(content)}
     )
     app._append_output = Mock()
-    command = f'upload "{source}"'
-    if directory is not None:
-        command += f' "{directory}"'
 
-    asyncio.run(app.execute_command(command))
+    asyncio.run(app.execute_command(f'upload "{source}"'))
 
     params = {"filename": source.name, "content": base64.b64encode(content).decode("ascii")}
-    if directory is not None:
-        params["directory"] = directory
     app.client.request.assert_awaited_once_with("workspace.upload", params, timeout=300)
-    app._append_output.assert_called_with("Uploaded /tmp/firmware image.bin (9 bytes)")
+    app._append_output.assert_called_with("Uploaded /workspace/firmware image.bin (9 bytes)")
 
 
-@pytest.mark.parametrize(
-    "command, params", [("ls", {}), ('ls "/tmp/remote files"', {"directory": "/tmp/remote files"})]
-)
-def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) -> None:
-    """Remote listings render entries and never request a target refresh."""
+@pytest.mark.parametrize("command", ["ls", "ls   "])
+def test_client_ls_uses_a_dedicated_rpc(command: str) -> None:
+    """Workspace listings take no arguments and never request a target refresh."""
     app = PyGdbClientApp("ws://127.0.0.1:1234")
     app._connected = True
     app.client.request = AsyncMock(
@@ -376,10 +371,24 @@ def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) ->
 
     asyncio.run(app.execute_command(command))
 
-    app.client.request.assert_awaited_once_with("workspace.list", params)
+    app.client.request.assert_awaited_once_with("workspace.list", {})
     app._append_output.assert_any_call("/workspace")
     app._append_output.assert_any_call("  firmware.bin")
     app._append_output.assert_any_call("  images/")
+
+
+@pytest.mark.parametrize("filename", ["firmware image.bin", "f" * 128])
+def test_client_erase_uses_a_dedicated_rpc(filename: str) -> None:
+    """Direct auditor commands erase exactly one named workspace entry without GDB."""
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    app.client.request = AsyncMock(return_value={"path": f"/workspace/{filename}"})
+    app._append_output = Mock()
+
+    asyncio.run(app.execute_command(f'erase "{filename}"'))
+
+    app.client.request.assert_awaited_once_with("workspace.erase", {"filename": filename})
+    app._append_output.assert_called_with(f"Erased /workspace/{filename}")
 
 
 @pytest.mark.parametrize(
@@ -387,11 +396,31 @@ def test_client_ls_uses_a_dedicated_rpc(command: str, params: dict[str, Any]) ->
     [
         "download",
         "download a b c",
+        "download sub/dump.bin",
+        "download ../dump.bin",
+        "download ..",
+        f'download "{"f" * 129}"',
         "upload",
+        "upload a b",
         "upload a b c",
         "upload /nonexistent/file",
+        f'upload "/tmp/{"f" * 129}"',
+        "ls .",
+        "ls ..",
+        'ls "/tmp/remote files"',
+        'ls ""',
         "ls a b",
         'ls "unfinished',
+        "erase",
+        "erase a b",
+        "erase .",
+        "erase ..",
+        "erase ../file",
+        "erase sub/file",
+        "erase /tmp/file",
+        'erase "sub\\\\file"',
+        'erase ""',
+        f'erase "{"f" * 129}"',
     ],
 )
 def test_invalid_workspace_commands_never_reach_gdb(command: str) -> None:

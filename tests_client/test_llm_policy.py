@@ -99,6 +99,7 @@ def test_only_explicit_metadata_queries_are_allowed(name: str, arguments: JsonOb
         ("memory_read", {"address": 0x20000000, "length": 4}),
         ("register_values", {}),
         ("target_select_core", {"core": 1}),
+        ("workspace_erase", {"filename": "dump.bin"}),
         ("toolkit_command", {"command": "svd list"}),
         ("gdb_command", {"command": "info registers"}),
         ("ocd_command", {"command": "help"}),
@@ -118,6 +119,9 @@ def test_target_access_and_opaque_commands_require_approval(
         assert action.effects == (ActionEffect.READ_MEMORY,)
     elif name == "target_select_core":
         assert action.effects == (ActionEffect.EXECUTION_CONTROL, ActionEffect.UNKNOWN)
+    elif name == "workspace_erase":
+        assert action.effects == (ActionEffect.PERSISTENT_CHANGE,)
+        assert any("cannot be rolled back" in reason for reason in action.decision.reasons)
     elif name.endswith("_command"):
         assert action.effects == (ActionEffect.UNKNOWN,)
 
@@ -138,6 +142,7 @@ def test_every_current_catalogue_tool_has_an_explicit_policy_expectation() -> No
         "memory_read",
         "register_values",
         "target_select_core",
+        "workspace_erase",
         "toolkit_command",
         "gdb_command",
         "ocd_command",
@@ -242,6 +247,7 @@ def test_protected_range_at_upper_64_bit_boundary_is_checked_without_overflow() 
     "name,arguments",
     [
         ("target_context", {}),
+        ("workspace_erase", {"filename": "dump.bin"}),
         ("register_values", {}),
         ("memory_read", {"address": 0, "length": 4}),
         ("gdb_command", {"command": "info registers"}),

@@ -233,6 +233,7 @@ timeout and local effects. Preparing a call is **not authorization** to run it.
 | `register_names` | MI `-data-list-register-names` | observe |
 | `register_values` | MI `-data-list-register-values x` | observe |
 | `memory_read` | MI `-data-read-memory-bytes <address> <length>` | read memory |
+| `workspace_erase` | `workspace.erase` with plain `filename` | persistent change |
 | `toolkit_command` | `command.execute`, unmodified command | unknown |
 | `gdb_command` | `command.execute`, `gdb ` prefix | unknown |
 | `ocd_command` | `command.execute`, `monitor ` prefix | unknown |
@@ -247,6 +248,11 @@ RPC methods; methods without server-side timeout support still use their
 existing server timeout. Command strings are nonblank, at most 4096 characters,
 and exclude control characters, including newlines. Toolkit help names are
 limited to 128 characters. Core IDs are integers from 0 to `2**31 - 1`.
+`workspace_erase` accepts only a workspace basename of at most 128 characters,
+with no directory separators or `.`/`..` components. It deletes one server-side
+file, never a directory tree; symbolic links are removed without following
+their targets. This structured tool uses the same filename validation as the
+dashboard file commands.
 
 The free-command tools retain the capabilities of GDB/OCD/toolkit, including
 memory writes, watchpoints, execution control and toolkit analyses. They are
@@ -324,6 +330,7 @@ The default rules are:
 | `memory_read` | `require_approval` | Any target memory read may have side effects, even with a declared RAM/ROM/flash region and read permission. |
 | `register_values` | `require_approval` | Fetches target values rather than register catalogue metadata. |
 | `target_select_core` | `require_approval` | Attaching may halt the core; selection changes context for later steps. |
+| `workspace_erase` | `require_approval` | Deletes a server workspace file permanently; explicit auditor consent is required and deletion cannot be rolled back. |
 | Free toolkit/GDB/OCD/MI commands | `require_approval` | Opaque command languages may alter memory, execution, flash/OTP, debug protection or the host filesystem/processes. Text matching cannot prove safety. |
 | Unknown tools, invalid arguments or operations without an explicit policy rule | `deny` | A new catalogue operation does not inherit blanket permission from an `observe` label. |
 | Plan bound to a different supplied target-context ID | `deny` | A fresh plan is required. |

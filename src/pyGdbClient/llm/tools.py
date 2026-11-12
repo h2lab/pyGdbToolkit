@@ -8,6 +8,8 @@ import json
 import math
 from typing import Literal
 
+from pyGdbClient.workspace import WORKSPACE_FILENAME_MAX_LENGTH, validate_workspace_filename
+
 from .contracts import ActionEffect, JsonObject, JsonValue, ToolCall, ToolDefinition
 
 MAX_MEMORY_READ_BYTES = 4096
@@ -158,6 +160,20 @@ _TOOLS = (
         ),
     ),
     _Tool(
+        "workspace_erase",
+        "Delete one server workspace file. Requires auditor approval; never follows symlinks.",
+        "workspace.erase",
+        (ActionEffect.PERSISTENT_CHANGE,),
+        (
+            _Parameter(
+                "filename",
+                "string",
+                "Plain workspace file name; no directory separators, '.' or '..'.",
+                max_length=WORKSPACE_FILENAME_MAX_LENGTH,
+            ),
+        ),
+    ),
+    _Tool(
         "toolkit_command",
         "Run a toolkit/GDB command line. Arbitrary effects, scripts and file access are possible.",
         "command.execute",
@@ -221,7 +237,15 @@ class ToolCatalogue:
             raise ToolValidationError(f"unknown tool: {call.name}")
         arguments = tool.arguments(call.arguments)
         params = dict(arguments)
-        if tool.name == "memory_read":
+        if tool.name == "workspace_erase":
+            filename = arguments["filename"]
+            if not isinstance(filename, str):
+                raise ToolValidationError("filename must be a string")
+            try:
+                validate_workspace_filename(filename)
+            except ValueError as error:
+                raise ToolValidationError(str(error)) from error
+        elif tool.name == "memory_read":
             address, length = arguments["address"], arguments["length"]
             if not isinstance(address, int) or not isinstance(length, int):
                 raise ToolValidationError("memory reads require integer address and length")

@@ -32,6 +32,7 @@ from .llm.rendering import (
     printable,
 )
 from .rpc import JsonRpcClient, RpcError
+from .workspace import validate_workspace_filename
 
 _WORKSPACE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _COMMAND_HISTORY_LIMIT = 40
@@ -614,35 +615,35 @@ class PyGdbClientApp(App[None]):
 
     async def _execute_workspace_command(self, command: str) -> bool:
         name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
-        if name not in {"download", "upload", "ls"}:
+        if name not in {"download", "upload", "ls", "erase"}:
             return False
         arguments = shlex.split(command)[1:]
         if name == "upload":
-            if not 1 <= len(arguments) <= 2:
-                raise ValueError("Usage: upload <file> [dir]")
+            if len(arguments) != 1:
+                raise ValueError("Usage: upload <file>")
             path = Path(arguments[0]).expanduser()
+            filename = validate_workspace_filename(path.name)
             content = await asyncio.to_thread(_read_upload_file, path)
-            params = {"filename": path.name, "content": base64.b64encode(content).decode("ascii")}
-            if len(arguments) == 2:
-                params["directory"] = arguments[1]
+            params = {"filename": filename, "content": base64.b64encode(content).decode("ascii")}
             response = await self.client.request("workspace.upload", params, timeout=300)
             self._append_output(f"Uploaded {response['path']} ({response['size']} bytes)")
         elif name == "download":
             if not 1 <= len(arguments) <= 2:
                 raise ValueError("Usage: download <server-file> [local-dir]")
-            remote_path = Path(arguments[0])
-            filename = remote_path.name
-            remote_directory = str(remote_path.parent) if remote_path.parent != Path(".") else None
+            filename = validate_workspace_filename(arguments[0])
             local_directory = Path(arguments[1]).expanduser() if len(arguments) == 2 else Path.cwd()
-            destination, size = await self._download_workspace_file(
-                filename, remote_directory, local_directory
-            )
+            destination, size = await self._download_workspace_file(filename, local_directory)
             self._append_output(f"Downloaded {filename} to {destination} ({size} bytes)")
+        elif name == "erase":
+            if len(arguments) != 1:
+                raise ValueError("Usage: erase <server-file>")
+            filename = validate_workspace_filename(arguments[0])
+            response = await self.client.request("workspace.erase", {"filename": filename})
+            self._append_output(f"Erased {response['path']}")
         else:
-            if len(arguments) > 1:
-                raise ValueError("Usage: ls [dir]")
-            params = {"directory": arguments[0]} if arguments else {}
-            response = await self.client.request("workspace.list", params)
+            if arguments:
+                raise ValueError("Usage: ls")
+            response = await self.client.request("workspace.list", {})
             self._append_output(response["path"])
             for entry in response["entries"]:
                 suffix = "/" if entry["is_directory"] else ""
@@ -650,7 +651,7 @@ class PyGdbClientApp(App[None]):
         return True
 
     async def _download_workspace_file(
-        self, filename: str, remote_directory: str | None, local_directory: Path
+        self, filename: str, local_directory: Path
     ) -> tuple[Path, int]:
         """Download a server workspace file in bounded chunks and replace atomically."""
         local_directory = local_directory.resolve()
@@ -669,8 +670,6 @@ class PyGdbClientApp(App[None]):
                         "offset": offset,
                         "chunk_size": _WORKSPACE_DOWNLOAD_CHUNK_SIZE,
                     }
-                    if remote_directory is not None:
-                        params["directory"] = remote_directory
                     response = await self.client.request("workspace.download", params, timeout=300)
                     total_size, content = _decode_download_chunk(
                         response, filename, offset, total_size
@@ -843,15 +842,18 @@ def _help_text(
         Text("CLIENT COMMANDS", style="bold cyan"),
         Text("  help          Show this command reference."),
         Text("  history       List the last 40 commands; use Up/Down to browse them."),
-        Text(
-            "  upload FILE [DIR]  Copy a local file to the server directory (default: workspace)."
-        ),
+        Text("  upload FILE   Copy a local file into the server workspace."),
         Text("    Uploads replace existing files, accept quoted paths, and are limited to 5 MiB."),
         Text(
             "  download FILE [DIR]  Copy a server workspace file to a local directory (default: .)."
         ),
         Text("    Downloads replace existing files and use bounded chunks for large files."),
-        Text("  ls [DIR]      List a server directory (default: workspace), without calling GDB."),
+        Text("    Server-side names are plain file names (no directory), at most 128 characters."),
+        Text(
+            "  ls            List only the server workspace, without calling GDB. Takes no arguments."
+        ),
+        Text("  erase FILE    Delete one server workspace file (no directories or paths)."),
+        Text("    Agent use requires auditor approval; symbolic links are removed, not followed."),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
         Text("  Ctrl+Q        Same as quit."),

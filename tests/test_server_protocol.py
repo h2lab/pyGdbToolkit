@@ -5,6 +5,7 @@
 
 import asyncio
 import base64
+from dataclasses import asdict
 import json
 from pathlib import Path
 import shutil
@@ -18,6 +19,18 @@ from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
 from pyGdbClient.app import PyGdbClientApp
+from pyGdbClient.llm.approval import ApprovalRequest, ApprovalResponse
+from pyGdbClient.llm.contracts import (
+    ActionEffect,
+    ActionPlan,
+    ContextFact,
+    MemoryMapContext,
+    PlannedAction,
+    TargetContext,
+    ToolCall,
+)
+from pyGdbClient.llm.gateway import GatewayError, ToolGateway
+from pyGdbClient.llm.policy import ProtectionPolicy
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
 from pyGdbServer.server import (
@@ -216,7 +229,7 @@ def test_memmap_execution_rpcs_are_not_special_cases(tmp_path: Path) -> None:
 
 
 def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
-    """Binary uploads and default, relative, and absolute listings bypass MI."""
+    """Binary uploads, workspace listings, and chunked downloads bypass MI."""
     server, fake_mi = _server(tmp_path)
     directory = tmp_path / "remote files"
     directory.mkdir()
@@ -231,50 +244,44 @@ def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
         return response["result"]
 
     async def exercise() -> None:
-        for destination in (None, "remote files", str(directory)):
-            params = {"filename": "firmware.bin", "content": base64.b64encode(content).decode()}
-            if destination is not None:
-                params["directory"] = destination
-            result = await request("workspace.upload", params)
-            assert Path(result["path"]).read_bytes() == content
-            assert result["size"] == len(content)
+        params = {"filename": "firmware.bin", "content": base64.b64encode(content).decode()}
+        result = await request("workspace.upload", params)
+        assert Path(result["path"]) == tmp_path / "firmware.bin"
+        assert Path(result["path"]).read_bytes() == content
+        assert result["size"] == len(content)
+        boundary_name = "f" * 128
+        result = await request(
+            "workspace.upload",
+            {"filename": boundary_name, "content": base64.b64encode(content).decode()},
+        )
+        assert Path(result["path"]) == tmp_path / boundary_name
         default = await request("workspace.list", {})
         assert default["path"] == str(tmp_path)
+        assert {"name": "firmware.bin", "is_directory": False} in default["entries"]
         assert {"name": "remote files", "is_directory": True} in default["entries"]
-        for destination in ("remote files", str(directory)):
-            listing = await request("workspace.list", {"directory": destination})
-            assert listing == {
-                "path": str(directory),
-                "entries": [{"name": "firmware.bin", "is_directory": False}],
-            }
         await request("workspace.upload", {"filename": "empty", "content": ""})
         assert (tmp_path / "empty").read_bytes() == b""
         await request("workspace.upload", {"filename": "firmware.bin", "content": ""})
         assert (tmp_path / "firmware.bin").read_bytes() == b""
         dump = bytes(range(256)) * 5_000
-        (directory / "dump.bin").write_bytes(dump)
+        (tmp_path / "dump.bin").write_bytes(dump)
         first_chunk = await request(
             "workspace.download",
-            {
-                "filename": "dump.bin",
-                "directory": "remote files",
-                "offset": 0,
-                "chunk_size": 1024 * 1024,
-            },
+            {"filename": "dump.bin", "offset": 0, "chunk_size": 1024 * 1024},
         )
         second_chunk = await request(
             "workspace.download",
             {
                 "filename": "dump.bin",
-                "directory": "remote files",
                 "offset": len(base64.b64decode(first_chunk["content"])),
                 "chunk_size": 1024 * 1024,
             },
         )
         assert first_chunk["size"] == len(dump)
-        assert base64.b64decode(first_chunk["content"]) + base64.b64decode(
-            second_chunk["content"]
-        ) == dump
+        assert (
+            base64.b64decode(first_chunk["content"]) + base64.b64decode(second_chunk["content"])
+            == dump
+        )
         empty = await request(
             "workspace.download",
             {"filename": "empty", "offset": 0, "chunk_size": 1024},
@@ -289,16 +296,34 @@ def test_workspace_upload_and_listing_do_not_call_gdb(tmp_path: Path) -> None:
     "method, params, code",
     [
         ("workspace.upload", {"filename": "../escape", "content": ""}, -32602),
+        ("workspace.upload", {"filename": "nested/escape", "content": ""}, -32602),
+        ("workspace.upload", {"filename": "nested\\escape", "content": ""}, -32602),
         ("workspace.upload", {"filename": ".", "content": ""}, -32602),
+        ("workspace.upload", {"filename": "f" * 129, "content": ""}, -32602),
         ("workspace.upload", {"filename": "file", "content": "!"}, -32602),
         ("workspace.upload", {"filename": "file", "content": 42}, -32602),
         ("workspace.upload", {"filename": "file"}, -32602),
         ("workspace.list", {"directory": 42}, -32602),
-        ("workspace.list", {"directory": "missing"}, -32000),
-        ("workspace.upload", {"filename": "file", "content": "", "directory": "missing"}, -32000),
+        ("workspace.list", {"directory": "missing"}, -32602),
+        ("workspace.upload", {"filename": "file", "content": "", "directory": "."}, -32602),
+        (
+            "workspace.download",
+            {"filename": "file", "directory": ".", "offset": 0, "chunk_size": 1024},
+            -32602,
+        ),
         (
             "workspace.download",
             {"filename": "../outside", "offset": 0, "chunk_size": 1024},
+            -32602,
+        ),
+        (
+            "workspace.download",
+            {"filename": "nested/file", "offset": 0, "chunk_size": 1024},
+            -32602,
+        ),
+        (
+            "workspace.download",
+            {"filename": "f" * 129, "offset": 0, "chunk_size": 1024},
             -32602,
         ),
         (
@@ -325,6 +350,280 @@ def test_workspace_errors_do_not_call_gdb(
     )
     assert response is not None
     assert response["error"]["code"] == code
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"directory": "."},
+        {"directory": ".."},
+        {"directory": "/tmp"},
+        {"directory": "nested"},
+        {"directory": None},
+        {"filename": "file"},
+    ],
+)
+def test_workspace_list_rejects_all_parameters(tmp_path: Path, params: dict[str, Any]) -> None:
+    """Even existing directories and unrelated parameters are refused by the RPC."""
+    server, fake_mi = _server(tmp_path)
+    (tmp_path / "nested").mkdir()
+
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "workspace.list", "params": params})
+        )
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32602
+    assert response["error"]["message"] == "workspace.list does not accept parameters"
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize("include_params", [False, True])
+def test_workspace_list_only_returns_sorted_direct_children(
+    tmp_path: Path, include_params: bool
+) -> None:
+    """Lists the workspace without descending into subdirectories or the parent."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server, fake_mi = _server(tmp_path)
+    server.workspace = workspace
+    (workspace / "z.bin").write_bytes(b"data")
+    (workspace / "images").mkdir()
+    (workspace / "images" / "hidden.bin").write_bytes(b"nested")
+    (tmp_path / "outside.bin").write_bytes(b"outside")
+    request: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": "workspace.list"}
+    if include_params:
+        request["params"] = {}
+    response, _ = asyncio.run(server.handle_rpc_message(json.dumps(request)))
+
+    assert response is not None
+    assert response["result"] == {
+        "path": str(workspace),
+        "entries": [
+            {"name": "images", "is_directory": True},
+            {"name": "z.bin", "is_directory": False},
+        ],
+    }
+    assert fake_mi.calls == []
+
+
+def test_workspace_list_reports_unavailable_workspace(tmp_path: Path) -> None:
+    """A missing workspace is an RPC error, not a successful empty listing."""
+    server, fake_mi = _server(tmp_path)
+    server.workspace = tmp_path / "missing"
+
+    response, _ = asyncio.run(
+        server.handle_rpc_message('{"jsonrpc":"2.0","id":1,"method":"workspace.list"}')
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32000
+    assert str(server.workspace) in response["error"]["message"]
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize("filename", ["memory dump.bin", "f" * 128])
+def test_workspace_erase_deletes_only_the_named_file(tmp_path: Path, filename: str) -> None:
+    """Erasing a valid basename leaves other workspace files unchanged and bypasses MI."""
+    server, fake_mi = _server(tmp_path)
+    target = tmp_path / filename
+    target.write_bytes(b"dump")
+    other = tmp_path / "keep.bin"
+    other.write_bytes(b"keep")
+
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "workspace.erase",
+                    "params": {"filename": filename},
+                }
+            )
+        )
+    )
+
+    assert response is not None
+    assert response["result"] == {"path": str(target)}
+    assert not target.exists()
+    assert other.read_bytes() == b"keep"
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"filename": None},
+        {"filename": 42},
+        {"filename": ""},
+        {"filename": "."},
+        {"filename": ".."},
+        {"filename": "../keep.bin"},
+        {"filename": "sub/file"},
+        {"filename": "sub\\file"},
+        {"filename": "/tmp/file"},
+        {"filename": "f" * 129},
+        {"filename": "file\0"},
+        {"filename": "keep.bin", "directory": "."},
+        {"filename": "keep.bin", "directory": "/tmp"},
+        {"filename": "keep.bin", "approved": True},
+    ],
+)
+def test_workspace_erase_rejects_invalid_parameters(tmp_path: Path, params: dict[str, Any]) -> None:
+    """Invalid basenames and path overrides cannot delete any file."""
+    server, fake_mi = _server(tmp_path)
+    target = tmp_path / "keep.bin"
+    target.write_bytes(b"keep")
+
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "workspace.erase", "params": params})
+        )
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32602
+    assert target.read_bytes() == b"keep"
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "permission"])
+def test_workspace_erase_reports_filesystem_errors(
+    tmp_path: Path, kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing files, directories and denied access are errors, never successful deletions."""
+    server, fake_mi = _server(tmp_path)
+    target = tmp_path / "target"
+    if kind == "directory":
+        target.mkdir()
+        (target / "keep.bin").write_bytes(b"keep")
+    elif kind == "permission":
+        target.write_bytes(b"keep")
+        monkeypatch.setattr(Path, "unlink", Mock(side_effect=PermissionError("access denied")))
+
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "workspace.erase",
+                    "params": {"filename": "target"},
+                }
+            )
+        )
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32000
+    if kind == "directory":
+        assert (target / "keep.bin").read_bytes() == b"keep"
+    elif kind == "permission":
+        assert response["error"]["message"] == "access denied"
+        assert target.read_bytes() == b"keep"
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "missing"])
+def test_workspace_erase_does_not_follow_symbolic_links(tmp_path: Path, kind: str) -> None:
+    """Only the workspace link is removed, never its target outside the workspace."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    server, fake_mi = _server(workspace)
+    outside = tmp_path / "outside"
+    if kind == "file":
+        outside.write_bytes(b"keep")
+    elif kind == "directory":
+        outside.mkdir()
+        (outside / "keep.bin").write_bytes(b"keep")
+    link = workspace / "link"
+    link.symlink_to(outside, target_is_directory=kind == "directory")
+
+    response, _ = asyncio.run(
+        server.handle_rpc_message(
+            '{"jsonrpc":"2.0","id":1,"method":"workspace.erase","params":{"filename":"link"}}'
+        )
+    )
+
+    assert response is not None
+    assert response["result"] == {"path": str(link)}
+    assert not link.is_symlink()
+    if kind == "file":
+        assert outside.read_bytes() == b"keep"
+    elif kind == "directory":
+        assert (outside / "keep.bin").read_bytes() == b"keep"
+    else:
+        assert not outside.exists()
+    assert fake_mi.calls == []
+
+
+@pytest.mark.parametrize("approved", [None, False, True])
+def test_agent_workspace_erase_requires_auditor_consent_over_websocket(
+    tmp_path: Path, approved: bool | None
+) -> None:
+    """The real erase RPC cannot run before explicit approval of its exact filename."""
+    server, fake_mi = _server(tmp_path)
+    target = tmp_path / "dump.bin"
+    target.write_bytes(b"dump")
+    fact = ContextFact("test", "configuration")
+    context = TargetContext(
+        "ctx-1", fact, fact, fact, fact, fact, fact, MemoryMapContext((), "test"), fact
+    )
+    server.target_context = AsyncMock(return_value=asdict(context))
+    plan = ActionPlan(
+        "erase-plan",
+        context.context_id,
+        "Remove obsolete dump",
+        (
+            PlannedAction(
+                ToolCall("erase", "workspace_erase", {"filename": target.name}),
+                "Clean workspace",
+                (ActionEffect.OBSERVE,),
+            ),
+        ),
+    )
+    approvals: list[ApprovalRequest] = []
+
+    async def approve(request: ApprovalRequest) -> ApprovalResponse:
+        approvals.append(request)
+        assert target.read_bytes() == b"dump"
+        payload = json.loads(request.payload_json)
+        assert payload["plan"]["steps"][0]["effects"] == ["persistent_change"]
+        assert payload["rpc_calls"][0]["method"] == "workspace.erase"
+        assert payload["rpc_calls"][0]["params"]["filename"] == target.name
+        return request.respond(approved=approved is True)
+
+    async def exercise() -> None:
+        async with serve(server._handle_connection, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            app = PyGdbClientApp(f"ws://127.0.0.1:{port}")
+            await app.client.connect()
+            try:
+                gateway = ToolGateway(
+                    app.client,
+                    ProtectionPolicy(),
+                    approver=approve if approved is not None else None,
+                )
+                if approved:
+                    results = await gateway.execute(plan, context)
+                    assert len(results) == 1
+                    assert not results[0].is_error
+                    assert json.loads(results[0].content)["result"] == {"path": str(target)}
+                    assert not target.exists()
+                else:
+                    with pytest.raises(GatewayError, match="blocked|rejected"):
+                        await gateway.execute(plan, context)
+                    assert target.read_bytes() == b"dump"
+            finally:
+                await app.client.close()
+
+    asyncio.run(exercise())
+    assert len(approvals) == (0 if approved is None else 1)
     assert fake_mi.calls == []
 
 
@@ -358,10 +657,13 @@ def test_workspace_upload_size_limit(tmp_path: Path) -> None:
     assert fake_mi.calls == []
 
 
-def test_workspace_download_rejects_directories_outside_the_workspace(tmp_path: Path) -> None:
-    """Downloads cannot be used to read arbitrary server filesystem paths."""
+def test_workspace_download_rejects_files_resolving_outside_the_workspace(tmp_path: Path) -> None:
+    """Downloads cannot follow symbolic links out of the server workspace."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    secret = tmp_path / "secret.bin"
+    secret.write_bytes(b"secret")
+    (workspace / "link.bin").symlink_to(secret)
     server, _ = _server(workspace)
     response, _ = asyncio.run(
         server.handle_rpc_message(
@@ -371,8 +673,7 @@ def test_workspace_download_rejects_directories_outside_the_workspace(tmp_path: 
                     "id": 1,
                     "method": "workspace.download",
                     "params": {
-                        "filename": "outside.bin",
-                        "directory": str(tmp_path),
+                        "filename": "link.bin",
                         "offset": 0,
                         "chunk_size": 1024,
                     },
@@ -414,9 +715,11 @@ def test_client_workspace_commands_over_websocket_do_not_call_gdb(tmp_path: Path
                 await app.execute_command("ls")
                 app._append_output.assert_any_call(f"  {source.name}")
                 await app.execute_command(f'upload "{source}" "{remote_directory}"')
-                await app.execute_command(f'ls "{remote_directory}"')
-                await app.execute_command("ls missing")
                 assert app._append_output.call_args.kwargs == {"error": True}
+                await app.execute_command(f'ls "{remote_directory}"')
+                app._append_output.assert_called_with("Usage: ls", error=True)
+                await app.execute_command("ls missing")
+                app._append_output.assert_called_with("Usage: ls", error=True)
                 await app.execute_command(f'download "memory dump.bin" "{local_directory}"')
                 assert (local_directory / "memory dump.bin").read_bytes() == dump
             finally:
