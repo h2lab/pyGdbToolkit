@@ -30,6 +30,18 @@ The `[runtime]` block does not add an ELF. Neither
 linked ELF must exist; the symbols and metadata must correspond to the image
 on the target when using live commands.
 
+Remote uploads use the same paths, including `project.toml` (not
+`pyproject.toml`). The server returns a bootstrap manifest from
+`rtos.project.begin`. Uploading `project.toml` expands that manifest with the
+exact application ELF names; subsequent `rtos.project.put` responses return
+the expanded manifest. Exactly one generated Kconfig file is required for a
+remote complete context, so live task inspection has all its build inputs.
+Local `rtos load-project` still does not require Kconfig until live inspection.
+The shared manifest and snapshot types live in the GDB-independent
+`pyGdbToolkit.shared.rtos` namespace. Camelot-specific declaration parsing
+and ELF paths live in `pyGdbToolkit.shared.rtos.camelot`, separately from
+the generic contracts and provider registry.
+
 ## Task metadata and mapping
 
 The kernel ELF's `.task_list` section has a linked start address and byte
