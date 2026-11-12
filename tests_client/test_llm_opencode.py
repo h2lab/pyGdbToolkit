@@ -155,10 +155,26 @@ def test_model_variant_is_sent_as_a_separate_v2_field() -> None:
     asyncio.run(run())
 
 
+def test_single_json_code_fence_is_accepted_without_bypassing_tool_validation() -> None:
+    async def run() -> None:
+        server = Server(f"```json\n{calls()}\n```", f"```\n{answer('Done.')}\n```")
+        backend = provider(server)
+        session = await backend.open_session("s", _context(), TOOLS)
+        events = [event async for event in session.stream(UserPrompt("go"))]
+        assert events[0] == ToolCallProposed(ToolCall("c1", "gdb_command", {"command": "continue"}))
+        events = [event async for event in session.stream(ToolResults((ToolResult("c1", "{}"),)))]
+        assert events == [TextDelta("Done."), TurnFinished()]
+        await backend.close()
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "invalid",
     [
         "unstructured answer",
+        'Here is JSON:\n```json\n{"type":"answer","text":"x"}\n```',
+        '```json\n{"type":"tool_calls","calls":[{"id":"c1","name":"unknown","arguments":{}}]}\n```',
         '{"type":"answer","text":"one","text":"two"}',
         '{"type":"answer","text":""}',
         '{"type":"answer","text":"x","extra":1}',
