@@ -435,6 +435,36 @@ def test_copilot_uses_cli_login_by_default_and_an_absolute_runtime(
     assert config.model == "gpt-test"
     assert config.github_token is None
     assert settings.store_path == Path("~/agent.sqlite3").expanduser()
+    assert settings.copilot_allow_project_sources is False
+
+
+def test_copilot_project_sources_require_explicit_cli_consent() -> None:
+    registry = default_registry()
+    parser, arguments = _parse(
+        registry, "--llm", "github-copilot", "--copilot-allow-project-sources"
+    )
+    settings = agent_settings(
+        parser, arguments, registry, {"PYGDB_COPILOT_RUNTIME": sys.executable}
+    )
+    assert settings is not None
+    assert settings.copilot_allow_project_sources is True
+    assert "disclose source contents to GitHub Copilot" in " ".join(parser.format_help().split())
+
+
+@pytest.mark.parametrize("provider", [None, "opencode", "openai"])
+def test_copilot_project_source_consent_cannot_be_used_with_another_provider(
+    provider: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = ("--copilot-allow-project-sources",)
+    if provider is not None:
+        argv += ("--llm", provider)
+    registry = default_registry()
+    parser, arguments = _parse(registry, *argv)
+    with pytest.raises(SystemExit):
+        agent_settings(parser, arguments, registry, {})
+    assert (
+        "--copilot-allow-project-sources requires --llm github-copilot" in capsys.readouterr().err
+    )
 
 
 def test_copilot_reads_runtime_and_token_from_the_environment_only() -> None:
