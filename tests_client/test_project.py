@@ -5,6 +5,7 @@
 
 import asyncio
 import base64
+import hashlib
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -14,7 +15,7 @@ import pytest
 from pyGdbClient.app import PyGdbClientApp
 from pyGdbClient.project import ProjectLoadError, load_project, supported_project_types
 from pyGdbClient.rpc import RpcError
-from pyGdbToolkit.shared.rtos import project_manifest
+from pyGdbToolkit.shared.rtos import DEFAULT_PROJECT_REGISTRY, project_manifest
 
 PROJECT = (
     b"[kernel]\n[runtime]\n"
@@ -60,9 +61,7 @@ def _snapshot(path: str) -> dict[str, Any]:
 class FakeProjectRpc:
     """Answer the ``rtos.project.*`` methods with the real shared camelot manifest."""
 
-    def __init__(
-        self, *, chunk_size: int = 7, fail: dict[str, Exception] | None = None
-    ) -> None:
+    def __init__(self, *, chunk_size: int = 7, fail: dict[str, Exception] | None = None) -> None:
         self.requests: list[tuple[str, dict[str, Any]]] = []
         self.files: dict[str, bytearray] = {}
         self.manifest = project_manifest("camelot")
@@ -170,6 +169,56 @@ def test_load_project_streams_manifest_files_and_commits(tmp_path: Path) -> None
     assert result.task_names == ("blinky",)
     assert lines[0] == "Uploading project.toml"
     assert len(lines) == len(expected)
+
+
+def test_load_project_records_identity_and_digests_of_what_was_sent(tmp_path: Path) -> None:
+    """Every transferred file is identified by the SHA-256 of the bytes the server received."""
+    root = tmp_path / "project"
+    _make_project(root)
+    rpc = FakeProjectRpc(chunk_size=5)
+
+    result = asyncio.run(load_project(rpc, root, "camelot"))
+
+    assert result.files[0] == "project.toml"
+    for artifact in result.artifacts:
+        sent = bytes(rpc.files[artifact.path])
+        assert artifact.size == len(sent)
+        assert artifact.sha256 == hashlib.sha256(sent).hexdigest()
+    assert result.description == DEFAULT_PROJECT_REGISTRY.describe("camelot", PROJECT)
+
+
+@pytest.mark.parametrize(
+    "project", [b"[kernel\n", b"[kernel]\nscm.git.uri = 1\n", b"[application.a]\n"]
+)
+def test_load_project_rejects_an_invalid_declaration_before_any_rpc(
+    tmp_path: Path, project: bytes
+) -> None:
+    """A malformed project.toml fails locally, without staging anything."""
+    (tmp_path / "project.toml").write_bytes(project)
+    rpc = FakeProjectRpc()
+    with pytest.raises(ProjectLoadError, match="invalid project.toml"):
+        asyncio.run(load_project(rpc, tmp_path, "camelot"))
+    assert rpc.requests == []
+
+
+def test_load_project_rejects_a_declaration_changed_while_uploading(tmp_path: Path) -> None:
+    """The described identity must be the declaration the server received."""
+    root = tmp_path / "project"
+    _make_project(root)
+    rpc = FakeProjectRpc(chunk_size=len(PROJECT) + 64)
+    request = rpc.request
+
+    async def edit_then_request(
+        method: str, params: dict[str, Any] | None = None, timeout: float = 60.0
+    ) -> Any:
+        if method == "rtos.project.begin":
+            (root / "project.toml").write_bytes(PROJECT.replace(b"hello", b"hallo"))
+        return await request(method, params, timeout)
+
+    rpc.request = edit_then_request  # type: ignore[method-assign]
+    with pytest.raises(ProjectLoadError, match="changed while uploading: project.toml"):
+        asyncio.run(load_project(rpc, root, "camelot"))
+    assert rpc.aborted
 
 
 def test_load_project_transfers_empty_required_files(tmp_path: Path) -> None:
@@ -285,11 +334,25 @@ def test_dashboard_project_command_loads_and_summarizes(tmp_path: Path) -> None:
     asyncio.run(app.execute_command(f'project "{root}" camelot'))
 
     assert rpc.methods[-1] == "rtos.project.commit"
-    assert app._project is not None
-    assert app._project.task_names == ("blinky",)
+    project = app._audit.project
+    assert project is not None
+    assert project.local_root == str(root.resolve())
+    assert [component.name for component in project.description.components] == [
+        "kernel",
+        "runtime",
+        "hello",
+        "sample_c_app",
+    ]
     messages = [call.args[0] for call in app._append_output.call_args_list]
     assert any(message.startswith("Loaded camelot project") for message in messages)
     assert any("tasks: blinky" in message for message in messages)
+    assert not any("Audit context changed" in message for message in messages)
+
+    app._agent = Mock(session=object())
+    app.client.request = FakeProjectRpc().request  # type: ignore[method-assign]
+    asyncio.run(app.execute_command(f'project "{root}" camelot'))
+    messages = [call.args[0] for call in app._append_output.call_args_list]
+    assert messages[-1].startswith("Audit context changed: use /new")
 
 
 def test_dashboard_project_command_reports_usage_errors(tmp_path: Path) -> None:

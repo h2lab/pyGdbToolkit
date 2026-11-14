@@ -6,6 +6,7 @@
 import asyncio
 import base64
 import binascii
+import json
 from pathlib import Path
 import shlex
 from tempfile import NamedTemporaryFile
@@ -17,12 +18,14 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key, Resize
 from textual.widgets import Footer, Header, Input, RichLog, Select, Static, Tree
 
+from .audit import AuditContextManager
 from .llm.approval import ApprovalRequest, ApprovalResponse
 from .llm.approval_screen import ApprovalScreen
 from .llm.controller import AgentController, AgentSettings, OpenedSession
 from .llm.orchestrator import AgentEvent
 from .llm.rendering import (
     AgentTranscript,
+    describe_audit,
     describe_credits,
     describe_credits_error,
     describe_session,
@@ -31,7 +34,7 @@ from .llm.rendering import (
     describe_usage,
     printable,
 )
-from .project import LoadedProject, load_project, supported_project_types
+from .project import load_project, supported_project_types
 from .rpc import JsonRpcClient, RpcError
 from .workspace import validate_workspace_filename
 
@@ -159,11 +162,16 @@ class PyGdbClientApp(App[None]):
         super().__init__()
         self.client = JsonRpcClient(url)
         self._transcript = AgentTranscript()
+        self._audit = AuditContextManager()
         self._agent = (
             None
             if agent is None
             else AgentController(
-                agent, self.client, approver=self.request_plan_approval, sink=self._show_agent_event
+                agent,
+                self.client,
+                approver=self.request_plan_approval,
+                sink=self._show_agent_event,
+                audit=self._audit,
             )
         )
         self._connected = False
@@ -179,7 +187,6 @@ class PyGdbClientApp(App[None]):
         self._approval_screen: ApprovalScreen | None = None
         self._approval_future: asyncio.Future[ApprovalResponse | None] | None = None
         self._credits_reading = False
-        self._project: LoadedProject | None = None
 
     async def request_plan_approval(self, request: ApprovalRequest) -> ApprovalResponse:
         """Display an auditor request; cancellation removes the modal without consent."""
@@ -542,6 +549,8 @@ class PyGdbClientApp(App[None]):
         try:
             if await self._execute_project_command(command):
                 return
+            if await self._execute_audit_command(command):
+                return
             if await self._execute_workspace_command(command):
                 return
             response = await self.client.request(
@@ -633,12 +642,33 @@ class PyGdbClientApp(App[None]):
             arguments[1],
             progress=self._append_output,
         )
-        self._project = result
+        self._audit.set_project(result)
         tasks = ", ".join(result.task_names) or "none"
         self._append_output(
             f"Loaded {result.rtos} project {result.local_root} ({len(result.files)} files)"
         )
         self._append_output(f"Server project: {result.server_path} · tasks: {tasks}")
+        if self._agent is not None and self._agent.session is not None:
+            self._append_output(
+                "Audit context changed: use /new so the agent receives the loaded project"
+            )
+        return True
+
+    async def _execute_audit_command(self, command: str) -> bool:
+        """Gather and display the audit context, optionally saving it as local JSON."""
+        name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
+        if name != "audit":
+            return False
+        arguments = shlex.split(command)[1:]
+        if len(arguments) > 1:
+            raise ValueError("Usage: audit [FILE]")
+        audit = await self._audit.refresh(self.client)
+        self._write_output(describe_audit(audit))
+        if arguments:
+            path = Path(arguments[0]).expanduser()
+            document = json.dumps(audit.to_json(), indent=2, ensure_ascii=False) + "\n"
+            await asyncio.to_thread(path.write_text, document, "utf-8")
+            self._append_output(f"Audit context saved to {path}")
         return True
 
     async def _execute_workspace_command(self, command: str) -> bool:
@@ -889,6 +919,11 @@ def _help_text(
         Text(
             "    Stages the manifest-declared build artifacts on the server, then selects and"
             " loads the RTOS project."
+        ),
+        Text("  audit [FILE]  Show the audit context; optionally save it as JSON to a local FILE."),
+        Text(
+            "    Project, software identity and digests, RTOS, execution state, cores, SVD map;"
+            " sent to the agent."
         ),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),

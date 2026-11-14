@@ -8,7 +8,9 @@ project's manifest over the ``rtos.project.begin``, ``rtos.project.put`` and
 ``rtos.project.commit`` JSON-RPC methods, then pyGdbServer selects the RTOS
 and loads the project in GDB exactly as the GDB-side ``rtos`` command would.
 Supported project types come from the shared RTOS project registry, keeping
-the client and ``rtos`` synchronized.
+the client and ``rtos`` synchronized. The loaded project records the declared
+software identity and the SHA-256 digest of every transferred file, so an
+audit can name exactly what was analyzed.
 """
 
 import asyncio
@@ -16,6 +18,7 @@ import base64
 from collections.abc import Callable, Mapping
 import contextlib
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import re
 from typing import Any, Protocol
@@ -23,11 +26,18 @@ from uuid import uuid4
 
 from pyGdbToolkit.shared.rtos import (
     DEFAULT_PROJECT_REGISTRY,
+    ProjectDescription,
     ProjectRegistry,
     matches_project_pattern,
 )
 
-__all__ = ["LoadedProject", "ProjectLoadError", "load_project", "supported_project_types"]
+__all__ = [
+    "LoadedProject",
+    "ProjectArtifact",
+    "ProjectLoadError",
+    "load_project",
+    "supported_project_types",
+]
 
 _TRANSFER_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 _MAX_CHUNK_SIZE = 4 * 1024 * 1024
@@ -48,14 +58,29 @@ class RpcRequester(Protocol):
 
 
 @dataclass(frozen=True)
+class ProjectArtifact:
+    """One transferred project file, identified by the content the server received."""
+
+    path: str
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True)
 class LoadedProject:
     """A committed project transfer and the resulting GDB RTOS session snapshot."""
 
     rtos: str
     local_root: Path
     server_path: str
-    files: tuple[str, ...]
+    artifacts: tuple[ProjectArtifact, ...]
+    description: ProjectDescription
     snapshot: dict[str, Any]
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        """Return the transferred relative paths, project declaration first."""
+        return tuple(artifact.path for artifact in self.artifacts)
 
     @property
     def task_names(self) -> tuple[str, ...]:
@@ -129,10 +154,11 @@ def _project_files(
 
 async def _upload_file(
     client: RpcRequester, transfer: str, relative: str, path: Path, chunk_size: int
-) -> dict[str, Any]:
-    """Send one file in contiguous chunks; return the last ``put`` response."""
+) -> tuple[dict[str, Any], ProjectArtifact]:
+    """Send one file in contiguous chunks; return the last ``put`` response and its identity."""
     size = path.stat().st_size
     offset = 0
+    digest = hashlib.sha256()
     response: dict[str, Any] = {}
     with path.open("rb") as source:
         while True:
@@ -152,12 +178,13 @@ async def _upload_file(
                 ),
                 "transfer response",
             )
+            digest.update(data)
             offset += len(data)
             if not data or offset >= size:
                 break
     if offset != size or response.get("complete") is not True:
         raise ProjectLoadError(f"file changed while uploading: {relative}")
-    return response
+    return response, ProjectArtifact(relative, size, digest.hexdigest())
 
 
 async def load_project(
@@ -190,14 +217,15 @@ async def load_project(
     Returns
     -------
     LoadedProject
-        The transferred files and the server's loaded RTOS snapshot.
+        The transferred files, the declared software identity and the
+        server's loaded RTOS snapshot.
 
     Raises
     ------
     ProjectLoadError
-        If the type is unsupported, the local tree does not satisfy the
-        manifest, or the server rejects the transfer. Transfers that fail
-        before commit are aborted on the server.
+        If the type is unsupported, the project declaration is invalid, the
+        local tree does not satisfy the manifest, or the server rejects the
+        transfer. Transfers that fail before commit are aborted on the server.
     """
     if rtos not in registry.names:
         raise ProjectLoadError(
@@ -209,6 +237,11 @@ async def load_project(
         raise ProjectLoadError(f"project root is not a directory: {root}")
     if not (root / project_file).is_file():
         raise ProjectLoadError(f"project root does not contain {project_file}: {root}")
+    declaration = await asyncio.to_thread((root / project_file).read_bytes)
+    try:
+        description = registry.describe(rtos, declaration)
+    except ValueError as error:
+        raise ProjectLoadError(f"invalid {project_file}: {error}") from None
     transfer = _transfer_name(root)
     begun = _object(
         await client.request("rtos.project.begin", {"name": transfer, "rtos": rtos}),
@@ -219,9 +252,11 @@ async def load_project(
     try:
         if progress is not None:
             progress(f"Uploading {project_file}")
-        response = await _upload_file(
+        response, declared = await _upload_file(
             client, transfer, project_file, root / project_file, chunk_size
         )
+        if declared.sha256 != hashlib.sha256(declaration).hexdigest():
+            raise ProjectLoadError(f"file changed while uploading: {project_file}")
         manifest = _object(response.get("manifest"), "project manifest")
         files = _project_files(
             root,
@@ -229,10 +264,14 @@ async def load_project(
             _relative_paths(manifest.get("required"), "project manifest"),
             _relative_paths(manifest.get("required_patterns"), "project manifest"),
         )
+        artifacts = [declared]
         for relative in files:
             if progress is not None:
                 progress(f"Uploading {relative}")
-            await _upload_file(client, transfer, relative, root / relative, chunk_size)
+            _, artifact = await _upload_file(
+                client, transfer, relative, root / relative, chunk_size
+            )
+            artifacts.append(artifact)
         committing = True
         snapshot = _object(
             await client.request(
@@ -252,4 +291,4 @@ async def load_project(
     server_path = snapshot.get("project_path")
     if snapshot.get("loaded") is not True or not isinstance(server_path, str):
         raise ProjectLoadError("pyGdbServer did not confirm loading the project")
-    return LoadedProject(rtos, root, server_path, (project_file, *files), snapshot)
+    return LoadedProject(rtos, root, server_path, tuple(artifacts), description, snapshot)

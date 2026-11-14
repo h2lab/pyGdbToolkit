@@ -54,6 +54,17 @@ and every manifest-required build artifact from the local `<path>`, then commits
 the transfer so GDB selects the RTOS and loads the project. Standalone GDB use
 does not require the server or the transfer protocol.
 
+Before contacting the server, the client parses the declaration into the
+project's software identity (`ProjectDescription`): the project name and
+version and, for each component, its kind, origin (`git` or `tarball`,
+repository URL without credentials, query or fragment), declared revision,
+configuration, source tree and linked ELF files. For Camelot the components
+are the kernel, the runtime and each `application.<name>`, with sources under
+`output/src/<name>`. An invalid declaration fails locally. Every uploaded file
+is recorded with its size and the SHA-256 digest of the bytes the server
+received. Both feed the [audit context](llm.md#audit-context), which the
+`audit [FILE]` dashboard command displays and optionally saves as JSON.
+
 ### Shared contracts and RTOS extensions
 
 `pyGdbToolkit.shared` contains contracts usable by the toolkit, server and
@@ -70,9 +81,9 @@ The shared RTOS package separates:
   `ProjectRegistry` and `DEFAULT_PROJECT_REGISTRY`;
 - `pyGdbToolkit.shared.rtos.camelot`: Camelot's declaration parser and build paths.
 
-To support another RTOS, implement a shared provider exposing its `name`
-and `manifest(project: bytes | None)`, then register it with the default
-registry. The bootstrap manifest declares `project_file`, `required` and
+To support another RTOS, implement a shared provider exposing its `name`,
+`manifest(project: bytes | None)` and `describe(project: bytes)`, then register
+it with the default registry. The bootstrap manifest declares `project_file`, `required` and
 `required_patterns`; parsing the completed declaration expands it with the
 exact build artifacts. The server uses that declaration path and provider,
 not Camelot-specific branches or a fixed TOML filename. A separate registry

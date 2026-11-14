@@ -13,10 +13,11 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+from ..audit import AuditContext, AuditContextManager
 from .approval import AuditorApprover
 from .confidentiality import TEST_DATA_WARNING, Redactor
 from .context import RpcRequester, fetch_target_context
-from .contracts import TargetContext
+from .contracts import JsonObject, TargetContext
 from .gateway import ToolGateway
 from .orchestrator import (
     AgentBudget,
@@ -103,6 +104,7 @@ class OpenedSession:
     continues: str | None = None
     recollection_chars: int = 0
     test_data: bool = False
+    audit: AuditContext | None = None
 
 
 @dataclass(frozen=True)
@@ -116,8 +118,9 @@ class ContextUsage:
 class AgentController:
     """Open, run, continue and close agent conversations bound to the live target.
 
-    Each conversation receives a fresh ``target.context`` snapshot, masked by the
-    configured redactor, and the tool catalogue. Proposed calls only reach the
+    Each conversation receives a fresh ``target.context`` snapshot and, when an
+    audit context manager is given, a freshly gathered audit context, both
+    masked by the configured redactor, and the tool catalogue. Proposed calls only reach the
     server through a gateway applying :class:`ProtectionPolicy` and the
     application's auditor approval callback. Every conversation is journaled,
     in memory unless a store file is configured, so it can be continued.
@@ -131,10 +134,12 @@ class AgentController:
         approver: AuditorApprover,
         sink: AgentSink,
         session_ids: Callable[[], str] = lambda: str(uuid4()),
+        audit: AuditContextManager | None = None,
     ) -> None:
         """Bind the provider to the server transport and the auditor interface."""
         self._settings = settings
         self._client = client
+        self._audit = audit
         self._approver = approver
         self._sink = sink
         self._session_ids = session_ids
@@ -317,6 +322,7 @@ class AgentController:
                 f"({status.authentication.value}): {status.message}"
             )
         context = await fetch_target_context(self._client)
+        audit = None if self._audit is None else await self._audit.refresh(self._client)
         store = self._open_store()
         recollection = None
         if continues is not None:
@@ -324,13 +330,19 @@ class AgentController:
                 continues, self._history(store, continues), self._settings.recollection_chars
             )
         redactor = None if self._settings.test_data else self._settings.redactor
+        audit_document: JsonObject | None = None if audit is None else audit.to_json()
         if redactor is None:
             self._sink(AgentNotice(TEST_DATA_WARNING))
             disclosed, redactions = context, 0
         else:
             disclosed, redactions = redactor.context(context)
+            if audit_document is not None:
+                audit_document, masked = redactor.document(audit_document)
+                redactions += masked
         session_id = self._session_ids()
-        session = await provider.open_session(session_id, disclosed, ToolCatalogue().definitions())
+        session = await provider.open_session(
+            session_id, disclosed, ToolCatalogue().definitions(), audit_document
+        )
         try:
             title = f"continues {continues}" if continues is not None else ""
             store.create_session(session_id, provider.provider_id, context, title)
@@ -355,6 +367,8 @@ class AgentController:
             raise
         self._recollection = recollection
         self._used = len(json.dumps(asdict(disclosed)))
+        if audit_document is not None:
+            self._used += len(json.dumps(audit_document))
         self._session = OpenedSession(
             session_id,
             context,
@@ -362,6 +376,7 @@ class AgentController:
             continues,
             len(recollection or ""),
             self._settings.test_data,
+            audit,
         )
         return self._session
 

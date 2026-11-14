@@ -147,7 +147,11 @@ class OpenAiProvider:
         )
 
     async def open_session(
-        self, session_id: str, context: TargetContext, tools: tuple[ToolDefinition, ...]
+        self,
+        session_id: str,
+        context: TargetContext,
+        tools: tuple[ToolDefinition, ...],
+        audit: JsonObject | None = None,
     ) -> LlmSession:
         """Create a fresh local conversation seeded with the target snapshot."""
         if not session_id.strip():
@@ -168,7 +172,7 @@ class OpenAiProvider:
             if self._closed:
                 raise ProviderError("OpenAI provider is closed")
             session = OpenAiLlmSession(
-                session_id, client, self._config, tools, agent_instructions(context)
+                session_id, client, self._config, tools, agent_instructions(context, audit)
             )
             self._sessions.append(session)
             return session

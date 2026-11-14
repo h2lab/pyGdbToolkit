@@ -11,6 +11,7 @@ from typing import Self
 
 from .contracts import (
     ContextFact,
+    JsonObject,
     JsonValue,
     MemoryMapContext,
     MemoryRegion,
@@ -163,6 +164,14 @@ class Redactor:
             ),
         )
         return masked, counter[0]
+
+    def document(self, document: JsonObject) -> tuple[JsonObject, int]:
+        """Mask every string value of a JSON object, preserving its keys and structure."""
+        entries = {key: self._json(value) for key, value in document.items()}
+        return (
+            {key: value for key, (value, _) in entries.items()},
+            sum(count for _, count in entries.values()),
+        )
 
     def _json(self, value: JsonValue) -> tuple[JsonValue, int]:
         if isinstance(value, str):

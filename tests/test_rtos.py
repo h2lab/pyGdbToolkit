@@ -13,6 +13,9 @@ from unittest.mock import Mock
 import pytest
 
 from pyGdbToolkit.shared.rtos import (
+    DEFAULT_PROJECT_REGISTRY,
+    ProjectComponent,
+    ProjectDescription,
     ProjectManifest,
     ProjectRegistry,
     project_manifest,
@@ -68,6 +71,10 @@ class ExampleProjectProvider:
             files += (relative,)
         return ProjectManifest("context.txt", files, ())
 
+    def describe(self, project: bytes) -> ProjectDescription:
+        """Declare a single anonymous application."""
+        return ProjectDescription(None, None, (ProjectComponent("app", "application"),))
+
 
 def test_registry_supports_additional_rtos_without_camelot_branches() -> None:
     """A provider owns its declaration format, paths and expansion behavior."""
@@ -77,10 +84,13 @@ def test_registry_supports_additional_rtos_without_camelot_branches() -> None:
     assert bootstrap.project_file == "context.txt"
     assert bootstrap.required == ("context.txt",)
     assert registry.manifest("example", b"firmware.elf").required == ("context.txt", "firmware.elf")
+    assert registry.describe("example", b"firmware.elf").components[0].name == "app"
     with pytest.raises(ValueError, match="duplicate"):
         registry.register(ExampleProjectProvider())
     with pytest.raises(ValueError, match="Unsupported RTOS"):
         registry.manifest("camelot")
+    with pytest.raises(ValueError, match="Unsupported RTOS"):
+        registry.describe("camelot", b"")
     with pytest.raises(ValueError, match="Unsupported RTOS"):
         project_manifest("example")
 
@@ -152,6 +162,81 @@ def test_remote_requires_kernel_but_local_application_only_is_unchanged() -> Non
         project_manifest("camelot", b"[application.demo]\nprovides = ['demo.elf']\n")
     with pytest.raises(ValueError, match="Unsupported RTOS"):
         project_manifest("other")
+
+
+SAMPLE_PROJECT = b"""
+name = 'Dynamics demo Project'
+version = 'v0.0.1'
+dts = 'dts/sample.dts'
+
+[kernel]
+scm.git.uri = 'https://github.com/camelot-os/sentry-kernel.git'
+scm.git.revision = 'v0.4.8'
+config = 'configs/sentry/nucleo_u5a5.config'
+
+[runtime]
+scm.git.uri = 'https://github.com/camelot-os/shield.git'
+scm.git.revision = 'main'
+config = 'configs/shield/shield.config'
+
+[application.hello]
+scm.git.uri = 'https://user:token@example.com/hello.git?private_token=x#frag'
+scm.git.revision = 'main'
+build.backend = 'cargo'
+provides = ['hello.elf', 'hello-tool.elf']
+
+[application.sample_c_app]
+scm.tarball.uri = 'https://example.com/sample-c-app.tar.gz'
+scm.tarball.hashfile_uri = 'https://example.com/sample-c-app.tar.gz.sha256'
+provides = ['sample-c-app.elf']
+"""
+
+
+def test_camelot_describes_declared_software_identity() -> None:
+    """The description names every component with its origin, sources and linked ELF."""
+    description = DEFAULT_PROJECT_REGISTRY.describe("camelot", SAMPLE_PROJECT)
+    assert (description.name, description.version) == ("Dynamics demo Project", "v0.0.1")
+    kernel, runtime, hello, sample = description.components
+    assert kernel == ProjectComponent(
+        "kernel",
+        "kernel",
+        "git",
+        "https://github.com/camelot-os/sentry-kernel.git",
+        "v0.4.8",
+        "configs/sentry/nucleo_u5a5.config",
+        "output/src/kernel",
+        (f"{PRIVATE_BUILD}/sentry-kernel.elf",),
+    )
+    assert (runtime.kind, runtime.revision, runtime.executables) == ("runtime", "main", ())
+    assert runtime.sources == "output/src/runtime"
+    assert hello.repository == "https://example.com/hello.git"
+    assert hello.executables == (f"{PRIVATE_BUILD}/hello.elf",)
+    assert (sample.name, sample.scm, sample.revision) == ("sample_c_app", "tarball", None)
+    assert sample.sources == "output/src/sample_c_app"
+    assert sample.executables == (f"{PRIVATE_BUILD}/sample-c-app.elf",)
+    assert json.loads(json.dumps(description.to_dict()))["components"][3] == sample.to_dict()
+
+
+@pytest.mark.parametrize(
+    "project",
+    [
+        b"[kernel]\nscm = 'git'\n",
+        b"[kernel.scm.git]\nuri = 'a'\n[kernel.scm.tarball]\nuri = 'b'\n",
+        b"[kernel]\nscm.git = 'a'\n",
+        b"[kernel]\nscm.git.uri = 1\n",
+        b"[kernel]\nconfig = 1\n",
+        b"name = 1\n[kernel]\n",
+        b"kernel = 1\n",
+        b"[application.'a/b']\nprovides = ['x.elf']\n",
+        b"[application.demo]\n",
+        b"[kernel\n",
+        b"\xff",
+    ],
+)
+def test_camelot_rejects_malformed_identity(project: bytes) -> None:
+    """Malformed declarations fail rather than producing a partial identity."""
+    with pytest.raises(ValueError):
+        DEFAULT_PROJECT_REGISTRY.describe("camelot", project)
 
 
 def _project(tmp_path: Path) -> None:
