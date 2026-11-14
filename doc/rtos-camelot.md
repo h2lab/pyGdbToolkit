@@ -20,13 +20,17 @@ the following files relative to that directory:
 | --- | --- |
 | `project.toml` | Find the `[kernel]` block and `[application.<name>]` blocks |
 | `output/build/camelot_private/sentry-kernel.elf` | Kernel symbols and `.task_list` section |
-| `output/build/camelot_private/<name>-app.elf` | Symbols for each declared application |
+| `output/build/camelot_private/<provides[0]>` | Symbols for each declared application, named by its first `provides` entry (for example `hello.elf`) |
 | `output/build/camelot_private/layout.json` | Linked text and RAM mapping for kernel and tasks |
 | `output/build/kernel/kernel/include/sentry/managers/task_metadata.h` | Generated `task_meta_t` definition for this build |
 | `output/build/kernel/subprojects/kconfig-*/generated_kconfig.json` | Stack layout setting for live inspection |
 
-The `[runtime]` block does not add an ELF. Neither
-`<name>-app.dummy.elf` nor other dummy link products are loaded. Each expected
+Every `[application.<name>]` block must declare a nonempty `provides` list of
+file names, as required by barbican; only its first entry is relinked into
+`camelot_private`, so only that ELF is loaded. Applications must provide
+distinct ELF names. The `[runtime]` block does not add an ELF. Neither
+`<provides>.dummy.elf` (for example `hello.dummy.elf`) nor other dummy link
+products are loaded. Each expected
 linked ELF must exist; the symbols and metadata must correspond to the image
 on the target when using live commands.
 

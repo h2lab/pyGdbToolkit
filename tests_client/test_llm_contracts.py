@@ -256,7 +256,14 @@ import sys
 
 class RejectTargetDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split(".")[0] in {"gdb", "pyGdbToolkit", "copilot", "httpx"}:
+        if fullname == "gdb":
+            # pyGdbToolkit's import guard expects the GDB-less behavior.
+            raise ModuleNotFoundError("No module named 'gdb'", name="gdb")
+        if fullname in {"pyGdbToolkit", "pyGdbToolkit.shared"} or fullname.startswith(
+            "pyGdbToolkit.shared."
+        ):
+            return None  # host-safe shared contracts stay importable
+        if fullname.split(".")[0] in {"pyGdbToolkit", "copilot", "httpx"}:
             raise AssertionError("Forbidden import: " + fullname)
         return None
 
