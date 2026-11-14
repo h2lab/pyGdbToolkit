@@ -20,10 +20,18 @@ from .config import ServerConfig
 from .logs import LogEvent, LogStore
 from .ocd import create_mi_session
 from .process import ManagedProcess
+from .rtos import RtosProjects
 from .target_context import build_target_context
 
 _WORKSPACE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _WORKSPACE_FILENAME_MAX_LENGTH = 128
+_RTOS_RPC_PARAMETERS = {
+    "rtos.project.begin": {"name", "rtos"},
+    "rtos.project.put": {"name", "path", "offset", "size", "content"},
+    "rtos.project.commit": {"name", "timeout"},
+    "rtos.project.abort": {"name"},
+    "rtos.status": {"timeout"},
+}
 
 
 def _workspace_filename(filename: object) -> str:
@@ -66,6 +74,7 @@ class PyGdbServer:
     def __init__(self, config: ServerConfig) -> None:
         self.config = config
         self.workspace = Path.cwd().resolve()
+        self.rtos_projects = RtosProjects(self.workspace)
         self.logs = LogStore(config.log_directory)
         self.ocd: ManagedProcess | None = None
         self.core_ocds: dict[int, ManagedProcess] = {}
@@ -302,6 +311,8 @@ class PyGdbServer:
     async def _dispatch(
         self, method: str, params: dict[str, Any]
     ) -> tuple[dict[str, Any] | list[dict[str, int | str]], bool]:
+        if method in _RTOS_RPC_PARAMETERS and set(params) - _RTOS_RPC_PARAMETERS[method]:
+            raise ValueError(f"Unexpected parameters for {method}")
         if method == "server.status":
             return self.status(), False
         if method == "workspace.upload":
@@ -312,6 +323,29 @@ class PyGdbServer:
             return await asyncio.to_thread(self._list_directory, params), False
         if method == "workspace.erase":
             return await asyncio.to_thread(self._erase_file, params), False
+        if method == "rtos.project.begin":
+            return (
+                await asyncio.to_thread(self.rtos_projects.begin, params["name"], params["rtos"]),
+                False,
+            )
+        if method == "rtos.project.put":
+            return (
+                await asyncio.to_thread(
+                    self.rtos_projects.put,
+                    params["name"],
+                    params["path"],
+                    params["offset"],
+                    params["size"],
+                    params["content"],
+                ),
+                False,
+            )
+        if method == "rtos.project.abort":
+            return await asyncio.to_thread(self.rtos_projects.abort, params["name"]), False
+        if method == "rtos.project.commit":
+            return await self.rtos_project_commit(params["name"], _timeout(params)), False
+        if method == "rtos.status":
+            return await self.rtos_status(_timeout(params)), False
         if method == "command.execute":
             command = params["command"]
             if not isinstance(command, str) or not command.strip():
@@ -506,6 +540,42 @@ class PyGdbServer:
             return build_target_context(self.config, None, f"GDB context unavailable: {error}")
         return build_target_context(self.config, facts)
 
+    async def rtos_status(self, timeout: float = 30.0) -> dict[str, Any]:
+        """Read the actual GDB RTOS state, including projects loaded through the CLI."""
+        marker = "PYGDBSERVER_RTOS_JSON:"
+        command = (
+            "python import json; from pyGdbToolkit.cmd_rtos import rtos_status; "
+            f"print('{marker}' + json.dumps(rtos_status()))"
+        )
+        data = await self._python_json(marker, command, timeout)
+        if not isinstance(data, dict) or data.get("schema_version") != 1:
+            raise RuntimeError("GDB did not return structured RTOS session state")
+        return data
+
+    async def rtos_project_commit(self, name: object, timeout: float = 30.0) -> dict[str, Any]:
+        """Validate staging and select/load/snapshot the project in one GDB operation."""
+        rtos, path = await asyncio.to_thread(self.rtos_projects.prepare, name)
+        success = False
+        try:
+            marker = "PYGDBSERVER_RTOS_JSON:"
+            command = (
+                "python import json; from pyGdbToolkit.cmd_rtos import load_rtos_project; "
+                f"print('{marker}' + json.dumps(load_rtos_project({rtos!r}, {str(path)!r})))"
+            )
+            data = await self._python_json(marker, command, timeout)
+            if (
+                not isinstance(data, dict)
+                or data.get("schema_version") != 1
+                or data.get("loaded") is not True
+                or data.get("selected_rtos") != rtos
+                or data.get("project_path") != str(path)
+            ):
+                raise RuntimeError("GDB did not confirm loading the staged RTOS project")
+            success = True
+            return data
+        finally:
+            self.rtos_projects.finish(name, success)
+
     async def svd_peripherals(self) -> dict[str, Any]:
         """Return loaded SVD metadata in a stable JSON shape for client trees."""
         marker = "PYGDBSERVER_SVD_JSON:"
@@ -595,6 +665,7 @@ class PyGdbServer:
             self._websocket_server.close()
             await self._websocket_server.wait_closed()
         await self.mi.stop()
+        self.rtos_projects.close()
         for process in reversed(tuple(self.core_ocds.values())):
             await process.stop()
         if self.ocd is not None:

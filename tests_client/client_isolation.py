@@ -12,6 +12,14 @@ from types import ModuleType
 FORBIDDEN_PACKAGES = frozenset({"gdb", "pyGdbToolkit", "pyGdbServer"})
 
 
+def _is_target_dependency(fullname: str) -> bool:
+    if fullname in {"pyGdbToolkit", "pyGdbToolkit.shared"} or fullname.startswith(
+        "pyGdbToolkit.shared."
+    ):
+        return False
+    return fullname.partition(".")[0] in FORBIDDEN_PACKAGES
+
+
 class RejectTargetDependencies(importlib.abc.MetaPathFinder):
     """Fail imports of target-side packages as if they were not installed."""
 
@@ -23,14 +31,14 @@ class RejectTargetDependencies(importlib.abc.MetaPathFinder):
     ) -> importlib.machinery.ModuleSpec | None:
         """Reject forbidden packages and defer every other import."""
         del path, target
-        if fullname.partition(".")[0] in FORBIDDEN_PACKAGES:
+        if _is_target_dependency(fullname):
             raise ModuleNotFoundError(f"{fullname} is unavailable to client tests", name=fullname)
         return None
 
 
 def loaded_forbidden_modules() -> list[str]:
     """Return already-imported target-side modules."""
-    return sorted(name for name in sys.modules if name.partition(".")[0] in FORBIDDEN_PACKAGES)
+    return sorted(name for name in sys.modules if _is_target_dependency(name))
 
 
 def install_import_guard() -> None:
