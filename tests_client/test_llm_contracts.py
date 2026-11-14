@@ -276,6 +276,6 @@ from pyGdbClient.llm import (
 import pyGdbClient.cli
 assert scripted.ScriptedProvider.provider_id == "scripted"
 assert _http.SSE_DONE == "[DONE]"
-assert registry.default_registry().ids == ("github-copilot", "openai")
+assert registry.default_registry().ids == ("github-copilot", "openai", "opencode")
 """
     subprocess.run([sys.executable, "-I", "-c", script, str(source)], check=True)

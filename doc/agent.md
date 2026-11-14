@@ -43,6 +43,22 @@ reference are in [LLM integration](llm.md).
        --llm-store audit.sqlite
    ```
 
+   Alternatively, connect to an **already running OpenCode V2 server** that
+   has been configured to use a model, such as Ollama on the network:
+
+   ```console
+   python -m pip install '.[opencode]'
+   export OPENCODE_PASSWORD='<server password>'
+   pyGdbClient ws://localhost:1234 --llm opencode \
+       --opencode-url http://opencode.lan:4096 \
+       --opencode-password-env OPENCODE_PASSWORD
+   ```
+
+   OpenCode proxies the requests to its configured model. Its native tools
+   are disabled; model-proposed target operations still require the local
+   policy and approvals. See [OpenCode setup and limitations](llm.md#opencode-v2-provider),
+   including server startup, authentication and the structured response protocol.
+
 4. Type `/status` in the agent prompt (the second prompt, below the command
    prompt) to check readiness and authentication, then type a request.
 
@@ -172,11 +188,12 @@ through the [provider registry](llm.md#adding-a-provider). Protect the
 
 | Symptom | Action |
 | ------- | ------ |
-| The agent prompt only explains how to enable it | Start the client with `--llm github-copilot` or `--llm openai`. |
-| `/status` reports the provider unavailable | Copilot: install the `copilot` extra, run `python -m copilot download-runtime` and pass the printed path with `--copilot-runtime` or `PYGDB_COPILOT_RUNTIME`. OpenAI-compatible: install the `openai` extra and check `--openai-url` and the server. |
-| `/status` reports authentication required | Copilot: run `copilot login`, or use `--copilot-token-env NAME`. OpenAI-compatible: use `--openai-key-env NAME`. |
+| The agent prompt only explains how to enable it | Start the client with `--llm github-copilot`, `--llm openai` or `--llm opencode`. |
+| `/status` reports the provider unavailable | Copilot: install the `copilot` extra, run `python -m copilot download-runtime` and pass the printed path with `--copilot-runtime` or `PYGDB_COPILOT_RUNTIME`. OpenAI-compatible: install the `openai` extra and check `--openai-url` and the server. OpenCode: install the `opencode` extra and check that the V2 server is running at `--opencode-url`. |
+| `/status` reports authentication required | Copilot: run `copilot login`, or use `--copilot-token-env NAME`. OpenAI-compatible: use `--openai-key-env NAME`. OpenCode: set `--opencode-password-env NAME` to the variable holding the server password. |
 | OpenAI-compatible completion returns HTTP 404 | Check both the `/v1` base URL and exact `--openai-model` name. Ollama returns 404 for an uninstalled model too; check `ollama list` on the server. |
 | The model does not support tool calling | Select an installed tool-capable model, for example `--openai-model llama3.2:latest` on Ollama. `qwen2:0.5b-instruct` supports plain chat, not this agent's tools. |
+| OpenCode reports an invalid structured response | Select a model configured on OpenCode that reliably follows the JSON protocol; the adapter rejects unstructured answers rather than bypassing the local tool gateway. |
 | Requests are refused after `/cancel` | The conversation has unanswered tool calls; use `/new`. |
 | `/sessions` is empty after a restart | Use the same `--llm-store` file in each run. |
 | The agent lost earlier details | Continuation keeps a bounded recollection; ask the agent to observe the target again. |

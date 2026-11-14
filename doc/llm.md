@@ -7,8 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 ## Status and scope
 
 `pyGdbClient.llm` connects an LLM agent to the dashboard through
-provider-neutral contracts, with GitHub Copilot and OpenAI-compatible
-endpoints as optional providers.
+provider-neutral contracts, with GitHub Copilot, OpenAI-compatible endpoints
+and OpenCode V2 as optional providers.
 The agent works on the target only through a controlled tool gateway, a
 deterministic protection policy and one-attempt auditor approvals. The
 [agent-assisted audit guide](agent.md) covers day-to-day use; this page
@@ -35,6 +35,8 @@ The twelfth adds end-to-end simulated audit workflows
 (`tests_client/test_llm_scenarios.py`) and the [user guide](agent.md).
 The thirteenth adds the optional [OpenAI-compatible provider](#openai-compatible-provider)
 for LAN inference servers such as Ollama or llama.cpp.
+The [OpenCode V2 provider](#opencode-v2-provider) connects to a separately
+configured server and proxies requests to its selected model.
 
 ## Trust boundaries
 
@@ -148,8 +150,10 @@ Component source trees missing from the local workstation are recorded as
 context and, with `FILE`, writes its JSON document to that local file.
 
 When the agent is enabled, each new conversation receives a fresh audit
-context, [masked](#masking-before-disclosure) like the target snapshot, in its
-system instructions as data, not instructions. It is counted in the context
+context, [masked](#masking-before-disclosure) like the target snapshot, as
+data, not instructions. Copilot and OpenAI-compatible providers include it in
+their system instructions; OpenCode includes it in each generation prompt.
+It is counted in the context
 usage but not journaled in the store. After loading another project during a
 conversation, use `/new` so the agent receives it.
 
@@ -593,8 +597,9 @@ replayed as authorization.
 3. `open_session(session_id, context, tools, audit=None)`: an isolated
    conversation given an application-owned ID, an explicit context snapshot,
    tool schemas and, optionally, the already masked
-   [audit context](#audit-context) document, which built-in providers append
-   to their system instructions.
+   [audit context](#audit-context) document. Copilot and OpenAI-compatible
+   providers append it to their system instructions; OpenCode includes it in
+   its structured generation prompt.
 
 `LlmSession.stream()` accepts either a `UserPrompt` or correlated `ToolResults`.
 It yields ordered `TextDelta` and complete `ToolCallProposed` events, followed
@@ -906,6 +911,101 @@ unchanged. A local model on trusted equipment is the recommended setup for
 production data, but only after verifying what the server logs and retains: an
 OpenAI-compatible URL is not by itself proof of a local or trustworthy model.
 
+## OpenCode V2 provider
+
+`pyGdbClient.llm.opencode.OpenCodeProvider` connects to an **already running
+OpenCode V2 server**. OpenCode acts as a proxy to its configured model, which
+can itself run on another machine, for example Ollama on the local network.
+pyGdbClient neither installs nor starts OpenCode or the model server. The
+OpenCode V1 server API is not supported.
+
+### Setup
+
+Install the optional HTTP client in the pyGdbClient environment:
+
+```console
+python -m pip install '.[opencode]'
+```
+
+Separately, configure OpenCode V2 on its host. For example, an
+`opencode.jsonc` can point an OpenAI-compatible provider at an existing Ollama
+server. Use the actual model name installed on that Ollama server:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "ollama": {
+      "name": "Network Ollama",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://ollama.lan:11434/v1" },
+      "models": { "llama3.2:latest": { "name": "Llama 3.2" } }
+    }
+  },
+  "model": "ollama/llama3.2:latest"
+}
+```
+
+Start the OpenCode server independently and make it accessible to the client:
+
+```console
+OPENCODE_PASSWORD='<server password>' opencode serve --hostname 0.0.0.0 --port 4096
+```
+
+Then connect the client to **OpenCode**, not directly to Ollama:
+
+```console
+export OPENCODE_PASSWORD='<server password>'
+pyGdbClient ws://localhost:1234 --llm opencode \
+    --opencode-url http://opencode.lan:4096 \
+    --opencode-password-env OPENCODE_PASSWORD \
+    --opencode-model ollama/llama3.2:latest
+```
+
+`--opencode-url` can instead be supplied via `PYGDB_OPENCODE_URL`.
+`--opencode-agent` optionally selects an agent defined on the server;
+`--opencode-model` selects a configured `provider/model` (optionally followed
+by `#variant`), otherwise OpenCode uses its configured selection.
+`--opencode-timeout` bounds each request and
+response read (default 120 seconds). The optional password is read only from
+the environment variable named by `--opencode-password-env`, never printed or
+stored in the client configuration representation. V2 HTTP Basic
+authentication uses the fixed user `opencode`. `/status` probes `GET /api/info`;
+it checks server access, not whether the selected model can generate.
+
+Use an authenticated, trusted network and HTTPS or a protected tunnel for
+remote access: Basic authentication over plain HTTP does not encrypt either
+the password or audit data. The OpenCode server, its plugins and its configured
+model provider can receive the masked target and audit context, prompts and
+approved observations. Their logs and retention are outside pyGdbClient's
+control. Masking remains best effort and is not a security boundary.
+
+### Structured tool handoff
+
+OpenCode's native agent tools are **disabled** for this integration. The client
+creates a separate V2 session with a deny-all permission rule and requires the
+server to confirm that rule. Each model turn uses the V2 transient
+`/api/session/{id}/generate` endpoint; the local conversation is replayed with
+the target snapshot, audit context, tool definitions and prior results. This
+endpoint returns a complete response, rather than streaming text token by token.
+The client deletes its remote session on close; a crash or network failure can
+leave a session on the OpenCode server.
+
+The model must follow a strict JSON protocol: either an answer or a batch of
+named tool proposals with unique identifiers and JSON arguments. Invalid JSON,
+unknown or duplicate tools and oversized responses fail explicitly; no
+plain-text or native-tool fallback is used. Reliability therefore depends on
+the selected model's ability to follow the structured instructions. Tool
+proposals go through the same local validation, policy and auditor approval as
+other backends. Failed or refused operations are returned as failures. OpenCode
+does not receive executable target-tool callbacks or the pyGdbServer connection.
+
+This mode does **not** give the OpenCode agent its usual filesystem, shell,
+subagent, MCP or other native tools. In particular, paths in the audit context
+describe the auditor's workstation and must not be assumed to exist on the
+OpenCode host. Cancelling interrupts the client HTTP request, but cannot
+guarantee that inference already started on the remote server stops.
+
 ## Dashboard agent CLI
 
 The dashboard has a second prompt, below the command prompt, dedicated to the
@@ -946,7 +1046,7 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 
 | Option | Purpose |
 | ------ | ------- |
-| `--llm PROVIDER` | Enable the agent CLI with a registered provider (`github-copilot`, `openai`). |
+| `--llm PROVIDER` | Enable the agent CLI with a registered provider (`github-copilot`, `openai`, `opencode`). |
 | `--llm-store FILE` | Retain conversations and target snapshots in this SQLite file (created with mode `0600`). By default they are journaled in memory only, for the dashboard's lifetime. |
 | `--llm-redact REGEX` | Also mask matches of this Python regular expression before disclosure (repeatable, at most 512 characters). |
 | `--llm-test-data` | Analyse test data without automatic masking, including test cryptographic material. Cannot be combined with `--llm-redact`. |
@@ -958,6 +1058,11 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 | `--openai-model MODEL` | Model served by the endpoint; defaults to `$PYGDB_OPENAI_MODEL`. |
 | `--openai-key-env NAME` | Read an API key from environment variable `NAME`. Without it, access is anonymous. |
 | `--openai-timeout SECONDS` | Bound of each request and stream read (default `120`). |
+| `--opencode-url URL` | OpenCode V2 server URL; defaults to `$PYGDB_OPENCODE_URL`. |
+| `--opencode-agent AGENT` | Select an agent configured on the OpenCode server. |
+| `--opencode-model PROVIDER/MODEL[#VARIANT]` | Select a model and optional variant configured on the OpenCode server. |
+| `--opencode-password-env NAME` | Read the OpenCode server password from environment variable `NAME`. |
+| `--opencode-timeout SECONDS` | Bound of each request and response read (default `120`). |
 
 A token is never accepted on the command line, where other local users could
 read it from the process list. Invalid provider options stop the launcher with
