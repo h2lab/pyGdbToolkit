@@ -4,10 +4,14 @@
 """Provider selection and launcher options, without network, runtime or target."""
 
 import argparse
+import asyncio
+import base64
 from collections.abc import Mapping
+import os
 from pathlib import Path
 import sys
 
+import httpx
 import pytest
 
 from pyGdbClient.cli import _parser, agent_settings
@@ -87,6 +91,186 @@ def test_opencode_factory_uses_server_options_and_environment_without_network() 
     assert config.agent == "audit" and config.model == "ollama/llama3.2:latest"
     assert config.password == "secret-password" and config.request_timeout == 45
     assert "secret-password" not in repr(config)
+
+
+@pytest.mark.parametrize("line_ending", [b"", b"\n", b"\r\n"])
+def test_opencode_password_file_authenticates_without_disclosing_password(
+    tmp_path: Path, line_ending: bytes
+) -> None:
+    password_file = tmp_path / "password"
+    password_file.write_bytes(b" password with spaces " + line_ending)
+    registry = default_registry()
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "opencode",
+        "--opencode-url",
+        "http://server",
+        "--opencode-password-file",
+        str(password_file),
+    )
+    settings = agent_settings(parser, arguments, registry, {})
+    assert settings is not None and isinstance(settings.provider, OpenCodeProvider)
+    provider = settings.provider
+    assert provider._config.password == " password with spaces "
+    assert "password with spaces" not in repr(provider._config)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        token = base64.b64encode(b"opencode: password with spaces ").decode("ascii")
+        assert request.headers["authorization"] == f"Basic {token}"
+        return httpx.Response(200, json={"version": "2.0.0"})
+
+    provider._transport = httpx.MockTransport(handle)
+
+    async def exercise() -> None:
+        status = await provider.status()
+        assert status.available
+        assert status.authentication.value == "authenticated"
+        assert "password with spaces" not in status.message
+        await provider.close()
+
+    asyncio.run(exercise())
+
+
+def test_opencode_password_file_expands_home_and_resolves_relative_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "password").write_text("secret\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    registry = default_registry()
+    for path in ("~/password", "password"):
+        parser, arguments = _parse(
+            registry,
+            "--llm",
+            "opencode",
+            "--opencode-url",
+            "http://server",
+            "--opencode-password-file",
+            path,
+        )
+        settings = agent_settings(parser, arguments, registry, {})
+        assert settings is not None and isinstance(settings.provider, OpenCodeProvider)
+        assert settings.provider._config.password == "secret"
+
+
+def test_opencode_password_file_accepts_maximum_size_and_symlinks(tmp_path: Path) -> None:
+    password_file = tmp_path / "password"
+    password_file.write_bytes(b"x" * (16 * 1024))
+    link = tmp_path / "link"
+    link.symlink_to(password_file)
+    registry = default_registry()
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "opencode",
+        "--opencode-url",
+        "http://server",
+        "--opencode-password-file",
+        str(link),
+    )
+    settings = agent_settings(parser, arguments, registry, {})
+    assert settings is not None and isinstance(settings.provider, OpenCodeProvider)
+    assert settings.provider._config.password == "x" * (16 * 1024)
+
+
+def test_password_file_is_not_read_for_another_provider(tmp_path: Path) -> None:
+    registry = default_registry()
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "openai",
+        "--openai-url",
+        "http://server/v1",
+        "--openai-model",
+        "model",
+        "--opencode-password-file",
+        str(tmp_path / "does-not-exist"),
+    )
+    settings = agent_settings(parser, arguments, registry, {})
+    assert settings is not None and isinstance(settings.provider, OpenAiProvider)
+
+
+@pytest.mark.parametrize(
+    "content,reason",
+    [
+        (b"", "nonempty"),
+        (b"  \n", "nonempty"),
+        (b"secret\nsecond-line", "one nonempty line"),
+        (b"secret\0hidden", "NUL"),
+        (b"\xff", "UTF-8"),
+        (b"x" * (16 * 1024 + 1), "16384 bytes"),
+    ],
+)
+def test_invalid_opencode_password_files_are_reported_without_contents(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], content: bytes, reason: str
+) -> None:
+    password_file = tmp_path / "password"
+    password_file.write_bytes(content)
+    registry = default_registry()
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "opencode",
+        "--opencode-url",
+        "http://server",
+        "--opencode-password-file",
+        str(password_file),
+    )
+    with pytest.raises(SystemExit):
+        agent_settings(parser, arguments, registry, {})
+    error = capsys.readouterr().err
+    assert reason in error
+    assert "secret" not in error
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "fifo"])
+def test_opencode_password_file_access_failures_are_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], kind: str
+) -> None:
+    path = tmp_path / "credential"
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "fifo":
+        os.mkfifo(path)
+    registry = default_registry()
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "opencode",
+        "--opencode-url",
+        "http://server",
+        "--opencode-password-file",
+        str(path),
+    )
+    with pytest.raises(SystemExit):
+        agent_settings(parser, arguments, registry, {})
+    assert "--opencode-password-file" in capsys.readouterr().err
+
+
+def test_opencode_password_sources_are_mutually_exclusive(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit):
+        _parse(
+            default_registry(),
+            "--llm",
+            "opencode",
+            "--opencode-password-file",
+            "file",
+            "--opencode-password-env",
+            "NAME",
+        )
+    assert "not allowed with argument" in capsys.readouterr().err
+    with pytest.raises(ProviderConfigurationError, match="mutually exclusive"):
+        OpenCodeProviderFactory().create(
+            argparse.Namespace(
+                opencode_url="http://server",
+                opencode_password_file=Path("file"),
+                opencode_password_env="NAME",
+            ),
+            {},
+        )
 
 
 @pytest.mark.parametrize(

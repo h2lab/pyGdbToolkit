@@ -11,6 +11,7 @@ from typing import Literal
 from pyGdbClient.workspace import WORKSPACE_FILENAME_MAX_LENGTH, validate_workspace_filename
 
 from .contracts import ActionEffect, JsonObject, JsonValue, ToolCall, ToolDefinition
+from .sources import SourceError, validate_source_arguments
 
 MAX_MEMORY_READ_BYTES = 4096
 MAX_COMMAND_CHARACTERS = 4096
@@ -205,6 +206,46 @@ _TOOLS = (
     ),
 )
 
+_SOURCE_TOOLS = (
+    _Tool(
+        "read",
+        "Read a UTF-8 project file, relative to the project root, with line numbers.",
+        "local.source.read",
+        parameters=(
+            _Parameter("path", "string", "Project-relative file path.", max_length=1024),
+            _Parameter(
+                "offset", "integer", "First line, starting at 1.", False, 1, 1000000, default=1
+            ),
+            _Parameter("limit", "integer", "Maximum lines.", False, 1, 200, default=100),
+        ),
+    ),
+    _Tool(
+        "glob",
+        "Find project files matching a glob relative to a project directory; ** is recursive.",
+        "local.source.glob",
+        parameters=(
+            _Parameter(
+                "path", "string", "Project-relative directory; use . for root.", max_length=1024
+            ),
+            _Parameter("pattern", "string", "Relative glob, e.g. **/*.c.", max_length=256),
+        ),
+    ),
+    _Tool(
+        "grep",
+        "Search project text files for a literal, case-sensitive string; not a regex.",
+        "local.source.grep",
+        parameters=(
+            _Parameter(
+                "path", "string", "Project-relative directory; use . for root.", max_length=1024
+            ),
+            _Parameter("pattern", "string", "Literal text to find.", max_length=256),
+            _Parameter(
+                "glob", "string", "Relative filename glob, e.g. **/*.c.", False, max_length=256
+            ),
+        ),
+    ),
+)
+
 
 @dataclass(frozen=True)
 class PreparedCall:
@@ -226,18 +267,24 @@ class PreparedCall:
 class ToolCatalogue:
     """Advertise schemas and map validated calls to fixed RPC routes."""
 
-    def definitions(self) -> tuple[ToolDefinition, ...]:
+    def definitions(self, *, include_sources: bool = False) -> tuple[ToolDefinition, ...]:
         """Return detached tool definitions without executable callbacks or a transport."""
-        return tuple(tool.definition() for tool in _TOOLS)
+        tools = _TOOLS + _SOURCE_TOOLS if include_sources else _TOOLS
+        return tuple(tool.definition() for tool in tools)
 
     def prepare(self, call: ToolCall) -> PreparedCall:
         """Validate arguments, apply defaults and freeze the exact RPC invocation."""
-        tool = next((tool for tool in _TOOLS if tool.name == call.name), None)
+        tool = next((tool for tool in (*_TOOLS, *_SOURCE_TOOLS) if tool.name == call.name), None)
         if tool is None:
             raise ToolValidationError(f"unknown tool: {call.name}")
         arguments = tool.arguments(call.arguments)
         params = dict(arguments)
-        if tool.name == "workspace_erase":
+        if tool.name in ("read", "glob", "grep"):
+            try:
+                validate_source_arguments(tool.name, arguments)
+            except SourceError as error:
+                raise ToolValidationError(str(error)) from error
+        elif tool.name == "workspace_erase":
             filename = arguments["filename"]
             if not isinstance(filename, str):
                 raise ToolValidationError("filename must be a string")

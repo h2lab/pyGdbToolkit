@@ -58,8 +58,24 @@ reference are in [LLM integration](llm.md).
    are disabled; model-proposed target operations still require the local
    policy and approvals. See [OpenCode setup and limitations](llm.md#opencode-v2-provider),
    including server startup, authentication and the structured response protocol.
+   Instead of an environment variable, use `--opencode-password-file FILE`
+   to read the password from a protected local file; do not specify both.
 
-4. Type `/status` in the agent prompt (the second prompt, below the command
+4. To let OpenCode inspect local project sources, load a project in the
+   **command** prompt, for example:
+
+   ```text
+   project /absolute/path/to/sample-project camelot
+   ```
+
+   If an agent session is already open, enter `/new` in the agent prompt.
+   The local `read`, `glob` and `grep` tools can then share bounded source
+   observations with OpenCode without another approval. Only load a project
+   whose non-hidden contents may be disclosed to OpenCode and its model.
+   See [local project source access](llm.md#local-project-source-access)
+   for path restrictions, limits and confidentiality caveats.
+
+5. Type `/status` in the agent prompt (the second prompt, below the command
    prompt) to check readiness and authentication, then type a request.
 
 The **LLM CREDITS** panel, below the OCD log, shows the used and remaining
@@ -93,7 +109,8 @@ Each model turn proposes a plan: one or more calls executed as a single chain.
 The policy classifies the whole plan:
 
 - **allowed**: metadata reads such as `svd_peripherals` or `target_status` run
-  immediately;
+  immediately; OpenCode project-source reads also run immediately when a
+  project was loaded before the agent session;
 - **approval required**: memory and register reads, core selection, and
   commands whose effects cannot be proven (`gdb_command`, `ocd_command`,
   `toolkit_command`, `mi_command`) open an approval dialog;
@@ -190,7 +207,7 @@ through the [provider registry](llm.md#adding-a-provider). Protect the
 | ------- | ------ |
 | The agent prompt only explains how to enable it | Start the client with `--llm github-copilot`, `--llm openai` or `--llm opencode`. |
 | `/status` reports the provider unavailable | Copilot: install the `copilot` extra, run `python -m copilot download-runtime` and pass the printed path with `--copilot-runtime` or `PYGDB_COPILOT_RUNTIME`. OpenAI-compatible: install the `openai` extra and check `--openai-url` and the server. OpenCode: install the `opencode` extra and check that the V2 server is running at `--opencode-url`. |
-| `/status` reports authentication required | Copilot: run `copilot login`, or use `--copilot-token-env NAME`. OpenAI-compatible: use `--openai-key-env NAME`. OpenCode: set `--opencode-password-env NAME` to the variable holding the server password. |
+| `/status` reports authentication required | Copilot: run `copilot login`, or use `--copilot-token-env NAME`. OpenAI-compatible: use `--openai-key-env NAME`. OpenCode: use `--opencode-password-env NAME` or `--opencode-password-file FILE`. |
 | OpenAI-compatible completion returns HTTP 404 | Check both the `/v1` base URL and exact `--openai-model` name. Ollama returns 404 for an uninstalled model too; check `ollama list` on the server. |
 | The model does not support tool calling | Select an installed tool-capable model, for example `--openai-model llama3.2:latest` on Ollama. `qwen2:0.5b-instruct` supports plain chat, not this agent's tools. |
 | OpenCode reports an invalid structured response | Select a model configured on OpenCode that reliably follows the JSON protocol; the adapter rejects unstructured answers rather than bypassing the local tool gateway. |
