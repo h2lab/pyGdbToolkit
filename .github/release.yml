@@ -9,6 +9,9 @@ changelog:
     - title: Bugfixes
       labels:
         - bug
+    - title: LLM support
+      labels:
+        - llm
     - title: New commands
       labels:
         - new-cmd
