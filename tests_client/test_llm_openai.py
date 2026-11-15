@@ -237,6 +237,23 @@ def test_streamed_turns_replay_the_history_with_snapshot_and_tools() -> None:
     asyncio.run(exercise())
 
 
+def test_audit_context_is_part_of_the_system_message() -> None:
+    """The disclosed audit document is sent as data in the system instructions."""
+
+    async def exercise() -> None:
+        script = _Script(_text_turn("ok"))
+        provider = _provider(script)
+        audit = {"schema_version": 1, "project": {"rtos": "camelot", "name": "demo"}}
+        session = await provider.open_session("s1", _context(), _TOOLS, audit)
+        await _events(session, UserPrompt("hello"))
+        system = script.bodies[-1]["messages"][0]["content"]
+        assert "target-1:snapshot-1" in system
+        assert system.endswith(json.dumps(audit))
+        await provider.close()
+
+    asyncio.run(exercise())
+
+
 def test_tool_batch_is_assembled_from_fragments_and_fed_back_correlated() -> None:
     """Fragmented tool-call deltas form one proposed batch; results return as tool roles."""
 
@@ -311,10 +328,14 @@ def test_mismatched_feedback_is_rejected_before_any_request(mode: str) -> None:
     [
         _sse(_fragment(0, call_id="call-1", name="unknown_tool"), _finish("tool_calls")),
         _sse(_fragment(0, name="target_status"), _finish("tool_calls")),
-        _sse(_fragment(0, call_id="call-1", name="target_status", arguments="{"),
-             _finish("tool_calls")),
-        _sse(_fragment(0, call_id="call-1", name="target_status", arguments="[]"),
-             _finish("tool_calls")),
+        _sse(
+            _fragment(0, call_id="call-1", name="target_status", arguments="{"),
+            _finish("tool_calls"),
+        ),
+        _sse(
+            _fragment(0, call_id="call-1", name="target_status", arguments="[]"),
+            _finish("tool_calls"),
+        ),
         _sse(_finish("tool_calls")),
         _sse(_delta("truncated"), _finish("length")),
         _sse(_delta("no finish reason")),

@@ -7,7 +7,8 @@ import json
 
 from rich.text import Text
 
-from .contracts import ContextFact, TargetContext
+from ..audit import AuditContext, AuditObservation
+from .contracts import ContextFact, JsonObject, JsonValue, TargetContext
 from .controller import ContextUsage, OpenedSession
 from .orchestrator import (
     AgentEvent,
@@ -81,9 +82,95 @@ def describe_context(session_id: str, context: TargetContext) -> list[Text]:
     ]
 
 
+def _observation(name: str, observation: AuditObservation, summary: str) -> str:
+    if observation.data is None:
+        return f"  {name}: unavailable: {observation.unavailable_reason} ({observation.source})"
+    return f"  {name}: {summary} ({observation.source})"
+
+
+def _field(data: JsonObject | None, *keys: str) -> JsonValue:
+    value: JsonValue = data
+    for key in keys:
+        value = value.get(key) if isinstance(value, dict) else None
+    return value
+
+
+def _count(value: JsonValue) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def describe_audit(audit: AuditContext) -> list[Text]:
+    """Summarize an audit context: the project, its software identity and the session state."""
+    entries = []
+    project = audit.project
+    if project is None:
+        entries.append("  Project: none loaded (use the project command)")
+    else:
+        description = project.description
+        identity = " ".join(
+            part for part in (description.name, description.version) if part is not None
+        )
+        entries.append(
+            f"  Project: {project.rtos} {identity or '(unnamed)'} · {project.local_root}"
+        )
+        entries.append(f"    Server path: {project.server_path}")
+        for component in description.components:
+            origin = " ".join(part for part in (component.scm, component.revision) if part)
+            sources = component.sources or "sources unavailable locally"
+            executables = "".join(f" · {path}" for path in component.executables)
+            entries.append(
+                f"    {component.name} ({component.kind}) {origin or 'no scm'}"
+                f" · {sources}{executables}"
+            )
+        entries.append(f"    Artifacts: {len(project.artifacts)} file(s) with SHA-256 digests")
+    rtos = audit.rtos.data
+    tasks = _count(_field(rtos, "task_list", "slots"))
+    entries.append(
+        _observation(
+            "RTOS",
+            audit.rtos,
+            f"{_field(rtos, 'selected_rtos') or 'none selected'}"
+            f"{' loaded' if _field(rtos, 'loaded') is True else ''} · {tasks} task slot(s)",
+        )
+    )
+    execution = audit.execution.data
+    entries.append(
+        _observation(
+            "Execution",
+            audit.execution,
+            f"{_field(execution, 'state')} · core {_field(execution, 'core')}",
+        )
+    )
+    entries.append(
+        _observation("Cores", audit.cores, f"{_count(_field(audit.cores.data, 'cores'))} core(s)")
+    )
+    svd = audit.svd.data
+    entries.append(
+        _observation(
+            "SVD",
+            audit.svd,
+            f"{_field(svd, 'device')} · {_field(svd, 'peripheral_count')} peripheral(s)",
+        )
+    )
+    server = audit.server.data
+    entries.append(
+        _observation(
+            "Server",
+            audit.server,
+            f"OCD {_field(server, 'ocd', 'executable')} · GDB {_field(server, 'gdb', 'interpreter')}",
+        )
+    )
+    return [
+        Text(printable(f"Audit context captured {audit.captured_at}"), style=_INFO_STYLE),
+        *(Text(printable(entry)) for entry in entries),
+    ]
+
+
 def describe_session(session: OpenedSession) -> list[Text]:
     """Describe a newly opened conversation, its disclosure and its continuity."""
     lines = describe_context(session.session_id, session.context)
+    if session.audit is not None:
+        lines.extend(describe_audit(session.audit))
     if session.test_data:
         lines.append(Text("  Test data analysis: automatic masking disabled", style="yellow"))
     if session.redactions:
