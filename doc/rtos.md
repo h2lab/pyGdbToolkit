@@ -37,6 +37,49 @@ current GDB session. Selecting another RTOS clears the project and its task
 list; loading another project replaces them. These commands do not flash the
 target or change its memory.
 
+## Projects on a remote client
+
+The CLI path above is always resolved on the **GDB host**, even when entered
+through pyGdbClient. For a project available only on a remote client, pyGdbServer
+also supports the JSON-RPC sequence `rtos.project.begin`, `rtos.project.put`,
+`rtos.project.commit`, and the read-only `rtos.status` method. The server stages
+only the required build files and uses the same GDB loader as the local CLI.
+No shared filesystem or server-to-client filesystem access is needed.
+
+See [the RTOS RPC protocol](pygdbserver.md#remote-rtos-projects) for parameters,
+chunk limits and the versioned status format. A dedicated pyGdbClient project
+command is not provided yet. Standalone GDB use does not require the server or
+the transfer protocol.
+
+### Shared contracts and RTOS extensions
+
+`pyGdbToolkit.shared` contains contracts usable by the toolkit, server and
+client without depending on GDB. Outside GDB, importing `pyGdbToolkit` only
+initializes the package namespace; GDB commands and target services are not
+loaded. Inside GDB, `import pyGdbToolkit` retains automatic command registration
+and the existing public exports. Import failures during GDB initialization
+still propagate.
+
+The shared RTOS package separates:
+
+- `pyGdbToolkit.shared.rtos.models`: snapshots, manifests and path validation;
+- `pyGdbToolkit.shared.rtos.registry`: the `ProjectProvider` protocol,
+  `ProjectRegistry` and `DEFAULT_PROJECT_REGISTRY`;
+- `pyGdbToolkit.shared.rtos.camelot`: Camelot's declaration parser and build paths.
+
+To support another RTOS, implement a shared provider exposing its `name`
+and `manifest(project: bytes | None)`, then register it with the default
+registry. The bootstrap manifest declares `project_file`, `required` and
+`required_patterns`; parsing the completed declaration expands it with the
+exact build artifacts. The server uses that declaration path and provider,
+not Camelot-specific branches or a fixed TOML filename. A separate registry
+can also be supplied to `RtosProjects`, for example in tests.
+
+The corresponding GDB implementation remains in `pyGdbToolkit.rtos` and is
+registered through `SUPPORTED_RTOS`. The shared provider defines file
+discovery only; it does not replace GDB-side symbol loading, metadata decoding
+or task inspection.
+
 ## Command reference
 
 | Command | Result | Needs stopped target? |

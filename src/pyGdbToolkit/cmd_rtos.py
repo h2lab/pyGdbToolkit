@@ -17,6 +17,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .rtos import SUPPORTED_RTOS
+from .shared.rtos import RtosSnapshot, TaskListSnapshot
 from .session import SESSION as TOOLKIT_SESSION
 from .session import CommandHelp, CommandUsage, SessionSlice
 
@@ -39,7 +40,10 @@ class RtosCmd(gdb.Command):
             CommandUsage("rtos show task <taskname>", "Inspect a task on the stopped target"),
             CommandUsage("rtos showsched <num>", "Trace the next num scheduler elections"),
         ),
-        notes=("<path> is resolved by GDB: with pyGdbServer it must exist on the server host.",),
+        notes=(
+            "<path> is resolved by GDB and must exist on its host.",
+            "Remote clients can transfer projects through pyGdbServer's rtos.project.* RPCs.",
+        ),
     )
 
     def __init__(self) -> None:
@@ -61,12 +65,7 @@ class RtosCmd(gdb.Command):
     def _invoke_select(self, args: list[str]) -> None:
         if len(args) != 1:
             raise gdb.GdbError("Usage: rtos select <name>")
-        name = args[0]
-        if name not in SUPPORTED_RTOS:
-            raise gdb.GdbError(f"Unsupported RTOS: {name} (supported: {', '.join(SUPPORTED_RTOS)})")
-        self.state.selected_rtos = SUPPORTED_RTOS[name]
-        self.state.clear_project()
-        CONSOLE.print(Text.assemble("Selected RTOS: ", (name, "bold green")))
+        _select_rtos(self.state, args[0])
 
     def _invoke_list(self, args: list[str]) -> None:
         if args:
@@ -84,28 +83,7 @@ class RtosCmd(gdb.Command):
     def _invoke_load_project(self, args: list[str]) -> None:
         if len(args) != 2 or args[0] != "--from":
             raise gdb.GdbError("Usage: rtos load-project --from <path>")
-        if self.state.selected_rtos is None:
-            raise gdb.GdbError("Select an RTOS first with rtos select <name>")
-        self.state.clear_project()
-        project_path = Path(args[1]).expanduser().resolve()
-        try:
-            elfs = self.state.selected_rtos.project_elfs(project_path)
-        except (OSError, ValueError, tomllib.TOMLDecodeError) as error:
-            raise gdb.GdbError(f"Cannot load RTOS project: {error}") from error
-        if not elfs or elfs[0].name != "sentry-kernel.elf":
-            raise gdb.GdbError("Cannot load RTOS task metadata: kernel ELF is required")
-        for elf in elfs:
-            escaped = str(elf).replace("\\", "\\\\").replace('"', '\\"')
-            gdb.execute(f'add-symbol-file "{escaped}" -o 0', from_tty=False, to_string=True)
-            CONSOLE.print(
-                Text.assemble("Loaded symbols: ", (str(elf.relative_to(project_path)), "green"))
-            )
-        try:
-            task_list = self.state.selected_rtos.load_task_list(project_path, elfs[0])
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, gdb.error) as error:
-            raise gdb.GdbError(f"Cannot load RTOS task metadata: {error}") from error
-        self.state.task_list = task_list
-        self.state.project_path = project_path
+        _load_project(self.state, args[1])
 
     def _invoke_show(self, args: list[str]) -> None:
         if args:
@@ -223,6 +201,95 @@ class RtosSessionState(SessionSlice):
         """Drop the loaded project metadata and the RTOS selection."""
         self.clear_project()
         self.selected_rtos = None
+
+
+def _select_rtos(state: RtosSessionState, name: str) -> None:
+    if name not in SUPPORTED_RTOS:
+        raise gdb.GdbError(f"Unsupported RTOS: {name} (supported: {', '.join(SUPPORTED_RTOS)})")
+    state.selected_rtos = SUPPORTED_RTOS[name]
+    state.clear_project()
+    CONSOLE.print(Text.assemble("Selected RTOS: ", (name, "bold green")))
+
+
+def _load_project(state: RtosSessionState, path: str) -> None:
+    if state.selected_rtos is None:
+        raise gdb.GdbError("Select an RTOS first with rtos select <name>")
+    state.clear_project()
+    project_path = Path(path).expanduser().resolve()
+    try:
+        elfs = state.selected_rtos.project_elfs(project_path)
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as error:
+        raise gdb.GdbError(f"Cannot load RTOS project: {error}") from error
+    if not elfs or elfs[0].name != "sentry-kernel.elf":
+        raise gdb.GdbError("Cannot load RTOS task metadata: kernel ELF is required")
+    for elf in elfs:
+        escaped = str(elf).replace("\\", "\\\\").replace('"', '\\"')
+        gdb.execute(f'add-symbol-file "{escaped}" -o 0', from_tty=False, to_string=True)
+        CONSOLE.print(
+            Text.assemble("Loaded symbols: ", (str(elf.relative_to(project_path)), "green"))
+        )
+    try:
+        task_list = state.selected_rtos.load_task_list(project_path, elfs[0])
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, gdb.error) as error:
+        raise gdb.GdbError(f"Cannot load RTOS task metadata: {error}") from error
+    state.task_list = task_list
+    state.project_path = project_path
+
+
+def rtos_status() -> RtosSnapshot:
+    """Return cached RTOS session state without target or filesystem accesses.
+
+    Returns
+    -------
+    RtosSnapshot
+        Version 1 selection, loaded project, build-time task slots and active trace.
+        No live task state is read and addresses are JSON integers.
+    """
+    state = TOOLKIT_SESSION.state(RtosSessionState)
+    task_list: TaskListSnapshot | None = None
+    if state.selected_rtos is not None and state.task_list is not None:
+        task_list = state.selected_rtos.task_list_snapshot(state.task_list)
+    return {
+        "schema_version": 1,
+        "selected_rtos": state.selected_rtos.NAME if state.selected_rtos is not None else None,
+        "loaded": state.project_path is not None and task_list is not None,
+        "project_path": str(state.project_path) if state.project_path is not None else None,
+        "task_list": task_list,
+        "scheduler_trace": (
+            {
+                "limit": state.scheduler_trace.limit,
+                "elections": list(state.scheduler_trace.elections),
+            }
+            if state.scheduler_trace is not None
+            else None
+        ),
+    }
+
+
+def load_rtos_project(rtos: str, path: str) -> RtosSnapshot:
+    """Select and load a staged project in one GDB operation using the CLI's loader.
+
+    Parameters
+    ----------
+    rtos : str
+        Supported RTOS name.
+    path : str
+        Project root on the GDB host.
+
+    Returns
+    -------
+    RtosSnapshot
+        Loaded session state.
+
+    Raises
+    ------
+    gdb.GdbError
+        If selection, project discovery or metadata decoding fails.
+    """
+    state = TOOLKIT_SESSION.state(RtosSessionState)
+    _select_rtos(state, rtos)
+    _load_project(state, path)
+    return rtos_status()
 
 
 class _RtosSubcommand(gdb.Command):

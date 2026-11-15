@@ -17,7 +17,9 @@ from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 
-NAME = "camelot"
+from ..shared.rtos import TaskListSnapshot, camelot as project_contract
+
+NAME = project_contract.NAME
 
 
 @dataclass(frozen=True)
@@ -153,21 +155,36 @@ def project_elfs(project_path: Path) -> list[Path]:
     with (project_path / "project.toml").open("rb") as project_file:
         project = tomllib.load(project_file)
 
-    private_build = project_path / "output" / "build" / "camelot_private"
-    elfs = []
-    if "kernel" in project:
-        elfs.append(private_build / "sentry-kernel.elf")
-    applications = project.get("application", {})
-    if not isinstance(applications, dict):
-        raise ValueError("project.toml: application must be a table")
-    for name in applications:
-        elfs.append(private_build / f"{name}-app.elf")
-    if not elfs:
-        raise ValueError("project.toml: no kernel or application declared")
+    elfs = [project_path / relative for relative in project_contract.project_elf_paths(project)]
     for elf in elfs:
         if not elf.is_file():
             raise FileNotFoundError(elf)
     return elfs
+
+
+def task_list_snapshot(task_list: object) -> TaskListSnapshot:
+    """Serialize cached build-time metadata without accessing the target or files."""
+    if not isinstance(task_list, TaskList):
+        raise ValueError("Invalid Camelot task metadata")
+    return {
+        "address": task_list.address,
+        "size": task_list.size,
+        "entry_size": task_list.entry_size,
+        "slots": [
+            {
+                "index": slot.index,
+                "address": slot.address,
+                "task_name": slot.task_name,
+                "text_address": slot.text_address,
+                "ram_address": slot.ram_address,
+                "metadata": {
+                    name: list(value) if isinstance(value, tuple) else value
+                    for name, value in slot.metadata.items()
+                },
+            }
+            for slot in task_list.slots
+        ],
+    }
 
 
 def elected_task(task_list: TaskList, handle: int) -> str:

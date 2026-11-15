@@ -33,6 +33,7 @@ from pyGdbClient.llm.gateway import GatewayError, ToolGateway
 from pyGdbClient.llm.policy import ProtectionPolicy
 from pyGdbServer.logs import LogStore
 from pyGdbServer.mi import MiResult, MiSession, _decode_mi_string
+from pyGdbServer.rtos import RtosProjects
 from pyGdbServer.server import (
     PyGdbServer,
     _free_jlink_ports,
@@ -125,6 +126,7 @@ class FakeMiSession:
 def _server(tmp_path: Path) -> tuple[PyGdbServer, FakeMiSession]:
     server = object.__new__(PyGdbServer)
     server.workspace = tmp_path
+    server.rtos_projects = RtosProjects(tmp_path)
     server.logs = LogStore(tmp_path)
     fake_mi = FakeMiSession()
     server.mi = fake_mi  # type: ignore[assignment]
@@ -1219,6 +1221,7 @@ def test_shutdown_acknowledges_before_stopping_gdb_and_ocd(tmp_path: Path) -> No
         server.logs = LogStore(tmp_path)
         server._shutdown = asyncio.Event()
         server._websocket_server = None
+        server.rtos_projects = RtosProjects(tmp_path)
         stopped: list[str] = []
         server.mi = ManagedStop("gdb", stopped)  # type: ignore[assignment]
         server.ocd = ManagedStop("ocd", stopped)  # type: ignore[assignment]

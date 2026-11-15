@@ -323,6 +323,137 @@ Runs a raw MI command, which must start with `-`.
 {"jsonrpc":"2.0","id":5,"method":"mi.execute","params":{"command":"-data-list-register-names"}}
 ```
 
+### Remote RTOS projects
+
+These methods load a complete RTOS build context from a remote client's
+filesystem without mounting it on the server. They do not flash the target.
+Camelot is currently supported. The existing GDB command
+`rtos load-project --from <path>` continues to refer to the GDB host's filesystem.
+A dedicated pyGdbClient upload command is not implemented yet.
+
+#### `rtos.project.begin`
+
+Parameters: `name` (1-64 ASCII letters, digits, `_` or `-`, starting with a
+letter or digit), `rtos` (`"camelot"`).
+
+```json
+{"jsonrpc":"2.0","id":30,"method":"rtos.project.begin","params":{"name":"build-1","rtos":"camelot"}}
+```
+
+Returns `name`, `rtos`, `manifest` and `limits`. The manifest contains
+`project_file` (the provider's declaration path), `required` (exact relative
+file paths) and `required_patterns` (each must match exactly one uploaded file).
+Upload the declaration first; for Camelot this is `project.toml`, whose completed
+contents expand `required` to include the declared applications' linked ELFs.
+No sources or arbitrary build directories need to be sent. See
+[Camelot project inputs](rtos-camelot.md#project-inputs).
+
+Names must be unique within the server instance; `begin` never overwrites an
+existing transfer. Up to 16 projects are retained, each in a private temporary
+directory beneath the server workspace. Uncommitted transfers can be aborted;
+use a new name for each build loaded into GDB.
+
+#### `rtos.project.put`
+
+Parameters: `name`, `path` (canonical relative POSIX file path), `offset`
+(decoded byte offset), `size` (total decoded file size, repeated unchanged
+on every chunk), `content` (strict base64).
+
+```json
+{"jsonrpc":"2.0","id":31,"method":"rtos.project.put","params":{"name":"build-1","path":"project.toml","offset":0,"size":9,"content":"W2tlcm5lbF0K"}}
+```
+
+The example transfers the nine bytes `[kernel]\n`. The response contains
+`path`, `next_offset`, `complete` and the current `manifest`. Continue from
+`next_offset` until `complete` is true. Chunks must be contiguous, starting at
+zero; duplicate, overlapping and out-of-order chunks are rejected, as are
+changes to `size`. A completed file cannot be overwritten.
+
+Limits (also returned by `begin`):
+
+| Limit key | Value |
+| --- | --- |
+| `chunk_size` | 4 MiB decoded per request |
+| `file_size` | 128 MiB per file |
+| `project_size` | 512 MiB total declared file sizes |
+| `project_file_size` | 1 MiB for the provider's project declaration |
+| `files` | 256 files per project |
+| `projects` | 16 retained projects |
+
+These limits keep base64 requests within the 8 MiB WebSocket limit.
+Zero-length files use `size: 0`, `offset: 0`, `content: ""`. Files are
+published atomically only after all declared bytes arrive. An invalid
+project declaration is rejected and may be sent again from offset zero.
+Other incomplete transfers can be discarded with `abort`.
+
+Only manifest paths are accepted. Absolute paths, parent/dot/empty components,
+backslashes, drive prefixes, control characters, symlink escapes and unrelated
+files are rejected. The generic flat `workspace.*` protocol is unchanged.
+
+#### `rtos.project.commit`
+
+Parameters: `name`, optional `timeout` (GDB command timeout, at most 300 seconds).
+
+```json
+{"jsonrpc":"2.0","id":32,"method":"rtos.project.commit","params":{"name":"build-1","timeout":60}}
+```
+
+The server checks that every required file is complete, including exactly one
+generated kernel Kconfig. Validation failures do not change the active GDB
+context; missing files can still be uploaded. After validation, files are
+frozen, and a single serialized GDB Python operation selects the RTOS, loads
+the staged project using the CLI's implementation and returns its snapshot.
+Successful responses have the same shape as `rtos.status`.
+
+GDB errors are reported explicitly (`-32000`), not as a successful unloaded
+context. Selection and symbol loading have the same side effects as the
+local CLI: an activation failure can clear the previous RTOS metadata and
+leave already-added symbols in GDB; it does not roll back GDB symbol tables.
+Failed activation can be retried with the identical frozen project. Frozen
+projects cannot be changed or aborted, since GDB may reference their ELFs
+even after a failure or another project is selected. They are retained until
+GDB stops and are then cleaned up by the server.
+
+#### `rtos.project.abort`
+
+Parameters: `name`. Removes only an uncommitted staging project; returns
+`{"name":"build-1","aborted":true}`. This allows transfer cancellation and
+restarting under the same name without affecting the active RTOS context.
+
+#### `rtos.status`
+
+Parameters: optional `timeout`. Reads the actual GDB session, including
+selection/loading performed through the local CLI or `command.execute`.
+It does not access target memory, probe hardware, reread project files or
+return Rich/ANSI output.
+
+```json
+{"jsonrpc":"2.0","id":33,"method":"rtos.status"}
+{"jsonrpc":"2.0","id":33,"result":{"schema_version":1,"selected_rtos":null,"loaded":false,"project_path":null,"task_list":null,"scheduler_trace":null}}
+```
+
+Version 1 fields:
+
+| Field | Meaning |
+| --- | --- |
+| `selected_rtos` | Selected RTOS name, or `null` |
+| `loaded` | Whether both project path and decoded task list are available |
+| `project_path` | Staged or local project root on the GDB host, or `null` |
+| `task_list` | `address`, `size`, `entry_size`, `slots`; or `null` |
+| `scheduler_trace` | Active trace's `limit` and collected `elections`, or `null` |
+
+Each task slot contains `index`, `address`, `task_name`, `text_address`,
+`ram_address` and `metadata`. Addresses are JSON integers. Metadata arrays
+are JSON arrays; HMACs remain hexadecimal strings. Empty slots have
+`task_name: null`. This is cached **build-time** context, not live task
+registers or scheduling state. `scheduler_trace.elections` reports only
+observations already collected by an armed trace.
+
+Invalid parameters, manifests, transfer states or limits return `-32602`;
+filesystem and GDB failures return `-32000`. Unknown parameters are rejected.
+No authentication or new trust boundary is introduced: use the same protected
+network/SSH tunneling setup as the existing debugging RPCs.
+
 ### `workspace.upload`
 
 Installs a file in the server workspace: the working directory captured when
@@ -649,8 +780,8 @@ erase obsolete-dump.bin
 
 `rtos load-project --from <path>` is executed by GDB on the **server**. The path
 is therefore resolved in the server's filesystem, not the client's. For a
-remote client, the project must be available to the server at that path, for
-example through a shared mount. This is intentional: pyGdbToolkit keeps the
-native GDB command usable unchanged in classic sessions that do not use
-pyGdbServer, rather than adding client-specific path translation or implicit
-project transfer.
+remote client using that CLI command, the project must be available to the
+server at that path, for example through a shared mount. Alternatively, the
+[RTOS RPCs](#remote-rtos-projects) explicitly transfer and load a client-local
+project. There is no implicit transfer or path translation in the native GDB
+command, which remains usable unchanged without pyGdbServer.

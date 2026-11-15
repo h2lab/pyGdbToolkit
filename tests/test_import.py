@@ -4,6 +4,11 @@
 """Basic import tests for pyGdbToolkit."""
 
 from importlib.util import find_spec
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 
 def test_import() -> None:
@@ -23,6 +28,46 @@ def test_toolkit_commands_register_their_help_in_the_session() -> None:
     assert any(entry.syntax == "svd load" for entry in helps["svd"].usage)
     assert helps["rtos"].to_dict()["notes"]
     assert any(entry.syntax.startswith("memmap discover") for entry in helps["memmap"].usage)
+
+
+@pytest.mark.parametrize("failure", ["gdb_dependency", "command_dependency"])
+def test_optional_gdb_initialization_does_not_hide_import_failures(failure: str) -> None:
+    """Only absence of gdb itself permits host-only imports; initialization errors propagate."""
+    script = """
+import importlib.abc
+import sys
+import types
+
+failure = sys.argv[2]
+if failure == "command_dependency":
+    sys.modules["gdb"] = types.ModuleType("gdb")
+
+class FailImport(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "gdb" or fullname == "pyGdbToolkit.cmd_dap":
+            raise ModuleNotFoundError("missing initialization dependency", name="broken_dependency")
+        return None
+
+sys.path.insert(0, sys.argv[1])
+sys.meta_path.insert(0, FailImport())
+try:
+    import pyGdbToolkit
+except ModuleNotFoundError as error:
+    assert error.name == "broken_dependency"
+else:
+    raise AssertionError("GDB initialization error was swallowed")
+"""
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            script,
+            str(Path(__file__).resolve().parents[1] / "src"),
+            failure,
+        ],
+        check=True,
+    )
 
 
 def test_arm_package_exports_only_target_probe_integration() -> None:
