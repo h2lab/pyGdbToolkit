@@ -47,9 +47,12 @@ only the required build files and uses the same GDB loader as the local CLI.
 No shared filesystem or server-to-client filesystem access is needed.
 
 See [the RTOS RPC protocol](pygdbserver.md#remote-rtos-projects) for parameters,
-chunk limits and the versioned status format. A dedicated pyGdbClient project
-command is not provided yet. Standalone GDB use does not require the server or
-the transfer protocol.
+chunk limits and the versioned status format. In the pyGdbClient dashboard, the
+`project <path> <type>` command drives this sequence: it validates the project
+type against the shared registry (currently `camelot`), uploads the declaration
+and every manifest-required build artifact from the local `<path>`, then commits
+the transfer so GDB selects the RTOS and loads the project. Standalone GDB use
+does not require the server or the transfer protocol.
 
 ### Shared contracts and RTOS extensions
 

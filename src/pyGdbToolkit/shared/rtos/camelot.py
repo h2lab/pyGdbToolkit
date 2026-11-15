@@ -14,6 +14,23 @@ PRIVATE_BUILD = "output/build/camelot_private"
 KCONFIG_PATTERN = "output/build/kernel/subprojects/kconfig-*/generated_kconfig.json"
 
 
+def _application_elf(name: object, application: object) -> str:
+    """Return the relinked ELF of one application, named by its first ``provides`` entry.
+
+    Barbican relinks only the first provided executable of an application into
+    the private build directory, keeping its file name.
+    """
+    if not isinstance(name, str) or not isinstance(application, dict):
+        raise ValueError("project.toml: application entries must be tables")
+    provides = application.get("provides")
+    if not isinstance(provides, list) or not provides:
+        raise ValueError(f"project.toml: application {name} must declare a provides list")
+    executable = provides[0]
+    if not isinstance(executable, str) or not executable or "/" in executable:
+        raise ValueError(f"project.toml: application {name} provides must be file names")
+    return project_relative_path(f"{PRIVATE_BUILD}/{executable}")
+
+
 def project_elf_paths(project: Mapping[str, object]) -> tuple[str, ...]:
     """Return relative linked ELF paths declared by a parsed Camelot project."""
     elfs = []
@@ -22,12 +39,12 @@ def project_elf_paths(project: Mapping[str, object]) -> tuple[str, ...]:
     applications = project.get("application", {})
     if not isinstance(applications, dict):
         raise ValueError("project.toml: application must be a table")
-    for name in applications:
-        if not isinstance(name, str) or "/" in name:
-            raise ValueError("project.toml: application names must be file names")
-        elfs.append(project_relative_path(f"{PRIVATE_BUILD}/{name}-app.elf"))
+    for name, application in applications.items():
+        elfs.append(_application_elf(name, application))
     if not elfs:
         raise ValueError("project.toml: no kernel or application declared")
+    if len(set(elfs)) != len(elfs):
+        raise ValueError("project.toml: applications must provide distinct ELF files")
     return tuple(elfs)
 
 

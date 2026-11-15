@@ -32,6 +32,11 @@ class ProjectRegistry:
         for provider in providers:
             self.register(provider)
 
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Return the registered RTOS project provider identifiers, in registration order."""
+        return tuple(self._providers)
+
     def register(self, provider: ProjectProvider) -> None:
         """Register one provider without silently replacing an existing implementation."""
         if not provider.name or provider.name in self._providers:

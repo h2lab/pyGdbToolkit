@@ -31,6 +31,7 @@ from .llm.rendering import (
     describe_usage,
     printable,
 )
+from .project import LoadedProject, load_project, supported_project_types
 from .rpc import JsonRpcClient, RpcError
 from .workspace import validate_workspace_filename
 
@@ -178,6 +179,7 @@ class PyGdbClientApp(App[None]):
         self._approval_screen: ApprovalScreen | None = None
         self._approval_future: asyncio.Future[ApprovalResponse | None] | None = None
         self._credits_reading = False
+        self._project: LoadedProject | None = None
 
     async def request_plan_approval(self, request: ApprovalRequest) -> ApprovalResponse:
         """Display an auditor request; cancellation removes the modal without consent."""
@@ -538,6 +540,8 @@ class PyGdbClientApp(App[None]):
         if show_command:
             self._append_output(f"› {command}")
         try:
+            if await self._execute_project_command(command):
+                return
             if await self._execute_workspace_command(command):
                 return
             response = await self.client.request(
@@ -612,6 +616,30 @@ class PyGdbClientApp(App[None]):
                     (str(selected["endpoint"]), "dim"),
                 )
             )
+
+    async def _execute_project_command(self, command: str) -> bool:
+        """Load a local RTOS source project into the remote GDB session."""
+        name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
+        if name != "project":
+            return False
+        arguments = shlex.split(command)[1:]
+        if len(arguments) != 2:
+            raise ValueError(
+                f"Usage: project <path> <type> (types: {', '.join(supported_project_types())})"
+            )
+        result = await load_project(
+            self.client,
+            Path(arguments[0]),
+            arguments[1],
+            progress=self._append_output,
+        )
+        self._project = result
+        tasks = ", ".join(result.task_names) or "none"
+        self._append_output(
+            f"Loaded {result.rtos} project {result.local_root} ({len(result.files)} files)"
+        )
+        self._append_output(f"Server project: {result.server_path} · tasks: {tasks}")
+        return True
 
     async def _execute_workspace_command(self, command: str) -> bool:
         name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
@@ -854,6 +882,14 @@ def _help_text(
         ),
         Text("  erase FILE    Delete one server workspace file (no directories or paths)."),
         Text("    Agent use requires auditor approval; symbolic links are removed, not followed."),
+        Text(
+            f"  project DIR TYPE  Load a local RTOS project (TYPE: "
+            f"{', '.join(supported_project_types())}) into the remote GDB session."
+        ),
+        Text(
+            "    Stages the manifest-declared build artifacts on the server, then selects and"
+            " loads the RTOS project."
+        ),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
         Text("  Ctrl+Q        Same as quit."),

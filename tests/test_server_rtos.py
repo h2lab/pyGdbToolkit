@@ -18,14 +18,19 @@ import pytest
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
-from pyGdbToolkit.shared.rtos import ProjectManifest, ProjectRegistry, project_manifest
+from pyGdbToolkit.shared.rtos import (
+    DEFAULT_PROJECT_REGISTRY,
+    ProjectManifest,
+    ProjectRegistry,
+    project_manifest,
+)
 from pyGdbToolkit.shared.rtos.camelot import PRIVATE_BUILD, PROJECT_FILE
 from pyGdbServer.config import ServerConfig
 from pyGdbServer.mi import MiResult, MiSession
 from pyGdbServer.rtos import CHUNK_SIZE, FILE_SIZE, RtosProjects
 from pyGdbServer.server import PyGdbServer
 
-PROJECT = b"[kernel]\n[application.demo]\n"
+PROJECT = b"[kernel]\n[application.demo]\nprovides = ['demo.elf']\n"
 KCONFIG = "output/build/kernel/subprojects/kconfig-v1/generated_kconfig.json"
 
 
@@ -65,6 +70,11 @@ def _server(tmp_path: Path) -> PyGdbServer:
             startup_timeout=10,
         )
     )
+
+
+def test_registry_exposes_supported_project_types() -> None:
+    """Clients discover supported project types from the shared registry."""
+    assert DEFAULT_PROJECT_REGISTRY.names == ("camelot",)
 
 
 def test_complete_project_is_frozen_until_server_stops(projects: RtosProjects) -> None:
@@ -176,15 +186,23 @@ def test_duplicate_begin_cannot_destroy_staging(projects: RtosProjects) -> None:
 def test_application_elf_requires_completed_project_manifest(projects: RtosProjects) -> None:
     projects.begin("demo", "camelot")
     with pytest.raises(ValueError, match="manifest"):
-        _put(projects, f"{PRIVATE_BUILD}/demo-app.elf")
+        _put(projects, f"{PRIVATE_BUILD}/demo.elf")
     result = _put(projects, PROJECT_FILE, PROJECT)
-    assert f"{PRIVATE_BUILD}/demo-app.elf" in result["manifest"]["required"]
-    _put(projects, f"{PRIVATE_BUILD}/demo-app.elf")
+    assert f"{PRIVATE_BUILD}/demo.elf" in result["manifest"]["required"]
+    _put(projects, f"{PRIVATE_BUILD}/demo.elf")
     with pytest.raises(ValueError, match="manifest"):
-        _put(projects, f"{PRIVATE_BUILD}/other-app.elf")
+        _put(projects, f"{PRIVATE_BUILD}/demo-app.elf")
 
 
-@pytest.mark.parametrize("content", [b"broken [toml", b"\xff", b"[application.demo]\n"])
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"broken [toml",
+        b"\xff",
+        b"[application.demo]\nprovides = ['demo.elf']\n",
+        b"[kernel]\n[application.demo]\n",
+    ],
+)
 def test_invalid_project_can_be_corrected(projects: RtosProjects, content: bytes) -> None:
     projects.begin("demo", "camelot")
     with pytest.raises(ValueError):
