@@ -13,10 +13,12 @@ import pytest
 from pyGdbClient.cli import _parser, agent_settings
 from pyGdbClient.llm.copilot import CopilotProvider
 from pyGdbClient.llm.provider import LlmProvider
+from pyGdbClient.llm.opencode import OpenCodeProvider
 from pyGdbClient.llm.openai_compat import OpenAiProvider
 from pyGdbClient.llm.registry import (
     CopilotProviderFactory,
     OpenAiProviderFactory,
+    OpenCodeProviderFactory,
     ProviderConfigurationError,
     ProviderRegistry,
     default_registry,
@@ -47,11 +49,69 @@ def _parse(
     return parser, parser.parse_args(list(argv))
 
 
-def test_default_registry_offers_copilot_and_openai() -> None:
+def test_default_registry_offers_copilot_openai_and_opencode() -> None:
     registry = default_registry()
-    assert registry.ids == ("github-copilot", "openai")
+    assert registry.ids == ("github-copilot", "openai", "opencode")
     assert isinstance(registry.get("github-copilot"), CopilotProviderFactory)
     assert isinstance(registry.get("openai"), OpenAiProviderFactory)
+    assert isinstance(registry.get("opencode"), OpenCodeProviderFactory)
+
+
+def test_opencode_factory_uses_server_options_and_environment_without_network() -> None:
+    registry = default_registry()
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "opencode",
+        "--opencode-agent",
+        "audit",
+        "--opencode-model",
+        "ollama/llama3.2:latest",
+        "--opencode-password-env",
+        "TOKEN",
+        "--opencode-timeout",
+        "45",
+    )
+    settings = agent_settings(
+        parser,
+        arguments,
+        registry,
+        {
+            "PYGDB_OPENCODE_URL": "http://server:4096",
+            "TOKEN": "secret-password",
+        },
+    )
+    assert settings is not None and isinstance(settings.provider, OpenCodeProvider)
+    config = settings.provider._config
+    assert config.base_url == "http://server:4096"
+    assert config.agent == "audit" and config.model == "ollama/llama3.2:latest"
+    assert config.password == "secret-password" and config.request_timeout == 45
+    assert "secret-password" not in repr(config)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--llm", "opencode"),
+        ("--llm", "opencode", "--opencode-url", "ftp://server"),
+        ("--llm", "opencode", "--opencode-url", "http://server", "--opencode-model", "llama"),
+        ("--llm", "opencode", "--opencode-url", "http://server", "--opencode-timeout", "0"),
+        ("--llm", "opencode", "--opencode-url", "http://server", "--opencode-password-env", "A-B"),
+        (
+            "--llm",
+            "opencode",
+            "--opencode-url",
+            "http://server",
+            "--opencode-password-env",
+            "ABSENT",
+        ),
+    ],
+)
+def test_opencode_invalid_options_are_reported(args: tuple[str, ...]) -> None:
+    registry = default_registry()
+    parser, arguments = _parse(registry, *args)
+    with pytest.raises(SystemExit):
+        agent_settings(parser, arguments, registry, {})
 
 
 def test_registry_rejects_duplicates_invalid_and_unknown_ids() -> None:

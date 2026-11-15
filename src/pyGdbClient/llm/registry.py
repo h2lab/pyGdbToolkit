@@ -10,6 +10,7 @@ import re
 from typing import Protocol
 
 from .copilot import CopilotConfig, CopilotProvider
+from .opencode import OpenCodeConfig, OpenCodeProvider
 from .openai_compat import OpenAiConfig, OpenAiProvider
 from .provider import LlmProvider
 
@@ -209,6 +210,71 @@ class OpenAiProviderFactory:
         return OpenAiProvider(config)
 
 
+class OpenCodeProviderFactory:
+    """OpenCode V2 server acting as a proxy to its configured model."""
+
+    provider_id = OpenCodeProvider.provider_id
+    description = "OpenCode V2 server (requires the pyGdbToolkit[opencode] extra)"
+
+    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+        """Declare endpoint, optional agent, model, password and timeout options."""
+        group = parser.add_argument_group("OpenCode V2 provider (--llm opencode)")
+        group.add_argument(
+            "--opencode-url",
+            metavar="URL",
+            help="OpenCode V2 server URL (default: $PYGDB_OPENCODE_URL)",
+        )
+        group.add_argument("--opencode-agent", metavar="AGENT", help="Agent configured on OpenCode")
+        group.add_argument(
+            "--opencode-model",
+            metavar="PROVIDER/MODEL[#VARIANT]",
+            help="Model configured on OpenCode (default: the server's selected model)",
+        )
+        group.add_argument(
+            "--opencode-password-env",
+            metavar="NAME",
+            help="Environment variable holding the OpenCode server password",
+        )
+        group.add_argument(
+            "--opencode-timeout",
+            type=float,
+            metavar="SECONDS",
+            help="Timeout per request (default: 120)",
+        )
+
+    def create(self, arguments: argparse.Namespace, environ: Mapping[str, str]) -> LlmProvider:
+        """Resolve the server URL and optional credential without contacting it."""
+        url: str | None = getattr(arguments, "opencode_url", None)
+        if url is None and environ.get("PYGDB_OPENCODE_URL", "").strip():
+            url = environ["PYGDB_OPENCODE_URL"].strip()
+        if url is None:
+            raise ProviderConfigurationError(
+                "OpenCode requires --opencode-url or PYGDB_OPENCODE_URL"
+            )
+        password: str | None = None
+        password_env: str | None = getattr(arguments, "opencode_password_env", None)
+        if password_env is not None:
+            if not _ENVIRONMENT_NAME.fullmatch(password_env):
+                raise ProviderConfigurationError("--opencode-password-env must name a variable")
+            password = environ.get(password_env)
+            if password is None or not password.strip():
+                raise ProviderConfigurationError(f"environment variable {password_env} is not set")
+        timeout: float | None = getattr(arguments, "opencode_timeout", None)
+        try:
+            config = OpenCodeConfig(
+                url,
+                agent=getattr(arguments, "opencode_agent", None),
+                model=getattr(arguments, "opencode_model", None),
+                password=password,
+                request_timeout=120.0 if timeout is None else timeout,
+            )
+        except ValueError as error:
+            raise ProviderConfigurationError(str(error)) from None
+        return OpenCodeProvider(config)
+
+
 def default_registry() -> ProviderRegistry:
     """Return the built-in providers; applications may register more."""
-    return ProviderRegistry((CopilotProviderFactory(), OpenAiProviderFactory()))
+    return ProviderRegistry(
+        (CopilotProviderFactory(), OpenAiProviderFactory(), OpenCodeProviderFactory())
+    )
