@@ -274,6 +274,7 @@ timeout and local effects. Preparing a call is **not authorization** to run it.
 | `gdb_command` | `command.execute`, `gdb ` prefix | unknown |
 | `ocd_command` | `command.execute`, `monitor ` prefix | unknown |
 | `mi_command` | `mi.execute`, command must start with `-` | unknown |
+| `read`, `glob`, `grep` | local project source access, only advertised to OpenCode when a project is loaded | observe |
 
 `memory_read` accepts a JSON integer address and length, rejects booleans and
 floats, and limits each read to 1-4096 bytes without overflowing the 64-bit
@@ -281,7 +282,10 @@ address domain. This limit is not permission to read MMIO. All tools have an
 optional `timeout` in seconds (0.001-300, default 30); the client waits five
 additional seconds for the response. The parameter is forwarded to existing
 RPC methods; methods without server-side timeout support still use their
-existing server timeout. Command strings are nonblank, at most 4096 characters,
+existing server timeout. For local source operations the timeout bounds waiting
+for the result; a timed-out filesystem read may still finish in the background,
+but its result is not disclosed. Source scans also use the limits described
+below. Command strings are nonblank, at most 4096 characters,
 and exclude control characters, including newlines. Toolkit help names are
 limited to 128 characters. Core IDs are integers from 0 to `2**31 - 1`.
 `workspace_erase` accepts only a workspace basename of at most 128 characters,
@@ -962,14 +966,27 @@ pyGdbClient ws://localhost:1234 --llm opencode \
     --opencode-model ollama/llama3.2:latest
 ```
 
+Alternatively, store the password in a protected local file and supply its path:
+
+```console
+pyGdbClient ws://localhost:1235 --llm opencode \
+    --opencode-url http://localhost:49374 \
+    --opencode-password-file ~/.config/opencode/client-password
+```
+
 `--opencode-url` can instead be supplied via `PYGDB_OPENCODE_URL`.
 `--opencode-agent` optionally selects an agent defined on the server;
 `--opencode-model` selects a configured `provider/model` (optionally followed
 by `#variant`), otherwise OpenCode uses its configured selection.
 `--opencode-timeout` bounds each request and
-response read (default 120 seconds). The optional password is read only from
-the environment variable named by `--opencode-password-env`, never printed or
-stored in the client configuration representation. V2 HTTP Basic
+response read (default 120 seconds). The optional password is read either
+from the environment variable named by `--opencode-password-env` or from
+`--opencode-password-file`; these options are mutually exclusive. The file
+must be a regular UTF-8 file containing one nonempty line of at most 16384
+bytes. A final LF or CRLF is removed; other spaces are preserved. Restrict its
+filesystem permissions (for example `chmod 600`) so other users cannot read
+it. The password is never printed or included in the client configuration
+representation. V2 HTTP Basic
 authentication uses the fixed user `opencode`. `/status` probes `GET /api/info`;
 it checks server access, not whether the selected model can generate.
 
@@ -994,17 +1011,62 @@ leave a session on the OpenCode server.
 The model must follow a strict JSON protocol: either an answer or a batch of
 named tool proposals with unique identifiers and JSON arguments. Invalid JSON,
 unknown or duplicate tools and oversized responses fail explicitly; no
-plain-text or native-tool fallback is used. Reliability therefore depends on
+plain-text or native-tool fallback is used. A single Markdown code fence
+containing only the JSON object is accepted; its content is validated exactly
+like an unfenced response. Reliability therefore depends on
 the selected model's ability to follow the structured instructions. Tool
 proposals go through the same local validation, policy and auditor approval as
 other backends. Failed or refused operations are returned as failures. OpenCode
 does not receive executable target-tool callbacks or the pyGdbServer connection.
+The target snapshot, audit context, tool definitions and conversation history
+all consume the model's effective context window; a small Ollama context can
+truncate them and cause malformed responses or incorrect tool arguments.
+Configure a sufficiently large context on the model server and verify it with
+the actual project and model. A model's advertised maximum is not necessarily
+the context size currently allocated by Ollama.
 
 This mode does **not** give the OpenCode agent its usual filesystem, shell,
-subagent, MCP or other native tools. In particular, paths in the audit context
-describe the auditor's workstation and must not be assumed to exist on the
-OpenCode host. Cancelling interrupts the client HTTP request, but cannot
+subagent, MCP or other native tools. Paths in the audit context describe the
+auditor's workstation and must not be assumed to exist on the OpenCode host.
+Cancelling interrupts the client HTTP request, but cannot
 guarantee that inference already started on the remote server stops.
+
+### Local project source access
+
+Load a project with `project /absolute/path camelot` in the dashboard command
+prompt **before** the first agent request. If an agent session is already
+open, use `/new` in the agent prompt. When the loaded project changes, source
+calls from the old session are refused until another session is opened.
+
+OpenCode can propose three locally executed tools: `read` reads UTF-8 text
+from a project-relative file with an optional 1-based `offset` and line
+`limit`; `glob` lists files matching a project-relative pattern (`**` matches
+zero or more directories); `grep` searches text for a **literal,
+case-sensitive** string, optionally restricted by a glob. `glob` and `grep`
+take a project-relative directory `path`, with `.` denoting the project root.
+For example `path: "output/src", pattern: "**/*.c"` lists Camelot C sources.
+`grep` with `path: "output/src", pattern: "main", glob: "**/*.c"` searches
+those files. No native OpenCode tools or remote filesystem mounts are needed.
+
+These calls are automatically allowed by the local policy and their results
+are sent to OpenCode and its configured model, subject to best-effort masking.
+Only load projects whose source contents and names may be disclosed to both.
+This includes non-hidden files anywhere under the project root, not just
+declared source directories. The local conversation store can retain
+**unmasked** results. Neither masking nor filenames guarantee that secrets
+are excluded; source content is untrusted data and may contain prompt
+injection. Target operations continue to use their existing approval rules.
+
+Paths must be relative, with no `..`, hidden components or symbolic links.
+Hidden entries, links and special files are not traversed. File reads require
+Linux `O_PATH`, `O_NOFOLLOW` and procfs to inspect the opened inode before
+reading. Mounts already present within the project tree remain accessible.
+Individual files are limited to 256 KiB and `read` returns at most 200 lines
+and 12,000 characters. Paths are limited to 24 components. Scans are bounded
+by 20,000 entries, three seconds, 16 MiB of text and 100 matches; `truncated` reports
+incomplete scans, and `skipped_non_text_or_large` counts skipped files.
+The limits are checked during scanning, not hard deadlines for a stalled
+filesystem. An operation that cannot safely open a file fails explicitly.
 
 ## Dashboard agent CLI
 
@@ -1062,6 +1124,7 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 | `--opencode-agent AGENT` | Select an agent configured on the OpenCode server. |
 | `--opencode-model PROVIDER/MODEL[#VARIANT]` | Select a model and optional variant configured on the OpenCode server. |
 | `--opencode-password-env NAME` | Read the OpenCode server password from environment variable `NAME`. |
+| `--opencode-password-file FILE` | Read the OpenCode server password from a local UTF-8 file; cannot be combined with `--opencode-password-env`. |
 | `--opencode-timeout SECONDS` | Bound of each request and response read (default `120`). |
 
 A token is never accepted on the command line, where other local users could

@@ -4,6 +4,7 @@
 """Fail-closed, policy-gated RPC dispatch for complete agent action plans."""
 
 import asyncio
+from collections.abc import Callable
 import json
 import math
 
@@ -23,6 +24,7 @@ from .contracts import (
     ToolResult,
 )
 from .tools import ToolCatalogue
+from .sources import SourceBrowser, SourceError
 
 MAX_RESULT_BYTES = 64 * 1024
 
@@ -106,6 +108,8 @@ class ToolGateway:
         *,
         approver: AuditorApprover | None = None,
         approval_timeout: float = 120.0,
+        sources: SourceBrowser | None = None,
+        sources_current: Callable[[], bool] | None = None,
     ) -> None:
         """Bind transport, policy and an optional auditor UI with a finite deadline."""
         if (
@@ -118,6 +122,8 @@ class ToolGateway:
         self._policy = policy
         self._approver = approver
         self._approval_timeout = approval_timeout
+        self._sources = sources
+        self._sources_current = sources_current
         self._catalogue = ToolCatalogue()
         self._lock = asyncio.Lock()
 
@@ -179,6 +185,58 @@ class ToolGateway:
                             tuple(results),
                             decision=current,
                         )
+                    if call.method.startswith("local.source."):
+                        if (
+                            self._sources is None
+                            or self._sources_current is None
+                            or not self._sources_current()
+                        ):
+                            raise GatewayError(
+                                "loaded project changed or source access is unavailable; "
+                                "open a new agent session",
+                                tuple(results),
+                            )
+                        try:
+                            source_result = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    self._sources.execute, call.name, json.loads(call.params_json)
+                                ),
+                                timeout=call.timeout,
+                            )
+                        except TimeoutError:
+                            results.append(
+                                ToolResult(
+                                    call.call_id,
+                                    json.dumps(
+                                        {
+                                            "error": "source access timed out; "
+                                            "the local read may still finish"
+                                        }
+                                    ),
+                                    is_error=True,
+                                )
+                            )
+                            break
+                        except SourceError as error:
+                            results.append(
+                                ToolResult(
+                                    call.call_id,
+                                    json.dumps({"error": str(error)}, ensure_ascii=True),
+                                    is_error=True,
+                                )
+                            )
+                            break
+                        if not self._sources_current():
+                            raise GatewayError(
+                                "loaded project changed during source access; "
+                                "open a new agent session",
+                                tuple(results),
+                            )
+                        result = _result(call.call_id, source_result, False)
+                        results.append(result)
+                        if result.is_error:
+                            break
+                        continue
                     pending_call_id = call.call_id
                     try:
                         response = await self._client.request(
