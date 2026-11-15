@@ -274,7 +274,7 @@ timeout and local effects. Preparing a call is **not authorization** to run it.
 | `gdb_command` | `command.execute`, `gdb ` prefix | unknown |
 | `ocd_command` | `command.execute`, `monitor ` prefix | unknown |
 | `mi_command` | `mi.execute`, command must start with `-` | unknown |
-| `read`, `glob`, `grep` | local project source access, only advertised to OpenCode when a project is loaded | observe |
+| `read`, `glob`, `grep` | local project source access, advertised with a loaded project to OpenCode, or to Copilot with explicit source-disclosure consent | observe |
 
 `memory_read` accepts a JSON integer address and length, rejects booleans and
 floats, and limits each read to 1-4096 bytes without overflowing the 64-bit
@@ -801,6 +801,42 @@ An interrupted pending batch requires a new session. `close()` detaches the
 session; `provider.close()` also stops the owned runtime and removes its
 temporary working directory.
 
+### Project source tools and explicit consent
+
+Copilot can use the same local `read`, `glob` and `grep` tools as OpenCode,
+but **only with explicit opt-in**:
+
+```console
+pyGdbClient ws://localhost:1235 --llm github-copilot \
+    --copilot-runtime /absolute/path/to/copilot-runtime \
+    --copilot-allow-project-sources
+```
+
+Load `project /absolute/path/to/sample-project camelot` in the dashboard's
+command prompt before the first agent request. Use `/new` after loading or
+changing the project if a conversation already exists. The flag is rejected
+without `--llm github-copilot`. It applies to loaded projects during that
+client process; only load trees authorized for disclosure to GitHub Copilot.
+Without a loaded project no source tools are advertised. Without the flag,
+Copilot retains project/target context and target tools, but not source tools.
+`--llm-test-data` does not grant source access.
+
+The client displays a disclosure notice when opening a source-enabled Copilot
+session. Source-only calls run **without another approval** and their results
+may leave the workstation for GitHub Copilot. Best-effort masking is not a
+confidentiality guarantee; the local journal retains unmasked observations.
+
+These are inert SDK tool declarations, not native Copilot filesystem tools.
+The SDK continues to run in an empty temporary directory with native tools
+disabled and all permission requests rejected. Only the local gateway reads
+files and returns bounded observations. The same
+[source restrictions and limits](#local-project-source-access) apply: relative
+paths, no hidden files or symbolic links, read-only UTF-8 files, bounded
+results and refusal when the loaded project changes. Target operations retain
+their normal policy checks and approval, including in mixed source/target plans.
+No project files are uploaded wholesale and the SDK receives no direct
+filesystem handle or pyGdbServer connection.
+
 ### Validation and confidentiality limits
 
 Client tests use the **installed pinned SDK** (real clients, sessions, events,
@@ -808,6 +844,9 @@ permission dispatch and generated RPC serialization) over an offline
 transport double. They cover authentication, restriction payloads, complete
 and sequential tool batches, error sanitization, cancellation, and a simulated
 SDK-to-orchestrator-to-gateway round with auditor approval accepted or refused.
+Source tests also exercise the controller, all three source tools, the
+consent/project gates, masking, path and project-change refusals, and mixed
+source/target plan approval.
 They require no GitHub account, network model call, GDB module or target.
 These tests do not certify a live account, model or runtime sandbox.
 
@@ -1038,7 +1077,9 @@ prompt **before** the first agent request. If an agent session is already
 open, use `/new` in the agent prompt. When the loaded project changes, source
 calls from the old session are refused until another session is opened.
 
-OpenCode can propose three locally executed tools: `read` reads UTF-8 text
+OpenCode, and Copilot with
+[explicit source consent](#project-source-tools-and-explicit-consent), can
+propose three locally executed tools: `read` reads UTF-8 text
 from a project-relative file with an optional 1-based `offset` and line
 `limit`; `glob` lists files matching a project-relative pattern (`**` matches
 zero or more directories); `grep` searches text for a **literal,
@@ -1046,11 +1087,12 @@ case-sensitive** string, optionally restricted by a glob. `glob` and `grep`
 take a project-relative directory `path`, with `.` denoting the project root.
 For example `path: "output/src", pattern: "**/*.c"` lists Camelot C sources.
 `grep` with `path: "output/src", pattern: "main", glob: "**/*.c"` searches
-those files. No native OpenCode tools or remote filesystem mounts are needed.
+those files. No native backend tools or remote filesystem mounts are needed.
 
 These calls are automatically allowed by the local policy and their results
-are sent to OpenCode and its configured model, subject to best-effort masking.
-Only load projects whose source contents and names may be disclosed to both.
+are sent to the selected backend and its configured model, subject to
+best-effort masking. Only enable source access to projects whose source
+contents and names may be disclosed to them.
 This includes non-hidden files anywhere under the project root, not just
 declared source directories. The local conversation store can retain
 **unmasked** results. Neither masking nor filenames guarantee that secrets
@@ -1116,6 +1158,7 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 | `--copilot-runtime PATH` | Copilot runtime executable; defaults to `$PYGDB_COPILOT_RUNTIME`. Relative paths are made absolute; nothing is downloaded. |
 | `--copilot-model MODEL` | Model requested from Copilot (default: the runtime's choice). |
 | `--copilot-token-env NAME` | Read a GitHub token from environment variable `NAME`. Without it, the `copilot login` account is used. |
+| `--copilot-allow-project-sources` | Explicitly allow `read`, `glob` and `grep` results from loaded projects to be disclosed to GitHub Copilot without another approval. Disabled by default; requires `--llm github-copilot`. |
 | `--openai-url URL` | Base URL of an OpenAI-compatible `/v1` API; defaults to `$PYGDB_OPENAI_URL`. |
 | `--openai-model MODEL` | Model served by the endpoint; defaults to `$PYGDB_OPENAI_MODEL`. |
 | `--openai-key-env NAME` | Read an API key from environment variable `NAME`. Without it, access is anonymous. |

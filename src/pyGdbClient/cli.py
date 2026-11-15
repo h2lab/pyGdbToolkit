@@ -72,6 +72,9 @@ def agent_settings(
     environ: Mapping[str, str],
 ) -> AgentSettings | None:
     """Build the agent configuration, reporting invalid options through the parser."""
+    copilot_sources: bool = getattr(arguments, "copilot_allow_project_sources", False)
+    if copilot_sources and arguments.llm != "github-copilot":
+        parser.error("--copilot-allow-project-sources requires --llm github-copilot")
     if arguments.llm is None:
         if (
             arguments.llm_store is not None
@@ -98,6 +101,7 @@ def agent_settings(
             redactor=redactor,
             context_limit_chars=arguments.llm_context_limit,
             test_data=arguments.llm_test_data,
+            copilot_allow_project_sources=copilot_sources,
         )
     except ValueError as error:
         parser.error(f"--llm-context-limit: {error}")
