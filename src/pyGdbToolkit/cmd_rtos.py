@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import tomllib
-from types import ModuleType
 import xml.etree.ElementTree as ET
 
 import gdb
@@ -17,6 +16,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .rtos import SUPPORTED_RTOS
+from .rtos.base import RtosImplementation, RtosProject, SchedulerTrace
 from .shared.rtos import RtosSnapshot, TaskListSnapshot
 from .session import SESSION as TOOLKIT_SESSION
 from .session import CommandHelp, CommandUsage, SessionSlice
@@ -90,12 +90,10 @@ class RtosCmd(gdb.Command):
             raise gdb.GdbError("Usage: rtos show")
         if self.state.selected_rtos is None:
             raise gdb.GdbError("Select an RTOS first with rtos select <name>")
-        if self.state.project_path is None:
+        if self.state.project is None:
             raise gdb.GdbError("Load a project first with rtos load-project --from <path>")
         try:
-            CONSOLE.print(
-                self.state.selected_rtos.show_project(self.state.project_path, self.state.task_list)
-            )
+            CONSOLE.print(self.state.project.show_project())
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             raise gdb.GdbError(f"Cannot show RTOS project: {error}") from error
 
@@ -103,99 +101,63 @@ class RtosCmd(gdb.Command):
         if len(args) != 1:
             raise gdb.GdbError("Usage: rtos show task <taskname>")
         state = self.state
-        if state.selected_rtos is None or state.project_path is None or state.task_list is None:
+        if state.selected_rtos is None or state.project is None:
             raise gdb.GdbError("Select an RTOS and load a project before rtos show task")
-        try:
-            CONSOLE.print(
-                state.selected_rtos.show_task(state.project_path, state.task_list, args[0])
+        if not state.project.capabilities.task_inspection:
+            raise gdb.GdbError(
+                f"Live task inspection is unavailable for this {state.selected_rtos.name} build"
             )
+        try:
+            CONSOLE.print(state.project.show_task(args[0]))
         except (OSError, ValueError, KeyError, TypeError, ET.ParseError, gdb.error) as error:
             raise gdb.GdbError(f"Cannot show task {args[0]}: {error}") from error
 
     def _invoke_showsched(self, args: list[str]) -> None:
         if len(args) != 1 or not args[0].isdecimal() or int(args[0]) < 1:
             raise gdb.GdbError("Usage: rtos showsched <num> (num must be positive)")
-        if self.state.selected_rtos is None or self.state.task_list is None:
+        if self.state.selected_rtos is None or self.state.project is None:
             raise gdb.GdbError("Select an RTOS and load a project before rtos showsched")
-        if self.state.scheduler_trace is not None:
-            self.state.scheduler_trace.delete()
-        self.state.scheduler_trace = SchedulerTrace(self, int(args[0]))
+        if not self.state.project.capabilities.scheduler_trace:
+            raise gdb.GdbError(
+                f"Scheduler tracing is unavailable for this {self.state.selected_rtos.name} build"
+            )
+        self.state.clear_scheduler_trace()
+        try:
+            self.state.scheduler_trace = self.state.project.trace_scheduler(
+                int(args[0]), CONSOLE, self.state.trace_deleted
+            )
+        except (ValueError, gdb.error) as error:
+            raise gdb.GdbError(f"Cannot trace RTOS scheduler: {error}") from error
         CONSOLE.print(
             f"Tracing {args[0]} scheduler elections. Continue the target to collect them."
         )
-
-
-class SchedulerTrace(gdb.Breakpoint):
-    """Trace elections at sched_elect entry, sampling the elected handle on return."""
-
-    def __init__(self, parent: RtosCmd, limit: int) -> None:
-        self.parent = parent
-        self.limit = limit
-        self.elections: list[str] = []
-        super().__init__("sched_elect", internal=True)
-
-    def delete(self) -> None:
-        """Remove the breakpoint and clear the active scheduler trace."""
-        if self.is_valid():
-            super().delete()
-        if self.parent.state.scheduler_trace is self:
-            self.parent.state.scheduler_trace = None
-
-    def stop(self) -> bool:
-        """Place a finish breakpoint to observe the elected task."""
-        try:
-            _ElectionReturn(self)
-        except gdb.error as error:
-            gdb.post_event(self.delete)
-            CONSOLE.print(f"[red]Cannot trace scheduler return: {error}[/red]")
-            return True
-        return False
-
-
-class _ElectionReturn(gdb.FinishBreakpoint):
-    """Capture the elected task after sched_elect updates scheduler state."""
-
-    def __init__(self, trace: SchedulerTrace) -> None:
-        self.trace = trace
-        super().__init__(gdb.newest_frame(), internal=True)
-
-    def stop(self) -> bool:
-        """Record the returned task and stop when the requested count is reached."""
-        trace = self.trace
-        try:
-            selected_rtos = trace.parent.state.selected_rtos
-            if selected_rtos is None:
-                raise ValueError("No RTOS selected during scheduler trace")
-            value = self.return_value
-            handle = int(value if value is not None else gdb.parse_and_eval("$r0"))
-            task = selected_rtos.elected_task(trace.parent.state.task_list, handle)
-        except (gdb.error, ValueError) as error:
-            gdb.post_event(trace.delete)
-            CONSOLE.print(f"[red]Cannot read elected task: {error}[/red]")
-            return True
-        trace.elections.append(task)
-        if len(trace.elections) < trace.limit:
-            return False
-        gdb.post_event(trace.delete)
-        CONSOLE.print(selected_rtos.scheduling_chart(trace.elections))
-        return True
 
 
 @dataclass
 class RtosSessionState(SessionSlice):
     """Encapsulate the RTOS selection, its loaded project, and the active trace."""
 
-    selected_rtos: ModuleType | None = None
+    selected_rtos: RtosImplementation | None = None
     project_path: Path | None = None
-    task_list: object | None = None
+    project: RtosProject | None = None
     scheduler_trace: SchedulerTrace | None = None
+
+    def trace_deleted(self, trace: SchedulerTrace) -> None:
+        """Drop only the trace that has actually finished releasing its breakpoints."""
+        if self.scheduler_trace is trace:
+            self.scheduler_trace = None
+
+    def clear_scheduler_trace(self) -> None:
+        """Release and forget the current trace before replacing its context."""
+        if self.scheduler_trace is not None:
+            self.scheduler_trace.delete()
+        self.scheduler_trace = None
 
     def clear_project(self) -> None:
         """Delete the active scheduler trace and drop the loaded project metadata."""
-        if self.scheduler_trace is not None:
-            self.scheduler_trace.delete()
+        self.clear_scheduler_trace()
         self.project_path = None
-        self.task_list = None
+        self.project = None
 
     def reset(self) -> None:
         """Drop the loaded project metadata and the RTOS selection."""
@@ -220,19 +182,22 @@ def _load_project(state: RtosSessionState, path: str) -> None:
         elfs = state.selected_rtos.project_elfs(project_path)
     except (OSError, ValueError, tomllib.TOMLDecodeError) as error:
         raise gdb.GdbError(f"Cannot load RTOS project: {error}") from error
-    if not elfs or elfs[0].name != "sentry-kernel.elf":
-        raise gdb.GdbError("Cannot load RTOS task metadata: kernel ELF is required")
+    if not elfs:
+        raise gdb.GdbError("Cannot load RTOS project: at least one ELF is required")
     for elf in elfs:
         escaped = str(elf).replace("\\", "\\\\").replace('"', '\\"')
-        gdb.execute(f'add-symbol-file "{escaped}" -o 0', from_tty=False, to_string=True)
+        try:
+            gdb.execute(f'add-symbol-file "{escaped}" -o 0', from_tty=False, to_string=True)
+        except gdb.error as error:
+            raise gdb.GdbError(f"Cannot load RTOS symbols: {error}") from error
         CONSOLE.print(
             Text.assemble("Loaded symbols: ", (str(elf.relative_to(project_path)), "green"))
         )
     try:
-        task_list = state.selected_rtos.load_task_list(project_path, elfs[0])
+        project = state.selected_rtos.load_project(project_path, elfs[0])
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, gdb.error) as error:
         raise gdb.GdbError(f"Cannot load RTOS task metadata: {error}") from error
-    state.task_list = task_list
+    state.project = project
     state.project_path = project_path
 
 
@@ -247,12 +212,12 @@ def rtos_status() -> RtosSnapshot:
     """
     state = TOOLKIT_SESSION.state(RtosSessionState)
     task_list: TaskListSnapshot | None = None
-    if state.selected_rtos is not None and state.task_list is not None:
-        task_list = state.selected_rtos.task_list_snapshot(state.task_list)
+    if state.project is not None:
+        task_list = state.project.task_list_snapshot()
     return {
         "schema_version": 1,
-        "selected_rtos": state.selected_rtos.NAME if state.selected_rtos is not None else None,
-        "loaded": state.project_path is not None and task_list is not None,
+        "selected_rtos": state.selected_rtos.name if state.selected_rtos is not None else None,
+        "loaded": state.project_path is not None and state.project is not None,
         "project_path": str(state.project_path) if state.project_path is not None else None,
         "task_list": task_list,
         "scheduler_trace": (

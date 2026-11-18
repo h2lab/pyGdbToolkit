@@ -4,5 +4,6 @@
 """RTOS implementations available to GDB commands."""
 
 from . import camelot
+from .base import RtosImplementation
 
-SUPPORTED_RTOS = {camelot.NAME: camelot}
+SUPPORTED_RTOS: dict[str, RtosImplementation] = {camelot.NAME: camelot.CamelotRtos()}

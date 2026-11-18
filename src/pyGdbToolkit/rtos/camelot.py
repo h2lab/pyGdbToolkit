@@ -3,6 +3,7 @@
 
 """Camelot RTOS project symbol locations."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -13,11 +14,12 @@ import xml.etree.ElementTree as ET
 
 import gdb
 from rich import box
-from rich.console import Group
+from rich.console import Console, Group
 from rich.table import Table
 from rich.text import Text
 
 from ..shared.rtos import TaskListSnapshot, camelot as project_contract
+from .base import RtosCapabilities, SchedulerTrace
 
 NAME = project_contract.NAME
 
@@ -42,6 +44,140 @@ class TaskList:
     size: int
     entry_size: int
     slots: tuple[TaskSlot, ...]
+
+
+@dataclass(frozen=True)
+class CamelotProject:
+    """Bind cached Camelot metadata to its build root and live operations."""
+
+    path: Path
+    task_list: TaskList
+    capabilities: RtosCapabilities = RtosCapabilities(task_inspection=True, scheduler_trace=True)
+
+    def task_list_snapshot(self) -> TaskListSnapshot:
+        """Serialize cached Camelot slots without reading files or target memory."""
+        return task_list_snapshot(self.task_list)
+
+    def show_project(self) -> Group:
+        """Render the Camelot build layout and static task metadata."""
+        return show_project(self.path, self.task_list)
+
+    def show_task(self, name: str) -> Group:
+        """Inspect a Camelot task on the stopped target."""
+        return show_task(self.path, self.task_list, name)
+
+    def trace_scheduler(
+        self, limit: int, console: Console, on_delete: Callable[[SchedulerTrace], None]
+    ) -> SchedulerTrace:
+        """Observe Camelot elections after sched_elect returns."""
+        return _SchedulerTrace(self.task_list, limit, console, on_delete)
+
+
+class CamelotRtos:
+    """Adapt Camelot's symbol discovery and static metadata to the RTOS runtime."""
+
+    name = NAME
+
+    def project_elfs(self, project_path: Path) -> list[Path]:
+        """Require the kernel before any Camelot project symbols are loaded."""
+        elfs = project_elfs(project_path)
+        if not elfs or elfs[0].name != "sentry-kernel.elf":
+            raise ValueError("kernel ELF is required")
+        return elfs
+
+    def load_project(self, project_path: Path, primary_elf: Path) -> CamelotProject:
+        """Decode Camelot's static task table after its DWARF symbols are loaded."""
+        return CamelotProject(project_path, load_task_list(project_path, primary_elf))
+
+
+class _SchedulerTrace(gdb.Breakpoint):
+    """Own Camelot's election breakpoint and all outstanding return breakpoints."""
+
+    def __init__(
+        self,
+        task_list: TaskList,
+        limit: int,
+        console: Console,
+        on_delete: Callable[[SchedulerTrace], None],
+    ) -> None:
+        if limit < 1:
+            raise ValueError("scheduler trace limit must be positive")
+        self.task_list = task_list
+        self.limit = limit
+        self.console = console
+        self.on_delete = on_delete
+        self.elections: list[str] = []
+        self.returns: set[gdb.FinishBreakpoint] = set()
+        self.active = True
+        self._deleted = False
+        super().__init__("sched_elect", internal=True)
+
+    def delete(self) -> None:
+        """Release entry and return breakpoints before notifying the session."""
+        if self._deleted:
+            return
+        self.active = False
+        for breakpoint in tuple(self.returns):
+            if breakpoint.is_valid():
+                breakpoint.delete()
+        self.returns.clear()
+        if self.is_valid():
+            super().delete()
+        self._deleted = True
+        self.on_delete(self)
+
+    def stop(self) -> bool:
+        """Place a return breakpoint without stopping the target."""
+        if not self.active:
+            return False
+        try:
+            self.returns.add(_ElectionReturn(self))
+        except gdb.error as error:
+            self.active = False
+            gdb.post_event(self.delete)
+            self.console.print(f"[red]Cannot trace scheduler return: {error}[/red]")
+            return True
+        return False
+
+
+class _ElectionReturn(gdb.FinishBreakpoint):
+    """Capture the elected handle only while its owning Camelot trace is active."""
+
+    def __init__(self, trace: _SchedulerTrace) -> None:
+        self.trace = trace
+        super().__init__(gdb.newest_frame(), internal=True)
+
+    def stop(self) -> bool:
+        """Record the returned task and stop after exactly the requested count."""
+        trace = self.trace
+        trace.returns.discard(self)
+        if not trace.active:
+            return False
+        try:
+            value = self.return_value
+            handle = int(value if value is not None else gdb.parse_and_eval("$r0"))
+            task = elected_task(trace.task_list, handle)
+        except (gdb.error, ValueError) as error:
+            trace.active = False
+            gdb.post_event(trace.delete)
+            trace.console.print(f"[red]Cannot read elected task: {error}[/red]")
+            return True
+        trace.elections.append(task)
+        if len(trace.elections) < trace.limit:
+            return False
+        trace.active = False
+        gdb.post_event(trace.delete)
+        trace.console.print(scheduling_chart(trace.elections))
+        return True
+
+    def out_of_scope(self) -> None:
+        """Cancel explicitly if GDB can no longer observe the scheduler return."""
+        trace = self.trace
+        trace.returns.discard(self)
+        if trace.active:
+            trace.active = False
+            gdb.post_event(trace.delete)
+            trace.console.print("[red]Cannot trace scheduler return: frame left scope[/red]")
 
 
 def task_list_section(kernel_elf: Path) -> tuple[int, bytes]:

@@ -171,9 +171,9 @@ def test_status_is_json_serializable_and_only_reads_cached_state() -> None:
         "scheduler_trace": None,
     }
     state = SESSION.state(RtosSessionState)
-    state.selected_rtos = camelot
+    state.selected_rtos = camelot.CamelotRtos()
     state.project_path = Path("/nonexistent/project")
-    state.task_list = _task_list()
+    state.project = camelot.CamelotProject(state.project_path, _task_list())
     trace = Mock(limit=3, elections=["demo"])
     state.scheduler_trace = trace
     data = rtos_status()

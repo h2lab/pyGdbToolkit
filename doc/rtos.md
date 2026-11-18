@@ -76,9 +76,31 @@ not Camelot-specific branches or a fixed TOML filename. A separate registry
 can also be supplied to `RtosProjects`, for example in tests.
 
 The corresponding GDB implementation remains in `pyGdbToolkit.rtos` and is
-registered through `SUPPORTED_RTOS`. The shared provider defines file
-discovery only; it does not replace GDB-side symbol loading, metadata decoding
-or task inspection.
+registered through the typed `SUPPORTED_RTOS` registry. The shared provider
+defines file discovery only; it does not replace GDB-side symbol loading,
+metadata decoding or task inspection. GDB-side contracts live in
+`pyGdbToolkit.rtos.base`:
+
+- `RtosImplementation` validates the ELF list, primary image first, before GDB
+  loads any symbols, then decodes a build context after symbol loading.
+- `RtosProject` owns that context, its build-specific `RtosCapabilities`, build
+  display, live task inspection and scheduler observation.
+- `SchedulerTrace` exposes collected observations and releases all of its
+  breakpoints when cancelled. The implementation chooses its observation
+  point and sampling strategy; generic commands do not assume a scheduler
+  symbol, return value or architecture register.
+
+A loaded context does not require a static task table. Its cached
+`task_list_snapshot()` may return `None` when static slots are not applicable;
+live task enumeration must not be performed by `rtos.status`. Unsupported live
+operations are rejected explicitly according to the loaded build's capabilities.
+These GDB-side contracts are not imported by the host-safe shared providers.
+
+Camelot retains its kernel ELF requirement, static `.task_list` decoding and
+return-based election sampling in its own implementation. The version 1 RPC
+snapshot and Camelot command output are unchanged. Only Camelot is registered
+at this stage; the contracts prepare additional implementations without claiming
+that they are already supported.
 
 ## Command reference
 
@@ -140,6 +162,9 @@ rows are tasks, and a filled marker marks the winner. Long traces are shown
 in groups of eight elections. A new trace replaces the previous one; selecting
 an RTOS or loading a project cancels an active trace. This observes actual
 target execution and requires a connected target that reaches `sched_elect()`.
+Cancellation also removes pending scheduler-return breakpoints. If GDB cannot
+observe a scheduler return, tracing reports the failure and releases the trace
+instead of continuing with an incomplete observation.
 
 ## Troubleshooting
 
