@@ -322,6 +322,22 @@ def test_name_reads_are_bounded_and_rich_markup_is_literal(target: dict[int, Moc
     )
 
 
+@pytest.mark.parametrize("state", [1, 8])
+def test_dummy_and_dead_threads_do_not_decode_stale_stack_context(
+    target: dict[int, Mock], monkeypatch: pytest.MonkeyPatch, state: int
+) -> None:
+    """Keep thread identity but never present a terminated or dummy thread as resumable."""
+    target[0x20000100] = _thread(name="stale", state=state)
+    decode = Mock(side_effect=AssertionError("must not decode stale context"))
+    monkeypatch.setattr(live.zephyr_context, "show_context", decode)
+    stream = StringIO()
+    Console(file=stream, width=160).print(
+        live.show_threads(MONITOR, "4.5.99", "stale", context=True)
+    )
+    assert "dummy or terminated thread" in stream.getvalue()
+    decode.assert_not_called()
+
+
 def test_invalid_name_array_is_rejected(target: dict[int, Mock]) -> None:
     """Malformed DWARF cannot trigger an unbounded string read."""
     value = target[0x20000000]["name"]
@@ -408,6 +424,13 @@ struct k_thread {
     char name[16];
     struct { void (*pEntry)(void); } entry;
     struct k_thread *next_thread;
+    struct {
+        unsigned long start, size, delta;
+    } stack_info;
+    struct {
+        unsigned int v1, v2, v3, v4, v5, v6, v7, v8;
+        unsigned long psp;
+    } callee_saved;
 };
 struct _cpu {
     unsigned int nested;
@@ -419,9 +442,15 @@ struct z_kernel {
     struct k_thread *threads;
 };
 void entry(void) {}
+unsigned int saved_stack[128] = {
+    [96] = 0, [97] = 1, [98] = 2, [99] = 3, [100] = 12,
+    [101] = 0x08002001, [102] = 0x08001000, [103] = 0x01000000
+};
 struct k_thread idle = {
     .base = {.prio = 15, .thread_state = 0x80, .user_options = 1},
-    .name = "idle", .entry = {entry}
+    .name = "idle", .entry = {entry},
+    .stack_info = {(unsigned long)saved_stack, sizeof(saved_stack), 16},
+    .callee_saved = {.v1 = 4, .v8 = 11, .psp = (unsigned long)&saved_stack[96]}
 };
 struct k_thread worker = {
     .base = {.prio = -2, .thread_state = 0x06, .user_options = 4},
@@ -453,6 +482,12 @@ int main(void) { return 0; }
         "assert 'Zephyr threads' in listing and f'0x{w.address:08X}' in listing; "
         "detail=gdb.execute('rtos show task worker', to_string=True); "
         "assert '0x0004' in detail and 'Thread details' in detail; "
+        f"context_config={{**{MONITOR!r}, 'CONFIG_CPU_CORTEX_M':'y', "
+        "'CONFIG_THREAD_STACK_INFO':'y', 'CONFIG_FPU':'n'}; "
+        f"state.project=ZephyrProject(build, context_config, (), Path({str(image)!r})); "
+        "detail=gdb.execute('rtos show task idle', to_string=True); "
+        "assert 'Saved callee_saved.psp' in detail and '0x08001000' in detail; "
+        "assert 'not a full unwind' in detail and '112/496 bytes' in detail; "
         "print('ZEPHYR_DWARF_VERIFIED')"
     )
     result = subprocess.run(

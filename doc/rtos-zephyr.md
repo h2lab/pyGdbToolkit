@@ -8,8 +8,9 @@ SPDX-License-Identifier: Apache-2.0
 The initial Zephyr backend loads and describes **single-image Arm Cortex-M
 builds**. It supports both direct GDB loading and the pyGdbClient `project`
 command. Live thread identity/state inspection supports Zephyr **4.1 through
-4.x**, using DWARF field names rather than fixed structure offsets. Stack/register
-decoding and scheduler tracing are not implemented yet.
+4.x**, using DWARF field names rather than fixed structure offsets. Supported
+Cortex-M builds also expose core registers, stack measurements and backtrace
+evidence. Scheduler tracing is not implemented yet.
 
 ## Build inputs
 
@@ -100,6 +101,52 @@ or enable these options. Releases before 4.1 and unrecognized major versions kee
 build loading but disable live inspection: state-bit meanings must not be guessed
 across kernel ABIs.
 
+## Stack and core-register context
+
+`rtos show task <name-or-address>` also inspects the selected thread's stack
+when `CONFIG_THREAD_STACK_INFO=y`. Bounds come from `stack_info.start/size`;
+the initial SP is `start + size - delta`, excluding TLS and randomized top
+storage. Misaligned, wrapping or inconsistent bounds, pointers outside them
+and exception frames that do not fit are errors, never guessed usage figures.
+Dummy and terminated threads have no reported resumable context.
+
+For the **current thread**, on a single-CPU kernel stopped in Thread mode, the
+command reads the **newest** GDB frame's core registers and walks its backtrace
+(at most 64 frames). It does not depend on the older frame a user may have
+selected. In Handler mode the current thread's saved context may be stale:
+register/backtrace recovery is explicitly unavailable rather than attributing
+ISR registers to the thread. Current-thread register recovery is also unavailable
+when the kernel has multiple CPU slots or SMP, since the GDB-to-Zephyr CPU mapping
+has not been established.
+
+For an **inactive thread**, R4-R11 and PSP come from `callee_saved` through
+DWARF. The saved PSP points to Zephyr's eight-word basic exception frame;
+PC/LR and caller-saved core registers are decoded there. Saved EXC_RETURN
+distinguishes basic versus FP-extended storage (32 versus 104 bytes), and
+xPSR's alignment flag adds four bytes when present. The reconstructed SP is
+shown separately from the saved frame base. FP register values themselves
+are not reported. An FPU build must record EXC_RETURN, and an extended frame
+must agree with FPU/FPU-sharing configuration.
+
+Saved PC and LR are symbolized as **evidence**, not presented as an invented
+complete backtrace. Full unwinding of an inactive call chain is not available.
+This is the same distinction made for inactive Camelot tasks.
+
+SP-based occupancy is an instantaneous measurement, **not a high-water mark**.
+With `CONFIG_INIT_STACKS=y`, a separate scan estimates touched space from the
+initial `0xAA` fill. It excludes top `delta` storage and, when configured, the
+four-byte stack sentinel, reads at most 256 bytes per request, and refuses scans
+larger than one MiB. A fill pattern can occur in real data, so this is labeled
+an estimate, not proof of peak use or overflow safety. With INIT_STACKS disabled
+or absent, the watermark is explicitly unavailable; no fill scan is attempted.
+
+The current decoder supports the ordinary downward-growing Cortex-M PendSV
+layout. USE_SWITCH, userspace/privileged dual stacks, TrustZone firmware variants
+and upward-growing stacks retain thread identity inspection but explicitly
+report stack/context unavailability. Unknown exception-return modes are rejected.
+Commands never write target memory/registers, switch GDB threads/frames, resume
+the target or install an unwinder. Target read failures remain errors.
+
 ## Remote client and audit context
 
 In the pyGdbClient dashboard:
@@ -133,6 +180,6 @@ Camelot-style static task slots. Status and build display use cached data and
 do not enumerate live threads or reread the filesystem.
 
 Thread samples are obtained only by the explicit live commands, not by status
-or build display. Saved contexts, stacks, wait-object resolution, synchronization
-and scheduler observation remain later steps. `rtos showsched <num>` remains
+or build display. Wait-object resolution, synchronization and scheduler
+observation remain later steps. `rtos showsched <num>` remains
 unavailable even if the build enables debugging options.
