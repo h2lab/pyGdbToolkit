@@ -5,6 +5,13 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # pyGdbToolkit
 
+[![Quality](https://github.com/h2lab/pyGdbToolkit/actions/workflows/quality.yml/badge.svg)](https://github.com/h2lab/pyGdbToolkit/actions/workflows/quality.yml)
+[![REUSE Compliance](https://github.com/h2lab/pyGdbToolkit/actions/workflows/reuse.yml/badge.svg)](https://github.com/h2lab/pyGdbToolkit/actions/workflows/reuse.yml)
+[![Documentation Status](https://readthedocs.org/projects/pygdbtoolkit/badge/?version=latest)](https://pygdbtoolkit.readthedocs.io/en/latest/)
+[![PyPI version](https://img.shields.io/pypi/v/pyGdbToolkit)](https://pypi.org/project/pyGdbToolkit/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pyGdbToolkit)](https://pypi.org/project/pyGdbToolkit/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 <img src="doc/logo.png" alt="pyGdbToolkit logo" width="200">
 
 GDB commands for inspecting and diagnosing embedded targets, especially Arm
@@ -97,3 +104,11 @@ See [documentation build details](doc/README.md) for browser configuration,
 distribution archives and source-maintenance instructions. The guide contains
 the command reference, configuration examples, troubleshooting and technical
 appendices.
+
+## Contributing and security
+
+Contributions are welcome through issues and pull requests; see the
+[contributing guide](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md).
+Report security vulnerabilities privately as described in the
+[security policy](SECURITY.md), never through public issues.
+pyGdbToolkit is released under the [Apache-2.0 license](LICENSE).

@@ -43,7 +43,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/h2lab"
-# Documentation = TODO
+Documentation = "https://pygdbtoolkit.readthedocs.io"
 Repository = "https://github.com/h2lab/pyGdbToolkit"
 Issues = "https://github.com/h2lab/pyGdbToolkit/issues"
 
