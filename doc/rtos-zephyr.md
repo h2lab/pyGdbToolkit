@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Zephyr RTOS support
 
-The initial Zephyr backend loads and describes **single-image Arm Cortex-M
+The Zephyr backend loads and describes **single-image Arm Cortex-M
 builds**. It supports both direct GDB loading and the pyGdbClient `project`
 command. Live thread identity/state inspection supports Zephyr **4.1 through
 4.x**, using DWARF field names rather than fixed structure offsets. Supported
@@ -13,6 +13,10 @@ Cortex-M builds also expose core registers, stack measurements and backtrace
 evidence. Semaphores, mutexes and event groups can be inspected by explicit type
 and address, including bounded simple-list wait queues. Supported mono-CPU
 Cortex-M builds also expose bounded scheduler observations at PendSV entry.
+
+An [observable example firmware and acceptance runner](rtos-validation.md)
+exercise threads, contexts, stacks, waits/events, source aliases and scheduler
+cleanup on hardware, alongside Camelot regression scenarios.
 
 ## Build inputs
 

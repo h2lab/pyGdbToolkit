@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0
 GDB commands for inspecting and diagnosing embedded targets, especially Arm
 Cortex-M microcontrollers. The toolkit provides processor identification, debug
 access-port inspection, memory discovery, fault analysis, SVD peripheral access, profiling,
-security auditing and Camelot RTOS inspection.
+security auditing and Camelot/Zephyr RTOS inspection.
 
 Use it directly in GDB, or run `pyGdbServer` and `pyGdbClient` for a supervised
 debug session with a terminal dashboard and a JSON-RPC automation interface.
@@ -59,6 +59,9 @@ of `gdb`, `pyGdbToolkit`, or `pyGdbServer`.
 The separate [QEMU mode](doc/pygdbserver.md#qemu-hardware-free-targets-and-ci)
 supports hardware-free CI with emulated STM32 targets; install QEMU and GDB
 with embedded Python 3.12+ before running its dedicated functional suite.
+For explicitly opted-in physical RTOS checks, use the
+[Zephyr validation firmware and Camelot regression scenarios](doc/rtos-validation.md).
+These reset/resume the selected board and require separately flashed matching images.
 
 ## Build the documentation with tox
 
