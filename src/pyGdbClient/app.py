@@ -6,6 +6,7 @@
 import asyncio
 import base64
 import binascii
+import json
 from pathlib import Path
 import shlex
 from tempfile import NamedTemporaryFile
@@ -17,12 +18,14 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key, Resize
 from textual.widgets import Footer, Header, Input, RichLog, Select, Static, Tree
 
+from .audit import AuditContextManager
 from .llm.approval import ApprovalRequest, ApprovalResponse
 from .llm.approval_screen import ApprovalScreen
 from .llm.controller import AgentController, AgentSettings, OpenedSession
 from .llm.orchestrator import AgentEvent
 from .llm.rendering import (
     AgentTranscript,
+    describe_audit,
     describe_credits,
     describe_credits_error,
     describe_session,
@@ -31,6 +34,7 @@ from .llm.rendering import (
     describe_usage,
     printable,
 )
+from .project import load_project, supported_project_types
 from .rpc import JsonRpcClient, RpcError
 from .workspace import validate_workspace_filename
 
@@ -158,11 +162,16 @@ class PyGdbClientApp(App[None]):
         super().__init__()
         self.client = JsonRpcClient(url)
         self._transcript = AgentTranscript()
+        self._audit = AuditContextManager()
         self._agent = (
             None
             if agent is None
             else AgentController(
-                agent, self.client, approver=self.request_plan_approval, sink=self._show_agent_event
+                agent,
+                self.client,
+                approver=self.request_plan_approval,
+                sink=self._show_agent_event,
+                audit=self._audit,
             )
         )
         self._connected = False
@@ -538,6 +547,10 @@ class PyGdbClientApp(App[None]):
         if show_command:
             self._append_output(f"› {command}")
         try:
+            if await self._execute_project_command(command):
+                return
+            if await self._execute_audit_command(command):
+                return
             if await self._execute_workspace_command(command):
                 return
             response = await self.client.request(
@@ -612,6 +625,51 @@ class PyGdbClientApp(App[None]):
                     (str(selected["endpoint"]), "dim"),
                 )
             )
+
+    async def _execute_project_command(self, command: str) -> bool:
+        """Load a local RTOS source project into the remote GDB session."""
+        name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
+        if name != "project":
+            return False
+        arguments = shlex.split(command)[1:]
+        if len(arguments) != 2:
+            raise ValueError(
+                f"Usage: project <path> <type> (types: {', '.join(supported_project_types())})"
+            )
+        result = await load_project(
+            self.client,
+            Path(arguments[0]),
+            arguments[1],
+            progress=self._append_output,
+        )
+        self._audit.set_project(result)
+        tasks = ", ".join(result.task_names) or "none"
+        self._append_output(
+            f"Loaded {result.rtos} project {result.local_root} ({len(result.files)} files)"
+        )
+        self._append_output(f"Server project: {result.server_path} · tasks: {tasks}")
+        if self._agent is not None and self._agent.session is not None:
+            self._append_output(
+                "Audit context changed: use /new so the agent receives the loaded project"
+            )
+        return True
+
+    async def _execute_audit_command(self, command: str) -> bool:
+        """Gather and display the audit context, optionally saving it as local JSON."""
+        name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
+        if name != "audit":
+            return False
+        arguments = shlex.split(command)[1:]
+        if len(arguments) > 1:
+            raise ValueError("Usage: audit [FILE]")
+        audit = await self._audit.refresh(self.client)
+        self._write_output(describe_audit(audit))
+        if arguments:
+            path = Path(arguments[0]).expanduser()
+            document = json.dumps(audit.to_json(), indent=2, ensure_ascii=False) + "\n"
+            await asyncio.to_thread(path.write_text, document, "utf-8")
+            self._append_output(f"Audit context saved to {path}")
+        return True
 
     async def _execute_workspace_command(self, command: str) -> bool:
         name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
@@ -854,6 +912,31 @@ def _help_text(
         ),
         Text("  erase FILE    Delete one server workspace file (no directories or paths)."),
         Text("    Agent use requires auditor approval; symbolic links are removed, not followed."),
+        Text(
+            f"  project <path> <type>  Load a local RTOS project (types: "
+            f"{', '.join(supported_project_types())}) into the remote GDB session."
+        ),
+        Text(
+            "    Stages the manifest-declared build artifacts on the server, then selects and"
+            " loads the RTOS project."
+        ),
+        Text(
+            "    Example: project /path/to/sample-project camelot (quote paths containing spaces)."
+        ),
+        Text(
+            "    Records the local source root and artifact digests for the agent;"
+            " use /new in the agent input if a session is already open."
+        ),
+        Text("  audit [FILE]  Show the audit context; optionally save it as JSON to a local FILE."),
+        Text(
+            "    Refreshes project, software identity and digests, RTOS, execution state, cores,"
+            " SVD metadata and server status; unavailable parts include a reason."
+        ),
+        Text("    Example: audit audit.json (replaces FILE; the local export is not masked)."),
+        Text(
+            "    The agent receives a fresh context when its session opens;"
+            " audit does not update an existing agent session."
+        ),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
         Text("  Ctrl+Q        Same as quit."),

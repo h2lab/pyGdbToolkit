@@ -39,7 +39,8 @@ manufacturer baselines remain separate hypotheses. See the
 
 ## Agent-assisted audit
 
-The dashboard can attach an LLM agent (GitHub Copilot first) that uses the OCD,
+The dashboard can attach an LLM agent (GitHub Copilot, OpenAI-compatible
+servers or an existing OpenCode V2 server) that uses the OCD,
 GDB and toolkit commands to answer the auditor's natural-language requests.
 Risky plans require explicit approval, and production data should only be
 analysed with a local model on trusted equipment. See the

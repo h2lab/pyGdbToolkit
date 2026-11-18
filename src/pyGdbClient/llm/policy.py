@@ -29,6 +29,7 @@ _METADATA_TOOLS = frozenset(
     }
 )
 _OPAQUE_TOOLS = frozenset({"toolkit_command", "gdb_command", "ocd_command", "mi_command"})
+_SOURCE_TOOLS = frozenset({"read", "glob", "grep"})
 _PRECEDENCE = {
     PolicyOutcome.ALLOW: 0,
     PolicyOutcome.REQUIRE_APPROVAL: 1,
@@ -83,7 +84,9 @@ class ProtectionPolicy:
     ) -> None:
         """Bind optional tool prohibitions and half-open protected address ranges."""
         self._catalogue = ToolCatalogue()
-        known = {definition.name for definition in self._catalogue.definitions()}
+        known = {
+            definition.name for definition in self._catalogue.definitions(include_sources=True)
+        }
         tools = tuple(denied_tools)
         if any(not isinstance(tool, str) or tool not in known for tool in tools):
             raise ValueError("denied_tools must contain known catalogue tool names")
@@ -150,6 +153,13 @@ class ProtectionPolicy:
         if call.name in self._denied_tools:
             return PolicyDecision(
                 PolicyOutcome.DENY, ("tool is prohibited by local configuration",)
+            )
+        if call.name in _SOURCE_TOOLS:
+            return PolicyDecision(
+                PolicyOutcome.ALLOW,
+                (
+                    "read-only access to the loaded local project; results are disclosed to the provider",
+                ),
             )
         if call.name in _OPAQUE_TOOLS:
             if self._denied_tools or self._denied_memory:

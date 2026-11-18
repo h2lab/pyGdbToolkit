@@ -236,7 +236,7 @@ def test_camelot_still_requires_kernel_before_loading_symbols(
     tmp_path: Path, fake_gdb: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The Camelot-specific image requirement now belongs to its implementation."""
-    (tmp_path / "project.toml").write_text("[application.demo]\n")
+    (tmp_path / "project.toml").write_text('[application.demo]\nprovides = ["demo-app.elf"]\n')
     elf = tmp_path / "output/build/camelot_private/demo-app.elf"
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"ELF fixture")

@@ -7,8 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 ## Status and scope
 
 `pyGdbClient.llm` connects an LLM agent to the dashboard through
-provider-neutral contracts, with GitHub Copilot and OpenAI-compatible
-endpoints as optional providers.
+provider-neutral contracts, with GitHub Copilot, OpenAI-compatible endpoints
+and OpenCode V2 as optional providers.
 The agent works on the target only through a controlled tool gateway, a
 deterministic protection policy and one-attempt auditor approvals. The
 [agent-assisted audit guide](agent.md) covers day-to-day use; this page
@@ -35,6 +35,8 @@ The twelfth adds end-to-end simulated audit workflows
 (`tests_client/test_llm_scenarios.py`) and the [user guide](agent.md).
 The thirteenth adds the optional [OpenAI-compatible provider](#openai-compatible-provider)
 for LAN inference servers such as Ollama or llama.cpp.
+The [OpenCode V2 provider](#opencode-v2-provider) connects to a separately
+configured server and proxies requests to its selected model.
 
 ## Trust boundaries
 
@@ -120,6 +122,40 @@ RPC. Collection is split in three layers:
    than 1 raises `TargetContextError`; unknown extra keys are ignored.
 
 Memory regions keep their optional `name` and `protection` metadata.
+
+## Audit context
+
+`pyGdbClient.audit` complements the policy-bound target snapshot with what an
+auditor, or an LLM backend assisting one, needs to know about the analysis.
+`AuditContextManager` keeps the project loaded by the dashboard
+[`project` command](rtos.md#projects-on-a-remote-client), which only the
+client knows, and `refresh(client)` gathers the rest concurrently from
+pyGdbServer's read-only status methods. `AuditContext` schema version 1
+contains:
+
+| Part | Source | Content |
+| ---- | ------ | ------- |
+| `project` | client | RTOS type, `local_root` (auditor workstation), `server_path`, load time, declared name, version and components (origin, revision, configuration, source tree, ELF files) and every transferred artifact with its size and SHA-256 digest. |
+| `rtos` | `rtos.status` | Selected RTOS, loaded project and task slots. |
+| `execution` | `target.status` | Execution state, thread, core and access ports. |
+| `cores` | `target.cores` | Discovered CPU cores. |
+| `svd` | `svd.peripherals` | Device name and peripheral base addresses with register counts, bounded to 1024 peripherals (`truncated` reports the excess). |
+| `server` | `server.status` | OCD and GDB processes and the server log file. |
+
+Each server part records its source method. A part that cannot be obtained
+(RPC error, disconnection, timeout, malformed answer, no SVD loaded, no project
+loaded) carries an `unavailable_reason` instead of data, never a default value.
+Component source trees missing from the local workstation are recorded as
+`null`. The dashboard `audit [FILE]` command refreshes and summarizes the
+context and, with `FILE`, writes its JSON document to that local file.
+
+When the agent is enabled, each new conversation receives a fresh audit
+context, [masked](#masking-before-disclosure) like the target snapshot, as
+data, not instructions. Copilot and OpenAI-compatible providers include it in
+their system instructions; OpenCode includes it in each generation prompt.
+It is counted in the context
+usage but not journaled in the store. After loading another project during a
+conversation, use `/new` so the agent receives it.
 
 ## Conversation persistence
 
@@ -238,6 +274,7 @@ timeout and local effects. Preparing a call is **not authorization** to run it.
 | `gdb_command` | `command.execute`, `gdb ` prefix | unknown |
 | `ocd_command` | `command.execute`, `monitor ` prefix | unknown |
 | `mi_command` | `mi.execute`, command must start with `-` | unknown |
+| `read`, `glob`, `grep` | local project source access, advertised with a loaded project to OpenCode, or to Copilot with explicit source-disclosure consent | observe |
 
 `memory_read` accepts a JSON integer address and length, rejects booleans and
 floats, and limits each read to 1-4096 bytes without overflowing the 64-bit
@@ -245,7 +282,10 @@ address domain. This limit is not permission to read MMIO. All tools have an
 optional `timeout` in seconds (0.001-300, default 30); the client waits five
 additional seconds for the response. The parameter is forwarded to existing
 RPC methods; methods without server-side timeout support still use their
-existing server timeout. Command strings are nonblank, at most 4096 characters,
+existing server timeout. For local source operations the timeout bounds waiting
+for the result; a timed-out filesystem read may still finish in the background,
+but its result is not disclosed. Source scans also use the limits described
+below. Command strings are nonblank, at most 4096 characters,
 and exclude control characters, including newlines. Toolkit help names are
 limited to 128 characters. Core IDs are integers from 0 to `2**31 - 1`.
 `workspace_erase` accepts only a workspace basename of at most 128 characters,
@@ -558,8 +598,12 @@ replayed as authorization.
 1. `provider_id`: a stable implementation identifier.
 2. `status()`: readiness, authentication state, and sanitized guidance. It must
    not initiate authentication or return credentials.
-3. `open_session(session_id, context, tools)`: an isolated conversation given
-   an application-owned ID, an explicit context snapshot, and tool schemas.
+3. `open_session(session_id, context, tools, audit=None)`: an isolated
+   conversation given an application-owned ID, an explicit context snapshot,
+   tool schemas and, optionally, the already masked
+   [audit context](#audit-context) document. Copilot and OpenAI-compatible
+   providers append it to their system instructions; OpenCode includes it in
+   its structured generation prompt.
 
 `LlmSession.stream()` accepts either a `UserPrompt` or correlated `ToolResults`.
 It yields ordered `TextDelta` and complete `ToolCallProposed` events, followed
@@ -757,6 +801,42 @@ An interrupted pending batch requires a new session. `close()` detaches the
 session; `provider.close()` also stops the owned runtime and removes its
 temporary working directory.
 
+### Project source tools and explicit consent
+
+Copilot can use the same local `read`, `glob` and `grep` tools as OpenCode,
+but **only with explicit opt-in**:
+
+```console
+pyGdbClient ws://localhost:1235 --llm github-copilot \
+    --copilot-runtime /absolute/path/to/copilot-runtime \
+    --copilot-allow-project-sources
+```
+
+Load `project /absolute/path/to/sample-project camelot` in the dashboard's
+command prompt before the first agent request. Use `/new` after loading or
+changing the project if a conversation already exists. The flag is rejected
+without `--llm github-copilot`. It applies to loaded projects during that
+client process; only load trees authorized for disclosure to GitHub Copilot.
+Without a loaded project no source tools are advertised. Without the flag,
+Copilot retains project/target context and target tools, but not source tools.
+`--llm-test-data` does not grant source access.
+
+The client displays a disclosure notice when opening a source-enabled Copilot
+session. Source-only calls run **without another approval** and their results
+may leave the workstation for GitHub Copilot. Best-effort masking is not a
+confidentiality guarantee; the local journal retains unmasked observations.
+
+These are inert SDK tool declarations, not native Copilot filesystem tools.
+The SDK continues to run in an empty temporary directory with native tools
+disabled and all permission requests rejected. Only the local gateway reads
+files and returns bounded observations. The same
+[source restrictions and limits](#local-project-source-access) apply: relative
+paths, no hidden files or symbolic links, read-only UTF-8 files, bounded
+results and refusal when the loaded project changes. Target operations retain
+their normal policy checks and approval, including in mixed source/target plans.
+No project files are uploaded wholesale and the SDK receives no direct
+filesystem handle or pyGdbServer connection.
+
 ### Validation and confidentiality limits
 
 Client tests use the **installed pinned SDK** (real clients, sessions, events,
@@ -764,6 +844,9 @@ permission dispatch and generated RPC serialization) over an offline
 transport double. They cover authentication, restriction payloads, complete
 and sequential tool batches, error sanitization, cancellation, and a simulated
 SDK-to-orchestrator-to-gateway round with auditor approval accepted or refused.
+Source tests also exercise the controller, all three source tools, the
+consent/project gates, masking, path and project-change refusals, and mixed
+source/target plan approval.
 They require no GitHub account, network model call, GDB module or target.
 These tests do not certify a live account, model or runtime sandbox.
 
@@ -871,6 +954,162 @@ unchanged. A local model on trusted equipment is the recommended setup for
 production data, but only after verifying what the server logs and retains: an
 OpenAI-compatible URL is not by itself proof of a local or trustworthy model.
 
+## OpenCode V2 provider
+
+`pyGdbClient.llm.opencode.OpenCodeProvider` connects to an **already running
+OpenCode V2 server**. OpenCode acts as a proxy to its configured model, which
+can itself run on another machine, for example Ollama on the local network.
+pyGdbClient neither installs nor starts OpenCode or the model server. The
+OpenCode V1 server API is not supported.
+
+### Setup
+
+Install the optional HTTP client in the pyGdbClient environment:
+
+```console
+python -m pip install '.[opencode]'
+```
+
+Separately, configure OpenCode V2 on its host. For example, an
+`opencode.jsonc` can point an OpenAI-compatible provider at an existing Ollama
+server. Use the actual model name installed on that Ollama server:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "ollama": {
+      "name": "Network Ollama",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://ollama.lan:11434/v1" },
+      "models": { "llama3.2:latest": { "name": "Llama 3.2" } }
+    }
+  },
+  "model": "ollama/llama3.2:latest"
+}
+```
+
+Start the OpenCode server independently and make it accessible to the client:
+
+```console
+OPENCODE_PASSWORD='<server password>' opencode serve --hostname 0.0.0.0 --port 4096
+```
+
+Then connect the client to **OpenCode**, not directly to Ollama:
+
+```console
+export OPENCODE_PASSWORD='<server password>'
+pyGdbClient ws://localhost:1234 --llm opencode \
+    --opencode-url http://opencode.lan:4096 \
+    --opencode-password-env OPENCODE_PASSWORD \
+    --opencode-model ollama/llama3.2:latest
+```
+
+Alternatively, store the password in a protected local file and supply its path:
+
+```console
+pyGdbClient ws://localhost:1235 --llm opencode \
+    --opencode-url http://localhost:49374 \
+    --opencode-password-file ~/.config/opencode/client-password
+```
+
+`--opencode-url` can instead be supplied via `PYGDB_OPENCODE_URL`.
+`--opencode-agent` optionally selects an agent defined on the server;
+`--opencode-model` selects a configured `provider/model` (optionally followed
+by `#variant`), otherwise OpenCode uses its configured selection.
+`--opencode-timeout` bounds each request and
+response read (default 120 seconds). The optional password is read either
+from the environment variable named by `--opencode-password-env` or from
+`--opencode-password-file`; these options are mutually exclusive. The file
+must be a regular UTF-8 file containing one nonempty line of at most 16384
+bytes. A final LF or CRLF is removed; other spaces are preserved. Restrict its
+filesystem permissions (for example `chmod 600`) so other users cannot read
+it. The password is never printed or included in the client configuration
+representation. V2 HTTP Basic
+authentication uses the fixed user `opencode`. `/status` probes `GET /api/info`;
+it checks server access, not whether the selected model can generate.
+
+Use an authenticated, trusted network and HTTPS or a protected tunnel for
+remote access: Basic authentication over plain HTTP does not encrypt either
+the password or audit data. The OpenCode server, its plugins and its configured
+model provider can receive the masked target and audit context, prompts and
+approved observations. Their logs and retention are outside pyGdbClient's
+control. Masking remains best effort and is not a security boundary.
+
+### Structured tool handoff
+
+OpenCode's native agent tools are **disabled** for this integration. The client
+creates a separate V2 session with a deny-all permission rule and requires the
+server to confirm that rule. Each model turn uses the V2 transient
+`/api/session/{id}/generate` endpoint; the local conversation is replayed with
+the target snapshot, audit context, tool definitions and prior results. This
+endpoint returns a complete response, rather than streaming text token by token.
+The client deletes its remote session on close; a crash or network failure can
+leave a session on the OpenCode server.
+
+The model must follow a strict JSON protocol: either an answer or a batch of
+named tool proposals with unique identifiers and JSON arguments. Invalid JSON,
+unknown or duplicate tools and oversized responses fail explicitly; no
+plain-text or native-tool fallback is used. A single Markdown code fence
+containing only the JSON object is accepted; its content is validated exactly
+like an unfenced response. Reliability therefore depends on
+the selected model's ability to follow the structured instructions. Tool
+proposals go through the same local validation, policy and auditor approval as
+other backends. Failed or refused operations are returned as failures. OpenCode
+does not receive executable target-tool callbacks or the pyGdbServer connection.
+The target snapshot, audit context, tool definitions and conversation history
+all consume the model's effective context window; a small Ollama context can
+truncate them and cause malformed responses or incorrect tool arguments.
+Configure a sufficiently large context on the model server and verify it with
+the actual project and model. A model's advertised maximum is not necessarily
+the context size currently allocated by Ollama.
+
+This mode does **not** give the OpenCode agent its usual filesystem, shell,
+subagent, MCP or other native tools. Paths in the audit context describe the
+auditor's workstation and must not be assumed to exist on the OpenCode host.
+Cancelling interrupts the client HTTP request, but cannot
+guarantee that inference already started on the remote server stops.
+
+### Local project source access
+
+Load a project with `project /absolute/path camelot` in the dashboard command
+prompt **before** the first agent request. If an agent session is already
+open, use `/new` in the agent prompt. When the loaded project changes, source
+calls from the old session are refused until another session is opened.
+
+OpenCode, and Copilot with
+[explicit source consent](#project-source-tools-and-explicit-consent), can
+propose three locally executed tools: `read` reads UTF-8 text
+from a project-relative file with an optional 1-based `offset` and line
+`limit`; `glob` lists files matching a project-relative pattern (`**` matches
+zero or more directories); `grep` searches text for a **literal,
+case-sensitive** string, optionally restricted by a glob. `glob` and `grep`
+take a project-relative directory `path`, with `.` denoting the project root.
+For example `path: "output/src", pattern: "**/*.c"` lists Camelot C sources.
+`grep` with `path: "output/src", pattern: "main", glob: "**/*.c"` searches
+those files. No native backend tools or remote filesystem mounts are needed.
+
+These calls are automatically allowed by the local policy and their results
+are sent to the selected backend and its configured model, subject to
+best-effort masking. Only enable source access to projects whose source
+contents and names may be disclosed to them.
+This includes non-hidden files anywhere under the project root, not just
+declared source directories. The local conversation store can retain
+**unmasked** results. Neither masking nor filenames guarantee that secrets
+are excluded; source content is untrusted data and may contain prompt
+injection. Target operations continue to use their existing approval rules.
+
+Paths must be relative, with no `..`, hidden components or symbolic links.
+Hidden entries, links and special files are not traversed. File reads require
+Linux `O_PATH`, `O_NOFOLLOW` and procfs to inspect the opened inode before
+reading. Mounts already present within the project tree remain accessible.
+Individual files are limited to 256 KiB and `read` returns at most 200 lines
+and 12,000 characters. Paths are limited to 24 components. Scans are bounded
+by 20,000 entries, three seconds, 16 MiB of text and 100 matches; `truncated` reports
+incomplete scans, and `skipped_non_text_or_large` counts skipped files.
+The limits are checked during scanning, not hard deadlines for a stalled
+filesystem. An operation that cannot safely open a file fails explicitly.
+
 ## Dashboard agent CLI
 
 The dashboard has a second prompt, below the command prompt, dedicated to the
@@ -911,7 +1150,7 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 
 | Option | Purpose |
 | ------ | ------- |
-| `--llm PROVIDER` | Enable the agent CLI with a registered provider (`github-copilot`, `openai`). |
+| `--llm PROVIDER` | Enable the agent CLI with a registered provider (`github-copilot`, `openai`, `opencode`). |
 | `--llm-store FILE` | Retain conversations and target snapshots in this SQLite file (created with mode `0600`). By default they are journaled in memory only, for the dashboard's lifetime. |
 | `--llm-redact REGEX` | Also mask matches of this Python regular expression before disclosure (repeatable, at most 512 characters). |
 | `--llm-test-data` | Analyse test data without automatic masking, including test cryptographic material. Cannot be combined with `--llm-redact`. |
@@ -919,10 +1158,17 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 | `--copilot-runtime PATH` | Copilot runtime executable; defaults to `$PYGDB_COPILOT_RUNTIME`. Relative paths are made absolute; nothing is downloaded. |
 | `--copilot-model MODEL` | Model requested from Copilot (default: the runtime's choice). |
 | `--copilot-token-env NAME` | Read a GitHub token from environment variable `NAME`. Without it, the `copilot login` account is used. |
+| `--copilot-allow-project-sources` | Explicitly allow `read`, `glob` and `grep` results from loaded projects to be disclosed to GitHub Copilot without another approval. Disabled by default; requires `--llm github-copilot`. |
 | `--openai-url URL` | Base URL of an OpenAI-compatible `/v1` API; defaults to `$PYGDB_OPENAI_URL`. |
 | `--openai-model MODEL` | Model served by the endpoint; defaults to `$PYGDB_OPENAI_MODEL`. |
 | `--openai-key-env NAME` | Read an API key from environment variable `NAME`. Without it, access is anonymous. |
 | `--openai-timeout SECONDS` | Bound of each request and stream read (default `120`). |
+| `--opencode-url URL` | OpenCode V2 server URL; defaults to `$PYGDB_OPENCODE_URL`. |
+| `--opencode-agent AGENT` | Select an agent configured on the OpenCode server. |
+| `--opencode-model PROVIDER/MODEL[#VARIANT]` | Select a model and optional variant configured on the OpenCode server. |
+| `--opencode-password-env NAME` | Read the OpenCode server password from environment variable `NAME`. |
+| `--opencode-password-file FILE` | Read the OpenCode server password from a local UTF-8 file; cannot be combined with `--opencode-password-env`. |
+| `--opencode-timeout SECONDS` | Bound of each request and response read (default `120`). |
 
 A token is never accepted on the command line, where other local users could
 read it from the process list. Invalid provider options stop the launcher with
@@ -952,8 +1198,9 @@ of Textual, so other front ends can reuse it. Opening a session:
 1. checks the provider status; a provider that is unavailable, or whose
    authentication is `required` or `expired`, is reported with its guidance
    before any target access;
-2. reads a fresh [`target.context`](#target-context) snapshot;
-3. opens a provider conversation with that snapshot, after
+2. reads a fresh [`target.context`](#target-context) snapshot and, in the
+   dashboard, a fresh [audit context](#audit-context);
+3. opens a provider conversation with that snapshot and audit context, after
    [masking](#long-context-and-confidentiality), and the
    [tool catalogue](#tool-catalogue-and-rpc-gateway) definitions;
 4. registers the session, with the unmasked snapshot, in the store;
@@ -963,7 +1210,8 @@ of Textual, so other front ends can reuse it. Opening a session:
 
 The console then lists the facts transmitted to the provider: MCU, revision,
 architecture, debug transport (JTAG or SWD), OCD, core, SVD file and memory
-map regions, each with its source or unavailability reason, followed by the
+map regions, each with its source or unavailability reason, then the audit
+context summary, followed by the
 number of masked values and, for a continuation, the recollection size. If any
 step fails after the provider conversation was opened, that conversation is
 closed.
@@ -1009,6 +1257,7 @@ the explicit [test-data analysis mode](#test-data-analysis-mode) below.
 `pyGdbClient.llm.confidentiality.Redactor` replaces every match of its rules
 with `[REDACTED:<rule>]` in everything the provider receives: the session
 snapshot (descriptive strings only; context identifier and addresses are kept),
+the audit context (every string value; keys, numbers and structure are kept),
 auditor prompts, recollections and tool observations. JSON observations keep
 their structure; only string values are masked. The console and the store keep
 the unmasked data, and each masking is reported by a notice such as
