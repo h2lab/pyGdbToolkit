@@ -100,7 +100,8 @@ def _address(value: int, size: int) -> int:
     return value
 
 
-def _name(thread: gdb.Value) -> str | None:
+def thread_name(thread: gdb.Value) -> str | None:
+    """Read a bounded thread name through its DWARF byte-array type."""
     value = thread["name"]
     kind = value.type.strip_typedefs()
     if kind.code != gdb.TYPE_CODE_ARRAY or kind.target().sizeof != 1:
@@ -220,7 +221,7 @@ def read_threads(
             result.append(
                 ThreadInfo(
                     address=address,
-                    name=_name(thread) if names else None,
+                    name=thread_name(thread) if names else None,
                     priority=int(base["prio"]),
                     state=state,
                     options=int(base["user_options"]),
@@ -338,6 +339,7 @@ def show_threads(
         *blocks,
         Text(
             "Current means scheduled by the kernel, not necessarily executing outside an ISR. "
-            "Wait-queue addresses do not identify object types. Scheduler tracing is not included."
+            "Wait-queue addresses do not identify object types. "
+            "Use rtos showsched for supported PendSV entry observations."
         ),
     )

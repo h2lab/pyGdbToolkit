@@ -8,8 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 The `rtos` GDB prefix groups project symbol loading, task inspection, and
 scheduler tracing. **Camelot** supports all three; **Zephyr** currently supports
 build loading/display, live thread inspection and supported Cortex-M saved
-contexts/stacks, plus explicit semaphore/mutex/event inspection, but not
-scheduler tracing. The `rtos select <name>` interface and
+contexts/stacks, explicit semaphore/mutex/event inspection and supported
+mono-CPU Cortex-M PendSV observations. The `rtos select <name>` interface and
 RTOS-specific modules keep these capabilities separate without changing command
 names. Output uses Rich tables.
 
@@ -127,7 +127,7 @@ Camelot retains its kernel ELF requirement, static `.task_list` decoding and
 return-based election sampling in its own implementation. The version 1 RPC
 snapshot and Camelot command output are unchanged. Zephyr registers its own
 build loader and cached context, with thread identity/state inspection enabled
-for supported versions and scheduler tracing still disabled.
+for supported versions and build-gated Cortex-M PendSV observations.
 
 ## Command reference
 
@@ -141,7 +141,7 @@ for supported versions and scheduler tracing still disabled.
 | `rtos show threads` | Enumerate observable Zephyr threads with explicit coverage | Yes |
 | `rtos show task <identifier>` | Inspect a Camelot task or a Zephyr thread by exact name/hex address | Yes |
 | `rtos show object <type> <hex-address>` | Inspect a Zephyr `sem`, `mutex` or `event` and available waiters | Yes |
-| `rtos showsched <num>` | Observe the next positive number of elections (Camelot) | Connected target required |
+| `rtos showsched <num>` | Observe Camelot election returns or supported Zephyr PendSV candidates | Connected target; Zephyr activation requires stopped target |
 
 ### Project symbols and mapping
 
@@ -208,7 +208,7 @@ if the target is disconnected or the task table has not been initialized.
 (gdb) continue
 ```
 
-`showsched` installs a breakpoint at `sched_elect()` and records the elected
+For **Camelot**, `showsched` installs a breakpoint at `sched_elect()` and records the elected
 task *on return*, after the scheduler makes its decision. After `<num>`
 returns, GDB stops and prints a Rich chart: columns are numbered elections,
 rows are tasks, and a filled marker marks the winner. Long traces are shown
@@ -219,6 +219,14 @@ Cancellation also removes pending scheduler-return breakpoints. If GDB cannot
 observe a scheduler return, tracing reports the failure and releases the trace
 instead of continuing with an incomplete observation.
 
+For **Zephyr**, `showsched` observes `current -> ready-cache candidate` at exact
+Cortex-M PendSV entry. It stops before the last observed switch, not after
+confirmed execution. The count is bounded to 1..4096; supported builds require
+one CPU without SMP, USE_SWITCH or TrustZone firmware. See
+[Zephyr scheduler observations](rtos-zephyr.md#scheduler-observations) for
+semantics, cleanup, configuration and instrumentation effects. Both backends
+perturb timing through breakpoints; neither is a CPU-usage profiler.
+
 ## Troubleshooting
 
 - `Select an RTOS first`: run `rtos select camelot` before loading a project.
@@ -228,4 +236,5 @@ instead of continuing with an incomplete observation.
 - `Cannot access memory`: connect and halt a target with the matching image
   before requesting `rtos show task`.
 - A breakpoint that never completes: continue the target and confirm that
-  the flashed kernel matches the loaded ELF and calls `sched_elect()`.
+  the flashed kernel matches the loaded ELF and reaches `sched_elect()` (Camelot)
+  or `z_arm_pendsv` (supported Zephyr).

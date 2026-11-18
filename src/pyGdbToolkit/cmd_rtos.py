@@ -44,7 +44,7 @@ class RtosCmd(gdb.Command):
             CommandUsage(
                 "rtos show object <type> <hex-address>", "Inspect a synchronization object"
             ),
-            CommandUsage("rtos showsched <num>", "Trace the next num scheduler elections"),
+            CommandUsage("rtos showsched <num>", "Collect the next num scheduler observations"),
         ),
         notes=(
             "<path> is resolved by GDB and must exist on its host.",
@@ -165,7 +165,7 @@ class RtosCmd(gdb.Command):
         except (ValueError, gdb.error) as error:
             raise gdb.GdbError(f"Cannot trace RTOS scheduler: {error}") from error
         CONSOLE.print(
-            f"Tracing {args[0]} scheduler elections. Continue the target to collect them."
+            f"Tracing {args[0]} scheduler observations. Continue the target to collect them."
         )
 
 
@@ -366,13 +366,13 @@ class RtosShowTaskCmd(_RtosSubcommand):
 
 
 class RtosShowschedCmd(_RtosSubcommand):
-    """Trace and chart the next scheduler elections."""
+    """Collect implementation-specific scheduler observations."""
 
     def __init__(self, parent: RtosCmd) -> None:
         super().__init__(parent, "showsched")
 
     def invoke(self, arg: str, from_tty: bool) -> None:
-        """Trace the requested number of scheduler elections."""
+        """Trace the requested number of scheduler observations."""
         del from_tty
         self.parent._invoke_showsched(self._argv(arg))
 
