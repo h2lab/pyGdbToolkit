@@ -837,6 +837,13 @@ their normal policy checks and approval, including in mixed source/target plans.
 No project files are uploaded wholesale and the SDK receives no direct
 filesystem handle or pyGdbServer connection.
 
+For Zephyr, authorize build-declared sources with
+`project /workspace/build zephyr --workspace /workspace`. The workspace option
+does not replace Copilot's disclosure flag. It exposes only `build`,
+`application`, `zephyr` and `module-NAME` aliases, not arbitrary workspace files;
+see [Zephyr source authorization](rtos-zephyr.md#remote-client-and-audit-context).
+All three tools keep the same gateway, masking and consent behavior.
+
 ### Validation and confidentiality limits
 
 Client tests use the **installed pinned SDK** (real clients, sessions, events,
@@ -1089,12 +1096,24 @@ For example `path: "output/src", pattern: "**/*.c"` lists Camelot C sources.
 `grep` with `path: "output/src", pattern: "main", glob: "**/*.c"` searches
 those files. No native backend tools or remote filesystem mounts are needed.
 
+With an explicitly authorized Zephyr workspace, use `glob path=".", pattern="*"`
+to list aliases, then select an alias for each operation:
+`read path="application/src/main.c"`, `grep path="zephyr/kernel", pattern="z_pend"`
+or `glob path="module-hal_stm32", pattern="**/*.h"`. Root listing is bounded to
+100 aliases, does not scan every root, and cannot be used for `grep` at `.`.
+The full alias list, workspace-relative directories and discovery metadata
+hashes are in audit `project.source_access`. Directory identities are pinned
+at project load; replacing a source root or workspace requires a project reload.
+Local revisions and source content are not verified against the analyzed ELF.
+
 These calls are automatically allowed by the local policy and their results
 are sent to the selected backend and its configured model, subject to
 best-effort masking. Only enable source access to projects whose source
 contents and names may be disclosed to them.
-This includes non-hidden files anywhere under the project root, not just
-declared source directories. The local conversation store can retain
+For ordinary build/project mode this includes non-hidden files anywhere under
+the project root, not just declared source directories. Zephyr workspace mode
+instead restricts access to the build and explicitly discovered source aliases.
+The local conversation store can retain
 **unmasked** results. Neither masking nor filenames guarantee that secrets
 are excluded; source content is untrusted data and may contain prompt
 injection. Target operations continue to use their existing approval rules.

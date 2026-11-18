@@ -57,6 +57,8 @@ else:
     cmd_rtos.RtosLoadProjectCmd(_RTOS_COMMAND)
     cmd_rtos.RtosShowCmd(_RTOS_COMMAND)
     cmd_rtos.RtosShowTaskCmd(_RTOS_COMMAND)
+    cmd_rtos.RtosShowThreadsCmd(_RTOS_COMMAND)
+    cmd_rtos.RtosShowObjectCmd(_RTOS_COMMAND)
     cmd_rtos.RtosShowschedCmd(_RTOS_COMMAND)
     _SVD_COMMAND = SvdCmd()
     cmd_svd.SvdLoadCmd(_SVD_COMMAND)

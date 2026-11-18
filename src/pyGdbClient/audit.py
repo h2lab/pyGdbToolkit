@@ -27,6 +27,7 @@ from websockets.exceptions import ConnectionClosed
 
 from .llm.contracts import JsonObject, JsonValue
 from .project import LoadedProject, ProjectArtifact, RpcRequester
+from .project_sources import SourceWorkspace
 from .rpc import RpcError
 
 __all__ = [
@@ -115,6 +116,7 @@ class ProjectContext:
     description: ProjectDescription
     artifacts: tuple[ProjectArtifact, ...]
     loaded_at: str
+    source_workspace: SourceWorkspace | None = None
 
     @classmethod
     def from_loaded(cls, project: LoadedProject, loaded_at: str) -> Self:
@@ -148,6 +150,7 @@ class ProjectContext:
             replace(project.description, components=components),
             project.artifacts,
             loaded_at,
+            project.source_workspace,
         )
 
     def to_json(self) -> JsonObject:
@@ -157,6 +160,11 @@ class ProjectContext:
             "local_root": self.local_root,
             "server_path": self.server_path,
             "loaded_at": self.loaded_at,
+            "source_access": (
+                None
+                if self.source_workspace is None
+                else _json_object(self.source_workspace.to_dict(), "source workspace")
+            ),
             **_json_object(self.description.to_dict(), "project description"),
             "artifacts": [
                 {"path": artifact.path, "size": artifact.size, "sha256": artifact.sha256}

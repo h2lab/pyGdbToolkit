@@ -24,6 +24,44 @@ gdb-multiarch -nx -batch -ex 'python import sys; print(sys.version); print(sys.p
 
 If GDB cannot import the package, install it using a compatible Python interpreter
 or add that environment's `site-packages` directory to GDB's `sys.path`.
+This includes runtime dependencies such as PyYAML and pyelftools used by the
+Zephyr build loader.
+
+**Activating a virtual environment does not necessarily add its packages to
+GDB's embedded Python.** The server can locate the toolkit source while GDB still
+cannot import a dependency such as `elftools` (provided by `pyelftools`).
+Find the package directory using the Python interpreter that runs the server:
+
+```console
+python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])'
+```
+
+For server sessions, put that absolute directory in `gdb-args` in your server
+configuration, replacing the example path with the result above:
+
+```json
+"gdb-args": [
+  "-iex",
+  "python import site; site.addsitedir('/absolute/path/to/venv/lib/python3.13/site-packages')"
+]
+```
+
+This is a field to add to your existing JSON configuration. Use a trusted
+environment compatible with GDB's Python version; `site.addsitedir` also processes
+its `.pth` files. Use `-iex` so the path is available early. Do **not** put this
+setup in `gdb-init`: those commands run **after** the toolkit import.
+See [server configuration](pygdbserver.md#gdb-python-environment).
+
+Verify dependency imports in a fresh GDB process before connecting to hardware:
+
+```console
+gdb-multiarch -nx -batch \
+  -iex "python import site; site.addsitedir('/absolute/path/to/venv/lib/python3.13/site-packages')" \
+  -ex 'python import yaml, elftools; print(yaml.__file__); print(elftools.__file__)'
+```
+
+Restart the server and its GDB process after changing this configuration;
+restarting only the client does not reload server-side Python modules.
 
 ## Choose a session mode
 
@@ -160,7 +198,7 @@ See the [SVD command reference](svd.md) for syntax and limitations.
 
 | Symptom | Check |
 | --- | --- |
-| GDB cannot import `pyGdbToolkit` | Embedded Python version and `sys.path`; activate the correct environment before starting the server. |
+| GDB cannot import `pyGdbToolkit`, `elftools` or `yaml` | Check embedded Python compatibility and configure the trusted environment's `site-packages` through `gdb-args` with `-iex`, as above. Activating the venv alone may not affect GDB; `gdb-init` is too late. Restart the server/GDB afterward. |
 | OCD fails to start | Executable path, board scripts, probe identifier, USB permissions and other processes using the probe. |
 | Client cannot connect | Server startup completed, configured WebSocket host and port, and firewall rules. |
 | SVD loading fails | Network access, supported target identity, or use `svd read` with a local file; `memmap discover` works independently of SVD loading. |

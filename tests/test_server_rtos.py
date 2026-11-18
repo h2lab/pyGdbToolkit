@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import shutil
+import site
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -74,7 +75,7 @@ def _server(tmp_path: Path) -> PyGdbServer:
 
 def test_registry_exposes_supported_project_types() -> None:
     """Clients discover supported project types from the shared registry."""
-    assert DEFAULT_PROJECT_REGISTRY.names == ("camelot",)
+    assert DEFAULT_PROJECT_REGISTRY.names == ("camelot", "zephyr")
 
 
 def test_complete_project_is_frozen_until_server_stops(projects: RtosProjects) -> None:
@@ -348,8 +349,23 @@ def test_concurrent_same_name_only_allocates_one_project(projects: RtosProjects)
     assert len(list(projects.workspace.glob("pygdb-rtos-*"))) == 1
 
 
+@pytest.mark.parametrize(
+    "rtos,declaration",
+    [
+        ("camelot", PROJECT),
+        (
+            "zephyr",
+            b"""version: '0.1.0'
+cmake:
+  application: {source-dir: /client/app}
+  board: {name: nucleo_u5a5zj_q}
+  zephyr: {version: '4.5.99', zephyr-base: /client/zephyr}
+""",
+        ),
+    ],
+)
 def test_rpc_transfer_commit_and_status_over_websocket(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rtos: str, declaration: bytes
 ) -> None:
     """Exercise JSON-RPC wire shapes and ensure activation is one serialized GDB command."""
     server = _server(tmp_path)
@@ -357,7 +373,7 @@ def test_rpc_transfer_commit_and_status_over_websocket(
     server.rtos_projects = RtosProjects(tmp_path)
     snapshot: dict[str, object] = {
         "schema_version": 1,
-        "selected_rtos": "camelot",
+        "selected_rtos": rtos,
         "loaded": True,
         "project_path": None,
         "task_list": None,
@@ -405,14 +421,13 @@ def test_rpc_transfer_commit_and_status_over_websocket(
                     assert "error" not in response, response
                     return response["result"]
 
-                begin = await rpc("rtos.project.begin", {"name": "demo", "rtos": "camelot"})
+                begin = await rpc("rtos.project.begin", {"name": "demo", "rtos": rtos})
                 assert begin["limits"]["chunk_size"] == CHUNK_SIZE
                 assert not console_mock.called
-                inputs = {
-                    path: b"fixture" for path in project_manifest("camelot", PROJECT).required
-                }
-                inputs[PROJECT_FILE] = PROJECT
-                inputs[KCONFIG] = b'{"CONFIG_SVC_EXCHANGE_AREA_LEN":128}'
+                inputs = {path: b"fixture" for path in project_manifest(rtos, declaration).required}
+                inputs[project_manifest(rtos).project_file] = declaration
+                if rtos == "camelot":
+                    inputs[KCONFIG] = b'{"CONFIG_SVC_EXCHANGE_AREA_LEN":128}'
                 for path, data in inputs.items():
                     await rpc(
                         "rtos.project.put",
@@ -522,13 +537,13 @@ def test_real_gdb_status_without_target(tmp_path: Path) -> None:
     """The structured exporter also works in a standalone real GDB without hardware."""
     server = _server(tmp_path)
     server.mi = MiSession("gdb-multiarch", (), server.logs)
-    source = str(Path(__file__).resolve().parents[1] / "src")
+    paths = [str(Path(__file__).resolve().parents[1] / "src"), *site.getsitepackages()]
 
     async def exercise() -> None:
         await server.mi.start(10)
         try:
             await server.mi.console(
-                f"python import sys; sys.path.insert(0, {source!r}); import pyGdbToolkit"
+                f"python import sys; sys.path[:0] = {paths!r}; import pyGdbToolkit"
             )
             status = await server.rtos_status()
             assert status["selected_rtos"] is None

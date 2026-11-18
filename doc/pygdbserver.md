@@ -39,7 +39,7 @@ finally the public API. A failed stage stops the complete stack.
 | Field | Meaning |
 |---|---|
 | `gdb-path` | GDB executable. |
-| `gdb-args` | Extra GDB arguments. They must not establish the target connection. |
+| `gdb-args` | Extra GDB arguments, including early Python environment setup via `-iex` when needed (see below). They must not establish the target connection. |
 | `ocd-path` | pyOCD, OpenOCD, SEGGER JLinkGDBServer (including JLinkGDBServerCLExe), QEMU, or another GDB-server executable. |
 | `ocd-identifier` | Backend protocol: `jlinkgdbserver`, `openocd`, `pyocd`, or `qemu`. Overrides executable-name inference, including for wrappers. Legacy files may omit it. |
 | `ocd-args` | OCD arguments. `{gdb_port}`, `{telnet_port}`, and `{loopback}` are expanded. J-Link also supports `{swo_port}`. Known backends receive GDB port arguments automatically when omitted; QEMU requires `-gdb tcp:{loopback}:{gdb_port}` when supplied explicitly. Telnet and SWO arguments must be supplied explicitly outside cluster mode. |
@@ -54,6 +54,34 @@ The OCD GDB endpoint and raw MI adapter always bind to `127.0.0.1` with dynamic
 ports. The raw MI adapter is for local diagnostics; clients should use the API.
 When exposing the public API beyond loopback, place it behind a trusted network
 or a TLS and authentication reverse proxy.
+
+### GDB Python environment
+
+The server's Python interpreter and GDB's embedded Python have separate import
+paths. Activating a venv for `pyGdbServer` does not guarantee that GDB can import
+that environment's dependencies, even when the toolkit source itself is found.
+For example, `No module named 'elftools'` can occur despite `pyelftools` being
+installed and declared as a project dependency.
+
+Find the trusted server environment's package directory with
+`python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])'`, then
+configure its **absolute** path:
+
+```json
+"gdb-args": [
+  "-iex",
+  "python import site; site.addsitedir('/absolute/path/to/venv/lib/python3.13/site-packages')"
+]
+```
+
+Merge this field into the full configuration; retain other required arguments.
+The directory and installed packages must be compatible with GDB's embedded
+Python. `site.addsitedir` processes `.pth` files, so only use an environment you
+trust. Do not copy the example Python version/path without checking your setup.
+This must run through `gdb-args`, **not `gdb-init`**, because the latter executes
+after `import pyGdbToolkit`. Restart the server/GDB after changing it.
+See the [installation guide](getting-started.md) for a hardware-free dependency
+import check.
 
 ### QEMU: hardware-free targets and CI
 
@@ -327,14 +355,16 @@ Runs a raw MI command, which must start with `-`.
 
 These methods load a complete RTOS build context from a remote client's
 filesystem without mounting it on the server. They do not flash the target.
-Camelot is currently supported. The existing GDB command
+Camelot and single-image Cortex-M Zephyr builds are supported. The existing GDB command
 `rtos load-project --from <path>` continues to refer to the GDB host's filesystem.
-A dedicated pyGdbClient upload command is not implemented yet.
+The pyGdbClient `project <path> <type>` command uploads from the client's filesystem.
+Its optional Zephyr `--workspace <path>` authorizes source aliases **only on the
+client**; the server protocol and four-artifact manifest are unchanged.
 
 #### `rtos.project.begin`
 
 Parameters: `name` (1-64 ASCII letters, digits, `_` or `-`, starting with a
-letter or digit), `rtos` (`"camelot"`).
+letter or digit), `rtos` (`"camelot"` or `"zephyr"`).
 
 ```json
 {"jsonrpc":"2.0","id":30,"method":"rtos.project.begin","params":{"name":"build-1","rtos":"camelot"}}
@@ -346,7 +376,11 @@ file paths) and `required_patterns` (each must match exactly one uploaded file).
 Upload the declaration first; for Camelot this is `project.toml`, whose completed
 contents expand `required` to include the declared applications' linked ELFs.
 No sources or arbitrary build directories need to be sent. See
-[Camelot project inputs](rtos-camelot.md#project-inputs).
+[Camelot project inputs](rtos-camelot.md#project-inputs). For Zephyr the declaration
+is `build_info.yml`; it expands the manifest to exactly that metadata file,
+`zephyr/zephyr.elf`, `zephyr/.config` and `zephyr/zephyr.dts`. See
+[Zephyr build inputs](rtos-zephyr.md#build-inputs). Compilation paths in metadata
+do not authorize filesystem or source access.
 
 Names must be unique within the server instance; `begin` never overwrites an
 existing transfer. Up to 16 projects are retained, each in a private temporary
@@ -437,9 +471,9 @@ Version 1 fields:
 | Field | Meaning |
 | --- | --- |
 | `selected_rtos` | Selected RTOS name, or `null` |
-| `loaded` | Whether both project path and decoded task list are available |
+| `loaded` | Whether the project path and decoded build context are available |
 | `project_path` | Staged or local project root on the GDB host, or `null` |
-| `task_list` | `address`, `size`, `entry_size`, `slots`; or `null` |
+| `task_list` | Cached static slots: `address`, `size`, `entry_size`, `slots`; or `null` when unavailable or not applicable |
 | `scheduler_trace` | Active trace's `limit` and collected `elections`, or `null` |
 
 Each task slot contains `index`, `address`, `task_name`, `text_address`,
@@ -448,6 +482,9 @@ are JSON arrays; HMACs remain hexadecimal strings. Empty slots have
 `task_name: null`. This is cached **build-time** context, not live task
 registers or scheduling state. `scheduler_trace.elections` reports only
 observations already collected by an armed trace.
+The loaded flag does not depend on the presence of a static task table:
+implementations without static slots can expose a loaded build context with
+`task_list: null`. Camelot continues to supply its decoded static slots.
 
 Invalid parameters, manifests, transfer states or limits return `-32602`;
 filesystem and GDB failures return `-32000`. Unknown parameters are rejected.

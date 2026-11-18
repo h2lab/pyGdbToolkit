@@ -8,6 +8,7 @@ from typing import Protocol
 
 from .camelot import CamelotProjectProvider
 from .models import ProjectDescription, ProjectManifest
+from .zephyr import ZephyrProjectProvider
 
 
 class ProjectProvider(Protocol):
@@ -98,7 +99,7 @@ class ProjectRegistry:
         return provider
 
 
-DEFAULT_PROJECT_REGISTRY = ProjectRegistry((CamelotProjectProvider(),))
+DEFAULT_PROJECT_REGISTRY = ProjectRegistry((CamelotProjectProvider(), ZephyrProjectProvider()))
 
 
 def project_manifest(rtos: str, project: bytes | None = None) -> ProjectManifest:

@@ -6,10 +6,12 @@ SPDX-License-Identifier: Apache-2.0
 # Camelot RTOS support
 
 This page describes the current `rtos select camelot` implementation. For the
-GDB commands and a user workflow, see [`rtos.md`](rtos.md). Camelot is the
-only RTOS supported at present, but project-specific ELF discovery, metadata
-decoding, and task inspection live in its own module so that other RTOS
-implementations can be added separately.
+GDB commands and a user workflow, see [`rtos.md`](rtos.md). Camelot-specific
+ELF discovery, metadata decoding and task inspection live in its own module.
+[Zephyr build loading, thread inspection and supported Cortex-M stack contexts](rtos-zephyr.md)
+are implemented separately, with explicit limitations for unsupported kernel layouts.
+The [RTOS acceptance guide](rtos-validation.md) compares their capabilities and
+documents opt-in regression checks with the two-application Camelot sample.
 
 ## Project inputs
 

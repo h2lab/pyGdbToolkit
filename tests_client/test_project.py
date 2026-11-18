@@ -16,6 +16,7 @@ from pyGdbClient.app import PyGdbClientApp
 from pyGdbClient.project import ProjectLoadError, load_project, supported_project_types
 from pyGdbClient.rpc import RpcError
 from pyGdbToolkit.shared.rtos import DEFAULT_PROJECT_REGISTRY, project_manifest
+from pyGdbToolkit.shared.rtos import zephyr
 
 PROJECT = (
     b"[kernel]\n[runtime]\n"
@@ -23,6 +24,12 @@ PROJECT = (
     b"[application.sample_c_app]\nprovides = ['sample-c-app.elf']\n"
 )
 KCONFIG = "output/build/kernel/subprojects/kconfig-1.2/generated_kconfig.json"
+ZEPHYR_BUILD = b"""version: '0.1.0'
+cmake:
+  application: {source-dir: /client/workspace/zephyr/samples/basic/blinky}
+  board: {name: nucleo_u5a5zj_q, qualifiers: stm32u5a5xx}
+  zephyr: {version: '4.5.99', zephyr-base: /client/workspace/zephyr}
+"""
 
 
 def _snapshot(path: str) -> dict[str, Any]:
@@ -59,12 +66,19 @@ def _snapshot(path: str) -> dict[str, Any]:
 
 
 class FakeProjectRpc:
-    """Answer the ``rtos.project.*`` methods with the real shared camelot manifest."""
+    """Answer the ``rtos.project.*`` methods with a real shared provider manifest."""
 
-    def __init__(self, *, chunk_size: int = 7, fail: dict[str, Exception] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        chunk_size: int = 7,
+        fail: dict[str, Exception] | None = None,
+        rtos: str = "camelot",
+    ) -> None:
         self.requests: list[tuple[str, dict[str, Any]]] = []
         self.files: dict[str, bytearray] = {}
-        self.manifest = project_manifest("camelot")
+        self.rtos = rtos
+        self.manifest = project_manifest(rtos)
         self.aborted = False
         self.chunk_size = chunk_size
         self.fail = dict(fail or {})
@@ -100,7 +114,7 @@ class FakeProjectRpc:
             buffer.extend(data)
             complete = len(buffer) == params["size"]
             if complete and path == self.manifest.project_file:
-                self.manifest = project_manifest("camelot", bytes(buffer))
+                self.manifest = project_manifest(self.rtos, bytes(buffer))
             return {
                 "path": path,
                 "next_offset": len(buffer),
@@ -110,7 +124,11 @@ class FakeProjectRpc:
         if method == "rtos.project.commit":
             if self.commit_result is not None:
                 return self.commit_result
-            return _snapshot(self.server_path)
+            snapshot = _snapshot(self.server_path)
+            snapshot["selected_rtos"] = self.rtos
+            if self.rtos == "zephyr":
+                snapshot["task_list"] = None
+            return snapshot
         if method == "rtos.project.abort":
             self.aborted = True
             return {"name": params["name"], "aborted": True}
@@ -139,7 +157,63 @@ def _make_project(
 
 def test_supported_project_types_follow_the_shared_registry() -> None:
     """The client advertises exactly the project types the rtos command supports."""
-    assert supported_project_types() == ("camelot",)
+    assert supported_project_types() == ("camelot", "zephyr")
+
+
+def _make_zephyr_build(root: Path) -> None:
+    for relative in zephyr.REQUIRED:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(ZEPHYR_BUILD if relative == zephyr.PROJECT_FILE else b"artifact")
+
+
+def test_zephyr_project_transfers_only_manifest_files_and_keeps_identity(tmp_path: Path) -> None:
+    """Zephyr uses the generic client transfer and preserves digests without a static table."""
+    root = tmp_path / "build"
+    _make_zephyr_build(root)
+    (root / "zephyr/zephyr_pre0.elf").write_bytes(b"not final")
+    rpc = FakeProjectRpc(rtos="zephyr")
+    result = asyncio.run(load_project(rpc, root, "zephyr"))
+    assert rpc.methods[0] == "rtos.project.begin"
+    assert rpc.methods[-1] == "rtos.project.commit"
+    assert result.files == zephyr.REQUIRED
+    assert result.task_names == ()
+    assert result.snapshot["selected_rtos"] == "zephyr"
+    assert result.description.name == "blinky"
+    assert result.description.components[1].revision == "4.5.99"
+    assert all(component.sources is None for component in result.description.components)
+    for artifact in result.artifacts:
+        content = (root / artifact.path).read_bytes()
+        assert bytes(rpc.files[artifact.path]) == content
+        assert artifact.sha256 == hashlib.sha256(content).hexdigest()
+
+
+def test_dashboard_zephyr_project_populates_audit_context(tmp_path: Path) -> None:
+    """No RTOS branch in the dashboard is needed to load Zephyr and record its audit identity."""
+    _make_zephyr_build(tmp_path)
+    app = PyGdbClientApp("ws://127.0.0.1:1234")
+    app._connected = True
+    rpc = FakeProjectRpc(rtos="zephyr")
+    app.client.request = rpc.request  # type: ignore[method-assign]
+    app._append_output = Mock()
+    asyncio.run(app.execute_command(f'project "{tmp_path}" zephyr'))
+    project = app._audit.project
+    assert project is not None
+    assert project.rtos == "zephyr"
+    assert project.description.name == "blinky"
+    assert len(project.artifacts) == len(zephyr.REQUIRED)
+    assert project.to_json()["rtos"] == "zephyr"
+    messages = [call.args[0] for call in app._append_output.call_args_list]
+    assert any(message.startswith("Loaded zephyr project") for message in messages)
+
+
+def test_invalid_zephyr_declaration_fails_before_rpc(tmp_path: Path) -> None:
+    """The client reports malformed YAML at the same boundary as Camelot declarations."""
+    (tmp_path / zephyr.PROJECT_FILE).write_bytes(b"version: [")
+    rpc = FakeProjectRpc(rtos="zephyr")
+    with pytest.raises(ProjectLoadError, match="invalid build_info.yml"):
+        asyncio.run(load_project(rpc, tmp_path, "zephyr"))
+    assert rpc.requests == []
 
 
 def test_load_project_streams_manifest_files_and_commits(tmp_path: Path) -> None:
