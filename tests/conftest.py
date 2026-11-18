@@ -53,6 +53,8 @@ _gdb.error = FakeGdbError
 _gdb.MemoryError = FakeGdbError
 _gdb.Inferior = object
 _gdb.Value = object
+_gdb.Symbol = object
+_gdb.Type = object
 _gdb._inferior = None
 _gdb._frame = None
 

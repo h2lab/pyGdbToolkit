@@ -38,7 +38,7 @@ class ExampleTrace:
 class ExampleProject:
     """Loaded project with dynamic tasks, not a static Camelot task table."""
 
-    capabilities: RtosCapabilities = RtosCapabilities(True, True, True)
+    capabilities: RtosCapabilities = RtosCapabilities(True, True, True, True)
     shown_tasks: list[str] = field(default_factory=list)
 
     def task_list_snapshot(self) -> TaskListSnapshot | None:
@@ -57,6 +57,10 @@ class ExampleProject:
     def show_threads(self) -> Group:
         """Expose a separate enumeration operation for generic dispatch tests."""
         return Group("Example threads")
+
+    def show_object(self, kind: str, address: str) -> Group:
+        """Expose object dispatch without any Zephyr-specific generic-command logic."""
+        return Group(f"Example {kind} object {address}")
 
     def trace_scheduler(
         self, limit: int, console: Console, on_delete: Callable[[SchedulerTrace], None]
@@ -122,6 +126,7 @@ def test_second_rtos_dispatches_without_static_tasks(
     command._invoke_show([])
     command._invoke_show_task(["worker"])
     command._invoke_show_threads([])
+    command._invoke_show_object(["widget", "0x20000000"])
     assert command.state.project is example_project
     assert example_project.shown_tasks == ["worker"]
     output = capsys.readouterr().out
@@ -129,9 +134,10 @@ def test_second_rtos_dispatches_without_static_tasks(
     assert "Example build" in output
     assert "Example task worker" in output
     assert "Example threads" in output
+    assert "Example widget object" in output and "0x20000000" in output
 
 
-@pytest.mark.parametrize("operation", ["task", "scheduler", "threads"])
+@pytest.mark.parametrize("operation", ["task", "scheduler", "threads", "object"])
 def test_build_capabilities_gate_live_operations(
     operation: str,
     example_project: ExampleProject,
@@ -145,20 +151,25 @@ def test_build_capabilities_gate_live_operations(
     inspect = Mock(side_effect=AssertionError("must not inspect"))
     trace = Mock(side_effect=AssertionError("must not trace"))
     enumerate_threads = Mock(side_effect=AssertionError("must not enumerate"))
+    inspect_object = Mock(side_effect=AssertionError("must not inspect object"))
     monkeypatch.setattr(example_project, "show_task", inspect)
     monkeypatch.setattr(example_project, "trace_scheduler", trace)
     monkeypatch.setattr(example_project, "show_threads", enumerate_threads)
+    monkeypatch.setattr(example_project, "show_object", inspect_object)
     command = RtosCmd()
     with pytest.raises(fake_gdb.GdbError, match="unavailable for this example build"):
         if operation == "task":
             command._invoke_show_task(["worker"])
         elif operation == "scheduler":
             command._invoke_showsched(["2"])
-        else:
+        elif operation == "threads":
             command._invoke_show_threads([])
+        else:
+            command._invoke_show_object(["widget", "0x20000000"])
     inspect.assert_not_called()
     trace.assert_not_called()
     enumerate_threads.assert_not_called()
+    inspect_object.assert_not_called()
     assert rtos_status()["loaded"]
 
 

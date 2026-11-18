@@ -14,7 +14,7 @@ from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 
-from . import zephyr_context
+from . import zephyr_context, zephyr_sync
 
 MAX_THREADS = 4096
 MAX_CPUS = 256
@@ -67,12 +67,31 @@ class ThreadSnapshot:
     cpu_count: int = 1
 
 
-def _require_stopped() -> None:
+def require_stopped() -> None:
+    """Require a connected inferior with all of its GDB threads stopped."""
     threads = gdb.selected_inferior().threads()
     if not threads or any(not thread.is_stopped() for thread in threads):
         raise ValueError(
             "Connect to a target and stop all its GDB threads before inspecting Zephyr"
         )
+
+
+def kernel_symbol(image: Path | None) -> gdb.Symbol:
+    """Resolve _kernel in the requested image, with its DWARF compilation unit."""
+    if image is None:
+        symbol = gdb.lookup_global_symbol("_kernel")
+    else:
+        objfile = next(
+            (obj for obj in reversed(gdb.objfiles()) if obj.filename == str(image)), None
+        )
+        if objfile is None:
+            raise ValueError(f"Zephyr symbol file is no longer loaded: {image}")
+        symbol = objfile.lookup_global_symbol("_kernel")
+    if symbol is None:
+        raise ValueError("Zephyr DWARF: missing _kernel symbol")
+    if symbol.symtab is None:
+        raise ValueError("Zephyr DWARF: _kernel has no compilation unit")
+    return symbol
 
 
 def _address(value: int, size: int) -> int:
@@ -118,21 +137,9 @@ def read_threads(
         If the target is running, data is unreadable, DWARF is incompatible or a
         list is corrupt. Partial enumeration without THREAD_MONITOR is labeled.
     """
-    _require_stopped()
+    require_stopped()
     try:
-        if image is None:
-            symbol = gdb.lookup_global_symbol("_kernel")
-        else:
-            objfile = next(
-                (obj for obj in reversed(gdb.objfiles()) if obj.filename == str(image)), None
-            )
-            if objfile is None:
-                raise ValueError(f"Zephyr symbol file is no longer loaded: {image}")
-            symbol = objfile.lookup_global_symbol("_kernel")
-        if symbol is None:
-            raise ValueError("Zephyr DWARF: missing _kernel symbol")
-        if symbol.symtab is None:
-            raise ValueError("Zephyr DWARF: _kernel has no compilation unit")
+        symbol = kernel_symbol(image)
         kernel = symbol.value()
         thread_type = gdb.lookup_type("struct k_thread", symbol.symtab.global_block())
         size = thread_type.sizeof
@@ -315,6 +322,7 @@ def show_threads(
         thread = selected[0]
         if thread.value is None:
             raise ValueError("Zephyr thread context has no sampled DWARF value")
+        blocks.append(zephyr_sync.show_thread_wait(thread.value, thread.state))
         if thread.state & 0x09:
             blocks.append(Text("Stack/context unavailable: dummy or terminated thread."))
         else:
@@ -330,6 +338,6 @@ def show_threads(
         *blocks,
         Text(
             "Current means scheduled by the kernel, not necessarily executing outside an ISR. "
-            "Wait-object resolution and scheduler tracing are not included."
+            "Wait-queue addresses do not identify object types. Scheduler tracing is not included."
         ),
     )

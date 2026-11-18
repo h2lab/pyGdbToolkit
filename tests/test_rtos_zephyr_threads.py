@@ -44,7 +44,9 @@ def _thread(
     name_value.string.return_value = name + "\0" + "unused"
     return _value(
         {
-            "base": _value({"prio": priority, "thread_state": state, "user_options": options}),
+            "base": _value(
+                {"prio": priority, "thread_state": state, "user_options": options, "pended_on": 0}
+            ),
             "name": name_value,
             "entry": _value({"pEntry": 0x08001001}),
             "next_thread": next_thread,
@@ -365,7 +367,7 @@ def test_generic_commands_dispatch_zephyr_threads_without_camelot_assumptions(
     command._invoke_show_task(["worker"])
     assert "worker" in capsys.readouterr().out
     assert project.task_list_snapshot() is None
-    assert project.capabilities == RtosCapabilities(True, False, True)
+    assert project.capabilities == RtosCapabilities(True, False, True, True)
 
 
 def test_thread_command_reports_usage_and_missing_project(fake_gdb: ModuleType) -> None:
@@ -397,7 +399,7 @@ def test_live_capabilities_follow_the_supported_state_abi(version: str, supporte
         (),
         Path("/build/zephyr/zephyr.elf"),
     )
-    assert project.capabilities == RtosCapabilities(supported, False, supported)
+    assert project.capabilities == RtosCapabilities(supported, False, supported, supported)
     if not supported:
         with pytest.raises(ValueError, match="requires version 4.1 through 4.x"):
             project.show_threads()
@@ -413,8 +415,16 @@ def test_monitor_fields_with_real_gdb_dwarf_and_memory(tmp_path: Path) -> None:
     """Validate GDB Value semantics using a local process, not hardware or mocked offsets."""
     source = tmp_path / "threads.c"
     source.write_text("""
+typedef struct node { struct node *next, *prev; } sys_dnode_t;
+typedef struct { sys_dnode_t waitq; } _wait_q_t;
+struct k_event { unsigned int padding; _wait_q_t wait_q; unsigned int events; };
+struct k_sem { _wait_q_t wait_q; unsigned int count, limit; };
+struct k_thread;
+struct k_mutex { _wait_q_t wait_q; struct k_thread *owner; unsigned int lock_count; };
 struct _thread_base {
-    unsigned char padding[13];
+    unsigned char padding[12];
+    sys_dnode_t qnode_dlist;
+    _wait_q_t *pended_on;
     signed char prio;
     unsigned char thread_state;
     unsigned short user_options;
@@ -424,6 +434,7 @@ struct k_thread {
     char name[16];
     struct { void (*pEntry)(void); } entry;
     struct k_thread *next_thread;
+    unsigned int events, event_options;
     struct {
         unsigned long start, size, delta;
     } stack_info;
@@ -452,9 +463,22 @@ struct k_thread idle = {
     .stack_info = {(unsigned long)saved_stack, sizeof(saved_stack), 16},
     .callee_saved = {.v1 = 4, .v8 = 11, .psp = (unsigned long)&saved_stack[96]}
 };
+extern struct k_thread worker;
+struct k_event flags = {
+    .wait_q = {{&worker.base.qnode_dlist, &worker.base.qnode_dlist}}, .events = 2
+};
+struct k_sem tokens = {
+    .wait_q = {{&tokens.wait_q.waitq, &tokens.wait_q.waitq}}, .count = 1, .limit = 3
+};
+struct k_mutex guard = {
+    .wait_q = {{&guard.wait_q.waitq, &guard.wait_q.waitq}}, .owner = &idle, .lock_count = 2
+};
 struct k_thread worker = {
-    .base = {.prio = -2, .thread_state = 0x06, .user_options = 4},
-    .name = "worker", .entry = {entry}, .next_thread = &idle
+    .base = {.prio = -2, .thread_state = 0x06, .user_options = 4,
+             .pended_on = &flags.wait_q,
+             .qnode_dlist = {&flags.wait_q.waitq, &flags.wait_q.waitq}},
+    .name = "worker", .entry = {entry}, .next_thread = &idle,
+    .events = 5, .event_options = 1
 };
 struct z_kernel _kernel = {{ {0, &worker, &idle} }, &worker};
 int main(void) { return 0; }
@@ -488,6 +512,20 @@ int main(void) { return 0; }
         "detail=gdb.execute('rtos show task idle', to_string=True); "
         "assert 'Saved callee_saved.psp' in detail and '0x08001000' in detail; "
         "assert 'not a full unwind' in detail and '112/496 bytes' in detail; "
+        f"sync_config={{**{MONITOR!r}, 'CONFIG_WAITQ_SIMPLE':'y', 'CONFIG_EVENTS':'y'}}; "
+        f"state.project=ZephyrProject(build, sync_config, (), Path({str(image)!r})); "
+        "detail=gdb.execute('rtos show task worker', to_string=True); "
+        "assert 'Pending wait queue:' in detail; "
+        "event=int(gdb.lookup_global_symbol('flags').value().address); "
+        "detail=gdb.execute(f'rtos show object event 0x{event:X}', to_string=True); "
+        "assert '0x00000005' in detail and 'all / 0x00000001' in detail; "
+        "assert f'0x{w.address:08X}' in detail and '1 waiter(s)' in detail; "
+        "sem=int(gdb.lookup_global_symbol('tokens').value().address); "
+        "detail=gdb.execute(f'rtos show object sem 0x{sem:X}', to_string=True); "
+        "assert '1 / 3' in detail and '0 waiter(s)' in detail; "
+        "mutex=int(gdb.lookup_global_symbol('guard').value().address); "
+        "detail=gdb.execute(f'rtos show object mutex 0x{mutex:X}', to_string=True); "
+        "assert f'0x{i.address:08X}' in detail and 'Recursive lock count' in detail; "
         "print('ZEPHYR_DWARF_VERIFIED')"
     )
     result = subprocess.run(

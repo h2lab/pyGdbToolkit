@@ -23,7 +23,7 @@ from rich.text import Text
 from ..shared.rtos import TaskListSnapshot
 from ..shared.rtos import zephyr as project_contract
 from .base import RtosCapabilities, SchedulerTrace
-from . import zephyr_threads
+from . import zephyr_sync, zephyr_threads
 
 NAME = project_contract.NAME
 
@@ -136,7 +136,9 @@ class ZephyrProject:
     def capabilities(self) -> RtosCapabilities:
         """Enable thread decoding only for the supported kernel state ABI."""
         supported = zephyr_threads.supports_version(self.build.version)
-        return RtosCapabilities(supported, False, thread_enumeration=supported)
+        return RtosCapabilities(
+            supported, False, thread_enumeration=supported, object_inspection=supported
+        )
 
     def task_list_snapshot(self) -> TaskListSnapshot | None:
         """Report that Zephyr has no Camelot-style static task table."""
@@ -179,6 +181,10 @@ class ZephyrProject:
             "CONFIG_THREAD_STACK_INFO",
             "CONFIG_INIT_STACKS",
             "CONFIG_SMP",
+            "CONFIG_WAITQ_SIMPLE",
+            "CONFIG_WAITQ_DUMB",
+            "CONFIG_WAITQ_SCALABLE",
+            "CONFIG_EVENTS",
         ):
             options.add_row(key, self.config.get(key, "unavailable (not recorded)"))
         return Group(
@@ -204,6 +210,12 @@ class ZephyrProject:
     def show_threads(self) -> Group:
         """Enumerate observable threads with explicit monitor and name availability."""
         return zephyr_threads.show_threads(self.config, self.build.version, image=self.image)
+
+    def show_object(self, kind: str, address: str) -> Group:
+        """Inspect an explicitly typed semaphore, mutex or event and its wait queue."""
+        if not zephyr_threads.supports_version(self.build.version):
+            raise ValueError("Zephyr object inspection requires version 4.1 through 4.x")
+        return zephyr_sync.show_object(kind, address, self.config, self.image)
 
     def trace_scheduler(
         self, limit: int, console: Console, on_delete: Callable[[SchedulerTrace], None]
