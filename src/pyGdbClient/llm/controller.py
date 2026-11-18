@@ -355,7 +355,11 @@ class AgentController:
             provider.provider_id == "opencode" or self._settings.copilot_allow_project_sources
         ):
             try:
-                sources = SourceBrowser(Path(project.local_root))
+                sources = (
+                    SourceBrowser.for_workspace(project.source_workspace)
+                    if project.source_workspace is not None
+                    else SourceBrowser(Path(project.local_root))
+                )
             except SourceError as error:
                 raise AgentControllerError(
                     f"cannot enable project source access: {error}"

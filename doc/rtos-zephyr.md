@@ -273,10 +273,59 @@ version and kernel repository revision are not inferred from the Zephyr version:
 the latter is a declared version string, not a verified Git commit.
 
 Absolute application, Zephyr and module paths in build metadata do **not**
-authorize source reads. At this stage the components have no authorized source
-tree, so Zephyr application/kernel/module source access by the LLM is not yet
-available. Explicit multi-root source authorization is a separate stack step;
-artifact loading must not silently grant access outside the selected build.
+authorize source reads. To authorize sources, explicitly select a client boundary:
+
+```text
+project /path/to/zephyr-workspace/build zephyr --workspace /path/to/zephyr-workspace
+```
+
+The workspace must contain the build, application, kernel and every declared
+module. Discovery uses only `build_info.yml` and the local generated
+`zephyr_modules.txt` (three quoted fields per line: name, source directory,
+unused CMake directory). Both inputs are hashed in the audit context. No West,
+CMake, shell or module script is executed. Up to 256 module records and 256 KiB
+per discovery file are accepted. Missing metadata, duplicate names, unavailable
+directories and sources outside the chosen boundary fail before transfer;
+they are not silently omitted. Copied builds with stale absolute paths are not
+automatically remapped.
+
+Only the selected build and declared source roots become readable through aliases:
+
+| Alias | Contents |
+| --- | --- |
+| `build` | Selected build directory, including non-hidden generated headers |
+| `application` | `cmake.application.source-dir` |
+| `zephyr` | `cmake.zephyr.zephyr-base` |
+| `module-NAME` | Source directory of the named `zephyr_modules.txt` record |
+
+`glob` with `path=".", pattern="*"` lists aliases only (at most 100 results;
+all authorized aliases also appear in audit `project.source_access.roots`).
+Use `read path="application/src/main.c"`, `grep path="zephyr/kernel"` or
+`glob path="module-hal_stm32"` for source operations. A root-listing glob
+does not recursively search all roots, and `grep` at `.` is refused. Paths are
+alias-relative, not absolute or workspace-relative; unrelated workspace siblings
+are not exposed. Roots must be proper subdirectories, never the entire workspace.
+
+No hidden components, symbolic links or special files are followed; workspace
+and root identities are pinned at project load and checked again when opening a
+conversation and on every call. Replacement or disappearance requires reloading
+the project. Existing mounts under an authorized tree remain readable. Reads and
+scans retain existing file/result/depth/time budgets. The server still receives
+exactly the four build artifacts, not the module inventory, workspace permission
+or source files.
+
+Use `/new` after changing the project. OpenCode and Copilot with
+`--copilot-allow-project-sources` use the same local gateway and policy;
+workspace authorization does not bypass provider disclosure consent. Only
+authorize trees whose filenames and contents may be disclosed to that provider.
+The native SDK has no direct filesystem access. See
+[source consent and limits](llm.md#project-source-tools-and-explicit-consent).
+
+Source paths/inventories are build declarations, not proof of actual linkage.
+Local revisions, dirty files and contents are **not verified against the ELF**.
+Artifact digests identify transferred binaries; discovery hashes identify
+metadata, not source content. Additional modules appear as source aliases, not
+invented versioned binary components. Camelot behavior is unchanged.
 
 ## Current runtime limits
 
@@ -285,7 +334,6 @@ The version 1 `rtos.status` snapshot reports `selected_rtos="zephyr"`,
 Camelot-style static task slots. Status and build display use cached data and
 do not enumerate live threads or reread the filesystem.
 
-Thread samples are obtained only by the explicit live commands, not by status
-or build display. Wait-object resolution, synchronization and scheduler
-observation remain later steps. `rtos showsched <num>` remains
-unavailable even if the build enables debugging options.
+Thread samples, synchronization objects and scheduler observations are obtained
+only through explicit live commands, not status or build display. Unsupported
+layouts and unavailable measurements remain explicit; see the sections above.

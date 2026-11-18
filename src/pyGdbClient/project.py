@@ -24,6 +24,7 @@ import re
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .project_sources import SourceWorkspace, discover_sources
 from pyGdbToolkit.shared.rtos import (
     DEFAULT_PROJECT_REGISTRY,
     ProjectDescription,
@@ -76,6 +77,7 @@ class LoadedProject:
     artifacts: tuple[ProjectArtifact, ...]
     description: ProjectDescription
     snapshot: dict[str, Any]
+    source_workspace: SourceWorkspace | None = None
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -195,6 +197,7 @@ async def load_project(
     registry: ProjectRegistry = DEFAULT_PROJECT_REGISTRY,
     progress: Callable[[str], None] | None = None,
     commit_timeout: float = 120.0,
+    workspace: Path | None = None,
 ) -> LoadedProject:
     """Transfer a local project to pyGdbServer and load it into the GDB session.
 
@@ -213,6 +216,9 @@ async def load_project(
         Receives one displayable line per transferred file.
     commit_timeout : float
         Time allowed to GDB to load symbols and task metadata, in seconds.
+    workspace : Path | None
+        Explicit client-side boundary for Zephyr build-declared source roots.
+        No external source access is authorized when omitted.
 
     Returns
     -------
@@ -242,6 +248,14 @@ async def load_project(
         description = registry.describe(rtos, declaration)
     except ValueError as error:
         raise ProjectLoadError(f"invalid {project_file}: {error}") from None
+    sources = None
+    if workspace is not None:
+        if rtos != "zephyr":
+            raise ProjectLoadError("--workspace is only supported for Zephyr projects")
+        try:
+            sources = await asyncio.to_thread(discover_sources, root, workspace, declaration)
+        except (OSError, ValueError) as error:
+            raise ProjectLoadError(f"cannot authorize Zephyr sources: {error}") from error
     transfer = _transfer_name(root)
     begun = _object(
         await client.request("rtos.project.begin", {"name": transfer, "rtos": rtos}),
@@ -291,4 +305,4 @@ async def load_project(
     server_path = snapshot.get("project_path")
     if snapshot.get("loaded") is not True or not isinstance(server_path, str):
         raise ProjectLoadError("pyGdbServer did not confirm loading the project")
-    return LoadedProject(rtos, root, server_path, tuple(artifacts), description, snapshot)
+    return LoadedProject(rtos, root, server_path, tuple(artifacts), description, snapshot, sources)

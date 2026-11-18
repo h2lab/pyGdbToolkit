@@ -632,15 +632,17 @@ class PyGdbClientApp(App[None]):
         if name != "project":
             return False
         arguments = shlex.split(command)[1:]
-        if len(arguments) != 2:
+        if len(arguments) not in (2, 4) or (len(arguments) == 4 and arguments[2] != "--workspace"):
             raise ValueError(
-                f"Usage: project <path> <type> (types: {', '.join(supported_project_types())})"
+                "Usage: project <path> <type> [--workspace <path>] "
+                f"(types: {', '.join(supported_project_types())})"
             )
         result = await load_project(
             self.client,
             Path(arguments[0]),
             arguments[1],
             progress=self._append_output,
+            workspace=Path(arguments[3]) if len(arguments) == 4 else None,
         )
         self._audit.set_project(result)
         tasks = ", ".join(result.task_names) or "none"
@@ -648,6 +650,12 @@ class PyGdbClientApp(App[None]):
             f"Loaded {result.rtos} project {result.local_root} ({len(result.files)} files)"
         )
         self._append_output(f"Server project: {result.server_path} · tasks: {tasks}")
+        if result.source_workspace is not None:
+            self._append_output(
+                f"Authorized source workspace: {result.source_workspace.path} · aliases: "
+                + ", ".join(root.alias for root in result.source_workspace.roots)
+                + " (local revisions not verified against ELF)"
+            )
         if self._agent is not None and self._agent.session is not None:
             self._append_output(
                 "Audit context changed: use /new so the agent receives the loaded project"
@@ -913,7 +921,7 @@ def _help_text(
         Text("  erase FILE    Delete one server workspace file (no directories or paths)."),
         Text("    Agent use requires auditor approval; symbolic links are removed, not followed."),
         Text(
-            f"  project <path> <type>  Load a local RTOS project (types: "
+            f"  project <path> <type> [--workspace <path>]  Load a local RTOS project (types: "
             f"{', '.join(supported_project_types())}) into the remote GDB session."
         ),
         Text(
@@ -926,6 +934,10 @@ def _help_text(
         Text(
             "    Records the local source root and artifact digests for the agent;"
             " use /new in the agent input if a session is already open."
+        ),
+        Text(
+            "    Zephyr: --workspace explicitly authorizes only build-declared source trees "
+            "inside that client workspace; source disclosure still requires provider consent."
         ),
         Text("  audit [FILE]  Show the audit context; optionally save it as JSON to a local FILE."),
         Text(
