@@ -113,7 +113,7 @@ Use the **command prompt**, not the agent prompt, for these client commands:
 
 | Command | Purpose |
 | ------- | ------- |
-| `project <path> <type>` | Load a local Camelot project (`camelot`) or Zephyr build directory (`zephyr`). Transfer the manifest-declared build artifacts to pyGdbServer and load the RTOS project in GDB. Keep the local root, declared software identity and artifact SHA-256 digests in the audit context. |
+| `project <path> <type> [--workspace <path>]` | Load a local Camelot project (`camelot`) or Zephyr build directory (`zephyr`). Transfer the manifest-declared artifacts and load the RTOS project in GDB. Record software identity and SHA-256 digests. The optional Zephyr workspace authorizes only build-declared source roots inside that client boundary. |
 | `audit` | Refresh the audit context from server status queries and display its summary: project, RTOS, execution state, cores, SVD metadata and server session. Missing information includes an unavailability reason. |
 | `audit FILE` | Also save the complete context as local JSON, replacing `FILE` if it exists. This export is **not masked**; protect it like other audit data. |
 | `help` | Display these commands along with the toolkit, GDB, OCD and agent command reference. |
@@ -135,9 +135,13 @@ Running `audit` displays fresh information but does not update an existing
 agent conversation.
 
 For Zephyr, use `project /absolute/path/to/zephyr-workspace/build zephyr`.
-Build identity and artifact digests enter the same audit context, but application,
-kernel and module source access is not available yet. Absolute source paths in
-build metadata are not authorized read roots. See [Zephyr support](rtos-zephyr.md).
+Build identity and artifact digests enter the same audit context. For application,
+kernel and module sources, explicitly add `--workspace /absolute/path/to/zephyr-workspace`.
+The generated local `zephyr_modules.txt` is required for discovery but is not
+uploaded. Access uses `build`, `application`, `zephyr` and `module-NAME` aliases,
+not arbitrary workspace paths. Existing provider disclosure consent still applies.
+Local source revisions are not verified against the ELF.
+See [Zephyr support](rtos-zephyr.md#remote-client-and-audit-context).
 
 ## Reading project sources
 

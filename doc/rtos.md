@@ -74,8 +74,10 @@ received. Both feed the [audit context](llm.md#audit-context), which the
 
 For Zephyr, use `project /path/to/workspace/build zephyr`. Its components identify
 the application and kernel; the audit context records the declared Zephyr version
-and artifact hashes, but does not yet authorize application/kernel/module source
-access. Absolute compilation paths are not trusted source roots.
+and artifact hashes. Add `--workspace /path/to/workspace` to explicitly authorize
+build-declared application/kernel/module source roots inside that client boundary.
+The LLM uses source aliases, not absolute compilation paths. Provider disclosure
+consent still applies; see [Zephyr source access](rtos-zephyr.md#remote-client-and-audit-context).
 
 ### Shared contracts and RTOS extensions
 

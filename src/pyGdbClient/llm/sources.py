@@ -11,7 +11,9 @@ import os
 from pathlib import Path
 import stat
 import time
+from typing import Self
 
+from ..project_sources import SourceWorkspace
 from .contracts import JsonObject, JsonValue
 
 MAX_FILE_BYTES = 256 * 1024
@@ -72,22 +74,86 @@ class SourceBrowser:
     for reading, including if another process replaces its directory entry.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        directory: str = ".",
+        identity: tuple[int, int] | None = None,
+        boundary_identity: tuple[int, int] | None = None,
+        nofollow_ancestors: bool = False,
+    ) -> None:
         """Bind the project directory identity for the lifetime of a conversation."""
         if not hasattr(os, "O_PATH") or not hasattr(os, "O_NOFOLLOW"):
             raise SourceError("secure source access requires Linux O_PATH and O_NOFOLLOW")
         self._root = root
+        self._prefix = _parts(directory, root=True)
+        self._boundary_identity = boundary_identity
+        self._nofollow_ancestors = nofollow_ancestors
+        self._roots: dict[str, SourceBrowser] | None = None
         try:
             with self._directory((), check_identity=False) as fd:
                 info = os.fstat(fd)
                 self._identity = (info.st_dev, info.st_ino)
+                if identity is not None and self._identity != identity:
+                    raise SourceError("source directory changed; reload the project")
         except OSError as error:
             raise SourceError(f"cannot open project directory: {error.strerror}") from error
 
+    @classmethod
+    def for_workspace(cls, workspace: SourceWorkspace) -> Self:
+        """Bind aliases to authorized subtrees, preserving the workspace boundary identity."""
+        browser = cls(
+            workspace.path, identity=(workspace.device, workspace.inode), nofollow_ancestors=True
+        )
+        browser._roots = {
+            root.alias: cls(
+                workspace.path,
+                directory=root.directory,
+                identity=(root.device, root.inode),
+                boundary_identity=(workspace.device, workspace.inode),
+                nofollow_ancestors=True,
+            )
+            for root in workspace.roots
+        }
+        return browser
+
+    def directory_identity(self, path: str) -> tuple[int, int]:
+        """Validate a relative directory without following links and return its identity."""
+        try:
+            with self._directory(_parts(path, root=True)) as fd:
+                info = os.fstat(fd)
+                return info.st_dev, info.st_ino
+        except OSError as error:
+            raise SourceError(f"cannot inspect source directory: {error.strerror}") from error
+
+    def read_bytes(self, path: str) -> bytes:
+        """Read a bounded regular metadata file using the same no-link boundary as tools."""
+        try:
+            return self._file(_parts(path))
+        except OSError as error:
+            raise SourceError(f"cannot read source metadata: {error.strerror}") from error
+
     @contextmanager
     def _directory(self, parts: tuple[str, ...], *, check_identity: bool = True) -> Iterator[int]:
-        fd = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        fd = os.open("/" if self._nofollow_ancestors else self._root, flags)
         try:
+            if self._nofollow_ancestors:
+                for part in self._root.parts[1:]:
+                    child = os.open(part, flags, dir_fd=fd)
+                    os.close(fd)
+                    fd = child
+            info = os.fstat(fd)
+            if (
+                self._boundary_identity is not None
+                and (info.st_dev, info.st_ino) != self._boundary_identity
+            ):
+                raise SourceError("source workspace changed; reload the project")
+            for part in self._prefix:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
             info = os.fstat(fd)
             if check_identity and (info.st_dev, info.st_ino) != self._identity:
                 raise SourceError("project directory changed; open a new agent session")
@@ -123,6 +189,8 @@ class SourceBrowser:
             path = arguments["path"]
             if not isinstance(path, str):
                 raise SourceError("path must be a string")
+            if self._roots is not None:
+                return self._execute_workspace(name, arguments, path)
             if name == "read":
                 parts = _parts(path)
                 data = self._file(parts)
@@ -159,6 +227,44 @@ class SourceBrowser:
             return self._scan(directory, glob_parts, pattern if name == "grep" else None)
         except OSError as error:
             raise SourceError(f"source access failed: {error.strerror}") from error
+
+    def _execute_workspace(self, name: str, arguments: JsonObject, path: str) -> JsonObject:
+        roots = self._roots
+        if roots is None:
+            raise SourceError("source workspace is not configured")
+        # Check identities even for virtual root listings.
+        self.directory_identity(".")
+        for browser in roots.values():
+            browser.directory_identity(".")
+        if path == ".":
+            if name != "glob":
+                raise SourceError("select a source alias before reading or searching")
+            pattern = arguments.get("pattern")
+            if not isinstance(pattern, str):
+                raise SourceError("pattern must be a string")
+            aliases: list[JsonValue] = [
+                {"path": alias, "kind": "source-root"}
+                for alias in roots
+                if _matches((alias,), _parts(pattern))
+            ]
+            return {
+                "matches": aliases[:MAX_RESULTS],
+                "truncated": len(aliases) > MAX_RESULTS,
+                "root_listing_only": True,
+            }
+        parts = _parts(path)
+        alias = parts[0]
+        if alias not in roots:
+            raise SourceError("path must start with an authorized source alias")
+        result = roots[alias].execute(name, {**arguments, "path": "/".join(parts[1:]) or "."})
+        if "path" in result:
+            result["path"] = path
+        matches = result.get("matches")
+        if isinstance(matches, list):
+            for item in matches:
+                if isinstance(item, dict) and isinstance(item.get("path"), str):
+                    item["path"] = f"{alias}/{item['path']}"
+        return result
 
     def _scan(
         self, directory: tuple[str, ...], pattern: tuple[str, ...], search: str | None

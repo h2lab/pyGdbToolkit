@@ -330,6 +330,8 @@ filesystem without mounting it on the server. They do not flash the target.
 Camelot and single-image Cortex-M Zephyr builds are supported. The existing GDB command
 `rtos load-project --from <path>` continues to refer to the GDB host's filesystem.
 The pyGdbClient `project <path> <type>` command uploads from the client's filesystem.
+Its optional Zephyr `--workspace <path>` authorizes source aliases **only on the
+client**; the server protocol and four-artifact manifest are unchanged.
 
 #### `rtos.project.begin`
 

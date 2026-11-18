@@ -45,6 +45,8 @@ from pyGdbClient.llm.provider import (
 )
 from test_llm_contracts import _context
 from pyGdbClient.rpc import JsonRpcClient
+from pyGdbClient.project import LoadedProject
+from pyGdbClient.project_sources import SourceRoot, SourceWorkspace
 from rpc_fakes import FakeRpcServer
 from test_audit import _loaded, _responses
 
@@ -816,6 +818,18 @@ def _catalogue_batch(runtime: Runtime, *calls: ToolCall) -> list[tuple[str, dict
     return batch
 
 
+def _workspace_project(root: Path) -> LoadedProject:
+    boundary, directory = root.parent.stat(), root.stat()
+    workspace = SourceWorkspace(
+        root.parent,
+        boundary.st_dev,
+        boundary.st_ino,
+        (SourceRoot("application", root.name, directory.st_dev, directory.st_ino),),
+        (),
+    )
+    return replace(_loaded(root), rtos="zephyr", source_workspace=workspace)
+
+
 @pytest.mark.parametrize(
     "name,arguments",
     [
@@ -824,18 +838,27 @@ def _catalogue_batch(runtime: Runtime, *calls: ToolCall) -> list[tuple[str, dict
         ("grep", {"path": ".", "pattern": "answer", "glob": "**/*.c"}),
     ],
 )
+@pytest.mark.parametrize("workspace_mode", [False, True])
 def test_copilot_project_tools_use_gateway_and_mask_results(
-    runtime: Runtime, tmp_path: Path, name: str, arguments: JsonObject
+    runtime: Runtime, tmp_path: Path, name: str, arguments: JsonObject, workspace_mode: bool
 ) -> None:
     secret = "synthetic-source-credential"
     (tmp_path / "main.c").write_text(f"int answer = 42; // password={secret}\n", encoding="utf-8")
 
     async def exercise() -> None:
         manager = AuditContextManager()
-        manager.set_project(_loaded(tmp_path))
+        loaded = _loaded(tmp_path)
+        tool_arguments = dict(arguments)
+        expected_path = "main.c"
+        if workspace_mode:
+            loaded = _workspace_project(tmp_path)
+            path = str(tool_arguments["path"])
+            tool_arguments["path"] = "application" + (f"/{path}" if path != "." else "")
+            expected_path = "application/main.c"
+        manager.set_project(loaded)
         provider = CopilotProvider(runtime.config)
         runtime.turns = [
-            _catalogue_batch(runtime, ToolCall("source", name, arguments)),
+            _catalogue_batch(runtime, ToolCall("source", name, tool_arguments)),
             _answer(),
         ]
         events = []
@@ -881,9 +904,11 @@ def test_copilot_project_tools_use_gateway_and_mask_results(
                 if name == "read":
                     assert result["content"] == f"1: {masked_line}"
                 elif name == "grep":
-                    assert result["matches"] == [{"path": "main.c", "line": 1, "text": masked_line}]
+                    assert result["matches"] == [
+                        {"path": expected_path, "line": 1, "text": masked_line}
+                    ]
                 else:
-                    assert result["matches"] == [{"path": "main.c"}]
+                    assert result["matches"] == [{"path": expected_path}]
                 assert secret not in content
                 if name != "glob":
                     assert "[REDACTED:credential-assignment]" in content
@@ -904,19 +929,23 @@ def test_copilot_project_tools_use_gateway_and_mask_results(
     asyncio.run(exercise())
 
 
-@pytest.mark.parametrize("consent,loaded", [(False, True), (True, False), (False, False)])
+@pytest.mark.parametrize(
+    "consent,loaded,workspace",
+    [(False, True, False), (False, True, True), (True, False, False), (False, False, False)],
+)
 @pytest.mark.parametrize("unsolicited_source_call", [False, True])
 def test_copilot_does_not_expose_source_tools_without_consent_and_project(
     runtime: Runtime,
     tmp_path: Path,
     consent: bool,
     loaded: bool,
+    workspace: bool,
     unsolicited_source_call: bool,
 ) -> None:
     async def exercise() -> None:
         manager = AuditContextManager()
         if loaded:
-            manager.set_project(_loaded(tmp_path))
+            manager.set_project(_workspace_project(tmp_path) if workspace else _loaded(tmp_path))
         runtime.turns = (
             [_catalogue_batch(runtime, ToolCall("source", "read", {"path": "main.c"}))]
             if unsolicited_source_call

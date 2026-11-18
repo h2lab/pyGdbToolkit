@@ -209,7 +209,8 @@ _TOOLS = (
 _SOURCE_TOOLS = (
     _Tool(
         "read",
-        "Read a UTF-8 project file, relative to the project root, with line numbers.",
+        "Read UTF-8 source with line numbers. Use project-relative or authorized alias/path "
+        "as specified by audit source_access.",
         "local.source.read",
         parameters=(
             _Parameter("path", "string", "Project-relative file path.", max_length=1024),
@@ -221,7 +222,8 @@ _SOURCE_TOOLS = (
     ),
     _Tool(
         "glob",
-        "Find project files matching a glob relative to a project directory; ** is recursive.",
+        "Find source files; ** is recursive within a root. In workspace mode, path . lists "
+        "aliases only; select an alias to search files.",
         "local.source.glob",
         parameters=(
             _Parameter(
@@ -232,7 +234,8 @@ _SOURCE_TOOLS = (
     ),
     _Tool(
         "grep",
-        "Search project text files for a literal, case-sensitive string; not a regex.",
+        "Search source text for a literal, case-sensitive string; not a regex. "
+        "In workspace mode select an authorized alias/path, not .",
         "local.source.grep",
         parameters=(
             _Parameter(
