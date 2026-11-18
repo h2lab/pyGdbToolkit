@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from .camelot import CamelotProjectProvider
-from .models import ProjectManifest
+from .models import ProjectDescription, ProjectManifest
 
 
 class ProjectProvider(Protocol):
@@ -20,6 +20,10 @@ class ProjectProvider(Protocol):
 
     def manifest(self, project: bytes | None = None) -> ProjectManifest:
         """Return bootstrap or expanded paths for a project declaration."""
+        ...
+
+    def describe(self, project: bytes) -> ProjectDescription:
+        """Return the software identity declared by a project declaration."""
         ...
 
 
@@ -63,10 +67,35 @@ class ProjectRegistry:
         ValueError
             If the RTOS is unsupported or the provider rejects the declaration.
         """
+        return self._provider(rtos).manifest(project)
+
+    def describe(self, rtos: str, project: bytes) -> ProjectDescription:
+        """Resolve the RTOS and return the software identity its project declares.
+
+        Parameters
+        ----------
+        rtos : str
+            Identifier of a registered RTOS provider.
+        project : bytes
+            Completed project declaration.
+
+        Returns
+        -------
+        ProjectDescription
+            Declared project name, version and software components.
+
+        Raises
+        ------
+        ValueError
+            If the RTOS is unsupported or the provider rejects the declaration.
+        """
+        return self._provider(rtos).describe(project)
+
+    def _provider(self, rtos: str) -> ProjectProvider:
         provider = self._providers.get(rtos)
         if provider is None:
             raise ValueError(f"Unsupported RTOS: {rtos}")
-        return provider.manifest(project)
+        return provider
 
 
 DEFAULT_PROJECT_REGISTRY = ProjectRegistry((CamelotProjectProvider(),))

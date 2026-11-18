@@ -4,6 +4,8 @@
 """RTOS contracts usable by GDB, pyGdbServer and pyGdbClient."""
 
 from .models import (
+    ProjectComponent,
+    ProjectDescription,
     ProjectManifest,
     RtosSnapshot,
     SchedulerSnapshot,
@@ -21,6 +23,8 @@ from .registry import (
 
 __all__ = [
     "DEFAULT_PROJECT_REGISTRY",
+    "ProjectComponent",
+    "ProjectDescription",
     "ProjectManifest",
     "ProjectProvider",
     "ProjectRegistry",

@@ -7,7 +7,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from copy import deepcopy
 
-from .contracts import TargetContext, ToolDefinition
+from .contracts import JsonObject, TargetContext, ToolDefinition
 from .provider import (
     AuthenticationState,
     LlmSession,
@@ -32,9 +32,11 @@ class ScriptedSession:
         context: TargetContext,
         tools: tuple[ToolDefinition, ...],
         turns: tuple[ScriptedTurn, ...],
+        audit: JsonObject | None = None,
     ) -> None:
         self.session_id = session_id
         self.context = context
+        self.audit = deepcopy(audit)
         self.tools = deepcopy(tools)
         self.inputs: list[ProviderInput] = []
         self._turns = deepcopy(turns)
@@ -102,8 +104,9 @@ class ScriptedProvider:
         session_id: str,
         context: TargetContext,
         tools: tuple[ToolDefinition, ...],
+        audit: JsonObject | None = None,
     ) -> LlmSession:
         """Create a fresh replay, without sharing mutable payloads between sessions."""
         if not session_id.strip():
             raise ValueError("sessions require a nonempty ID")
-        return ScriptedSession(session_id, context, tools, self._turns)
+        return ScriptedSession(session_id, context, tools, self._turns, audit)
