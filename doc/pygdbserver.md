@@ -437,9 +437,9 @@ Version 1 fields:
 | Field | Meaning |
 | --- | --- |
 | `selected_rtos` | Selected RTOS name, or `null` |
-| `loaded` | Whether both project path and decoded task list are available |
+| `loaded` | Whether the project path and decoded build context are available |
 | `project_path` | Staged or local project root on the GDB host, or `null` |
-| `task_list` | `address`, `size`, `entry_size`, `slots`; or `null` |
+| `task_list` | Cached static slots: `address`, `size`, `entry_size`, `slots`; or `null` when unavailable or not applicable |
 | `scheduler_trace` | Active trace's `limit` and collected `elections`, or `null` |
 
 Each task slot contains `index`, `address`, `task_name`, `text_address`,
@@ -448,6 +448,9 @@ are JSON arrays; HMACs remain hexadecimal strings. Empty slots have
 `task_name: null`. This is cached **build-time** context, not live task
 registers or scheduling state. `scheduler_trace.elections` reports only
 observations already collected by an armed trace.
+The loaded flag does not depend on the presence of a static task table:
+implementations without static slots can expose a loaded build context with
+`task_list: null`. Camelot continues to supply its decoded static slots.
 
 Invalid parameters, manifests, transfer states or limits return `-32602`;
 filesystem and GDB failures return `-32000`. Unknown parameters are rejected.
