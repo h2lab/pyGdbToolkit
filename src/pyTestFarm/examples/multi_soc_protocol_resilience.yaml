@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 H2Lab Development Team
+# SPDX-License-Identifier: Apache-2.0
+
+scenario: "multi_soc_protocol_resilience"
+targets:
+  - id: stm32n657
+    server: localhost:1234
+    role: controller
+  - id: stm32u5a5
+    server: localhost:1235
+    role: protocol_peer
+steps:
+  - action: connect_all
+  - action: reset_sequence
+    targets: [stm32n657, stm32u5a5]
+    delay_ms: 100
+  - action: show cpustate
+    targets: [stm32n657, stm32u5a5]
+    command: lscpu
+  - action: show security state
+    targets: [stm32n657, stm32u5a5]
+    command: secscan audit

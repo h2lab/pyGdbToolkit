@@ -10,12 +10,15 @@ import asyncio
 from collections.abc import Sequence
 import json
 import math
+from pathlib import Path
 import sys
 from typing import Any
 
 from websockets.exceptions import InvalidURI
 
 from .farm import FarmOperationError, Target, TestFarm
+from .runner import ScenarioExecutionError, run_scenario
+from .scenario import CommandStep, load_scenario
 
 
 def _target(value: str) -> Target:
@@ -43,9 +46,9 @@ def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         prog="pyTestFarm",
         description="Automate commands on identified pyGdbServer instances in parallel.",
     )
-    parser.add_argument(
-        "--target", action="append", type=_target, required=True, help="ID=HOST:PORT (repeatable)"
-    )
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--target", action="append", type=_target, help="ID=HOST:PORT (repeatable)")
+    source.add_argument("--scenario", type=Path, help="Validated YAML or JSON scenario file")
     parser.add_argument(
         "--select", action="append", help="Target id receiving commands (repeatable; default: all)"
     )
@@ -59,6 +62,14 @@ def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--timeout", type=_timeout, default=30.0, help="Per-target timeout in seconds (default: 30)"
     )
     arguments = parser.parse_args(argv)
+    if arguments.scenario is not None:
+        if arguments.command or arguments.select is not None:
+            parser.error("--scenario cannot be combined with --command or --select")
+        try:
+            arguments.scenario = load_scenario(arguments.scenario)
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+        return arguments
     identifiers = [target.id for target in arguments.target]
     if len(set(identifiers)) != len(identifiers):
         parser.error("target ids must be unique")
@@ -71,7 +82,25 @@ def _arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return arguments
 
 
+def _print_command(step: CommandStep, results: dict[str, Any]) -> None:
+    for identifier, result in results.items():
+        print(f"[{identifier}] {step.action}: {step.command}", flush=True)
+        output = result.get("output") if isinstance(result, dict) else None
+        if isinstance(output, list) and all(isinstance(item, str) for item in output):
+            for item in output:
+                for line in item.splitlines():
+                    print(f"[{identifier}] {line}", flush=True)
+            if not output:
+                print(f"[{identifier}] {json.dumps(result, ensure_ascii=False)}", flush=True)
+        else:
+            print(f"[{identifier}] {json.dumps(result, ensure_ascii=False)}", flush=True)
+
+
 async def _run(arguments: argparse.Namespace) -> dict[str, Any]:
+    if arguments.scenario is not None:
+        return await run_scenario(
+            arguments.scenario, timeout=arguments.timeout, on_command=_print_command
+        )
     async with TestFarm(arguments.target, timeout=arguments.timeout) as farm:
         report: dict[str, Any] = {
             identifier: {"server": target.server, "role": target.role, "results": []}
@@ -94,18 +123,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         report = asyncio.run(_run(arguments))
     except FarmOperationError as error:
+        failure: dict[str, Any] = {
+            "operation": error.operation,
+            "errors": {
+                identifier: {"type": type(cause).__name__, "message": str(cause)}
+                for identifier, cause in error.errors.items()
+            },
+            "results": error.results,
+        }
+        if isinstance(error, ScenarioExecutionError):
+            failure.update({"step": error.step, "action": error.action, "report": error.report})
         print(
-            json.dumps(
-                {
-                    "operation": error.operation,
-                    "errors": {
-                        identifier: {"type": type(cause).__name__, "message": str(cause)}
-                        for identifier, cause in error.errors.items()
-                    },
-                    "results": error.results,
-                },
-                ensure_ascii=False,
-            ),
+            json.dumps(failure, ensure_ascii=False),
             file=sys.stderr,
         )
         raise SystemExit(1) from error
