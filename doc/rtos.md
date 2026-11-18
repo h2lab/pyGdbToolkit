@@ -13,6 +13,9 @@ mono-CPU Cortex-M PendSV observations. The `rtos select <name>` interface and
 RTOS-specific modules keep these capabilities separate without changing command
 names. Output uses Rich tables.
 
+See the [capability matrix and reproducible acceptance scenarios](rtos-validation.md)
+for common surfaces, backend-specific semantics and opt-in physical validation.
+
 ## Getting started
 
 Load the toolkit in a GDB session and build the Camelot project before running

@@ -10,6 +10,8 @@ GDB commands and a user workflow, see [`rtos.md`](rtos.md). Camelot-specific
 ELF discovery, metadata decoding and task inspection live in its own module.
 [Zephyr build loading, thread inspection and supported Cortex-M stack contexts](rtos-zephyr.md)
 are implemented separately, with explicit limitations for unsupported kernel layouts.
+The [RTOS acceptance guide](rtos-validation.md) compares their capabilities and
+documents opt-in regression checks with the two-application Camelot sample.
 
 ## Project inputs
 
