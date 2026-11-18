@@ -66,6 +66,10 @@ class CamelotProject:
         """Inspect a Camelot task on the stopped target."""
         return show_task(self.path, self.task_list, name)
 
+    def show_threads(self) -> Group:
+        """Reject thread enumeration; Camelot exposes its static tasks through show."""
+        raise ValueError("Camelot thread enumeration is unavailable; use rtos show")
+
     def trace_scheduler(
         self, limit: int, console: Console, on_delete: Callable[[SchedulerTrace], None]
     ) -> SchedulerTrace:
