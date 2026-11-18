@@ -13,10 +13,11 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+from ..audit import AuditContext, AuditContextManager
 from .approval import AuditorApprover
 from .confidentiality import TEST_DATA_WARNING, Redactor
 from .context import RpcRequester, fetch_target_context
-from .contracts import TargetContext
+from .contracts import JsonObject, TargetContext
 from .gateway import ToolGateway
 from .orchestrator import (
     AgentBudget,
@@ -39,6 +40,7 @@ from .provider import (
 )
 from .recollection import MIN_RECOLLECTION_CHARS, build_recollection
 from .store import ContextStore, HistoryEntry, StoredSession
+from .sources import SourceBrowser, SourceError
 from .tools import ToolCatalogue
 
 _READY = {AuthenticationState.AUTHENTICATED, AuthenticationState.NOT_REQUIRED}
@@ -67,6 +69,10 @@ class AgentSettings:
 
     ``test_data`` disables disclosure masking for analysis of test targets,
     including test cryptographic material. It never changes target protection.
+
+    ``copilot_allow_project_sources`` explicitly permits disclosing source-tool
+    results from loaded projects to GitHub Copilot. It defaults to False and
+    never enables native SDK filesystem tools.
     """
 
     provider: LlmProvider
@@ -77,12 +83,17 @@ class AgentSettings:
     context_limit_chars: int = 120_000
     recollection_chars: int = 12_000
     test_data: bool = False
+    copilot_allow_project_sources: bool = False
 
     def __post_init__(self) -> None:
         """Reject unbounded deadlines and inconsistent context limits."""
         timeout = self.approval_timeout
         if not isinstance(self.test_data, bool):
             raise ValueError("test_data must be a boolean")
+        if not isinstance(self.copilot_allow_project_sources, bool):
+            raise ValueError("copilot_allow_project_sources must be a boolean")
+        if self.copilot_allow_project_sources and self.provider.provider_id != "github-copilot":
+            raise ValueError("copilot_allow_project_sources requires the github-copilot provider")
         if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("approval_timeout must be finite and positive")
         limit = _positive_integer(self.context_limit_chars, "context_limit_chars")
@@ -103,6 +114,7 @@ class OpenedSession:
     continues: str | None = None
     recollection_chars: int = 0
     test_data: bool = False
+    audit: AuditContext | None = None
 
 
 @dataclass(frozen=True)
@@ -116,8 +128,9 @@ class ContextUsage:
 class AgentController:
     """Open, run, continue and close agent conversations bound to the live target.
 
-    Each conversation receives a fresh ``target.context`` snapshot, masked by the
-    configured redactor, and the tool catalogue. Proposed calls only reach the
+    Each conversation receives a fresh ``target.context`` snapshot and, when an
+    audit context manager is given, a freshly gathered audit context, both
+    masked by the configured redactor, and the tool catalogue. Proposed calls only reach the
     server through a gateway applying :class:`ProtectionPolicy` and the
     application's auditor approval callback. Every conversation is journaled,
     in memory unless a store file is configured, so it can be continued.
@@ -131,10 +144,12 @@ class AgentController:
         approver: AuditorApprover,
         sink: AgentSink,
         session_ids: Callable[[], str] = lambda: str(uuid4()),
+        audit: AuditContextManager | None = None,
     ) -> None:
         """Bind the provider to the server transport and the auditor interface."""
         self._settings = settings
         self._client = client
+        self._audit = audit
         self._approver = approver
         self._sink = sink
         self._session_ids = session_ids
@@ -317,6 +332,7 @@ class AgentController:
                 f"({status.authentication.value}): {status.message}"
             )
         context = await fetch_target_context(self._client)
+        audit = None if self._audit is None else await self._audit.refresh(self._client)
         store = self._open_store()
         recollection = None
         if continues is not None:
@@ -324,13 +340,33 @@ class AgentController:
                 continues, self._history(store, continues), self._settings.recollection_chars
             )
         redactor = None if self._settings.test_data else self._settings.redactor
+        audit_document: JsonObject | None = None if audit is None else audit.to_json()
         if redactor is None:
             self._sink(AgentNotice(TEST_DATA_WARNING))
             disclosed, redactions = context, 0
         else:
             disclosed, redactions = redactor.context(context)
+            if audit_document is not None:
+                audit_document, masked = redactor.document(audit_document)
+                redactions += masked
+        project = None if audit is None else audit.project
+        sources = None
+        if project is not None and (
+            provider.provider_id == "opencode" or self._settings.copilot_allow_project_sources
+        ):
+            try:
+                sources = SourceBrowser(Path(project.local_root))
+            except SourceError as error:
+                raise AgentControllerError(
+                    f"cannot enable project source access: {error}"
+                ) from error
         session_id = self._session_ids()
-        session = await provider.open_session(session_id, disclosed, ToolCatalogue().definitions())
+        session = await provider.open_session(
+            session_id,
+            disclosed,
+            ToolCatalogue().definitions(include_sources=sources is not None),
+            audit_document,
+        )
         try:
             title = f"continues {continues}" if continues is not None else ""
             store.create_session(session_id, provider.provider_id, context, title)
@@ -339,6 +375,8 @@ class AgentController:
                 ProtectionPolicy(),
                 approver=self._approver,
                 approval_timeout=self._settings.approval_timeout,
+                sources=sources,
+                sources_current=lambda: self._audit is not None and self._audit.project is project,
             )
             self._orchestrator = AgentOrchestrator(
                 session,
@@ -355,6 +393,8 @@ class AgentController:
             raise
         self._recollection = recollection
         self._used = len(json.dumps(asdict(disclosed)))
+        if audit_document is not None:
+            self._used += len(json.dumps(audit_document))
         self._session = OpenedSession(
             session_id,
             context,
@@ -362,7 +402,23 @@ class AgentController:
             continues,
             len(recollection or ""),
             self._settings.test_data,
+            audit,
         )
+        if provider.provider_id == "github-copilot" and project is not None:
+            if sources is not None:
+                self._sink(
+                    AgentNotice(
+                        "Project source access enabled: read, glob and grep results may be "
+                        "sent to GitHub Copilot without another approval; masking is best effort."
+                    )
+                )
+            else:
+                self._sink(
+                    AgentNotice(
+                        "Project source tools disabled for GitHub Copilot; restart with "
+                        "--copilot-allow-project-sources only if source disclosure is authorized."
+                    )
+                )
         return self._session
 
     async def _close_session(self) -> None:

@@ -100,6 +100,54 @@ class ProjectManifest:
         }
 
 
+@dataclass(frozen=True)
+class ProjectComponent:
+    """One software component declared by a project, as built into the firmware.
+
+    Paths are canonical and relative to the project root. ``repository`` never
+    carries URL credentials; ``revision`` is the declared source revision.
+    """
+
+    name: str
+    kind: str
+    scm: str | None = None
+    repository: str | None = None
+    revision: str | None = None
+    configuration: str | None = None
+    sources: str | None = None
+    executables: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, str | list[str] | None]:
+        """Return the component in its JSON representation."""
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "scm": self.scm,
+            "repository": self.repository,
+            "revision": self.revision,
+            "configuration": self.configuration,
+            "sources": self.sources,
+            "executables": list(self.executables),
+        }
+
+
+@dataclass(frozen=True)
+class ProjectDescription:
+    """Software identity declared by a project: its name, version and components."""
+
+    name: str | None
+    version: str | None
+    components: tuple[ProjectComponent, ...]
+
+    def to_dict(self) -> dict[str, str | list[dict[str, str | list[str] | None]] | None]:
+        """Return the description in its JSON representation."""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "components": [component.to_dict() for component in self.components],
+        }
+
+
 def matches_project_pattern(path: str, pattern: str) -> bool:
     """Match every project path component, without accepting extra parent prefixes."""
     parts = PurePosixPath(path).parts

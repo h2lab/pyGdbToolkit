@@ -14,11 +14,13 @@ from typing import Any
 import pytest
 from textual.widgets import Input, Static
 
+from pyGdbClient.audit import AuditContextManager
 from pyGdbClient.llm.approval import ApprovalRequest, ApprovalResponse
 from pyGdbClient.llm.approval_screen import ApprovalScreen
 from pyGdbClient.llm.confidentiality import TEST_DATA_WARNING
 from pyGdbClient.llm.contracts import (
     ContextFact,
+    JsonObject,
     MemoryMapContext,
     TargetContext,
     ToolCall,
@@ -108,8 +110,9 @@ class TrackedSession(ScriptedSession):
         context: TargetContext,
         tools: tuple[ToolDefinition, ...],
         turns: tuple[ScriptedTurn, ...],
+        audit: JsonObject | None = None,
     ) -> None:
-        super().__init__(session_id, context, tools, turns)
+        super().__init__(session_id, context, tools, turns, audit)
         self.closed = 0
 
     async def close(self) -> None:
@@ -132,9 +135,13 @@ class TrackedProvider:
         return self.current_status
 
     async def open_session(
-        self, session_id: str, context: TargetContext, tools: tuple[ToolDefinition, ...]
+        self,
+        session_id: str,
+        context: TargetContext,
+        tools: tuple[ToolDefinition, ...],
+        audit: JsonObject | None = None,
     ) -> LlmSession:
-        session = TrackedSession(session_id, context, tools, self.turns)
+        session = TrackedSession(session_id, context, tools, self.turns, audit)
         self.sessions.append(session)
         return session
 
@@ -374,6 +381,45 @@ def test_provider_receives_a_masked_snapshot_while_the_store_keeps_it(tmp_path: 
         assert path.stat().st_mode & 0o777 == 0o600
         with ContextStore(path) as store:
             assert store.get_context(opened.session_id) == _secret_context()
+
+    asyncio.run(exercise())
+
+
+def test_provider_receives_a_masked_audit_context() -> None:
+    async def exercise() -> None:
+        responses = _responses()
+        responses["server.status"] = {"ready": True, "log_file": "/srv/log?api_key=hunter2"}
+        provider = TrackedProvider(_answer("ok"))
+        audit = AuditContextManager(clock=lambda: "2026-01-01T00:00:00+00:00")
+        async with FakeRpcServer(responses) as server:
+            client = JsonRpcClient(server.url)
+            await client.connect()
+            controller = AgentController(
+                AgentSettings(provider),
+                client,
+                approver=Recorder().approver,
+                sink=lambda event: None,
+                audit=audit,
+            )
+            opened = await controller.new_session()
+            (session,) = provider.sessions
+            assert opened.audit is audit.latest and opened.audit is not None
+            assert opened.audit.server.data == responses["server.status"]
+            assert opened.redactions == 1
+            assert session.audit is not None
+            disclosed = session.audit["server"]
+            assert isinstance(disclosed, dict) and isinstance(disclosed["data"], dict)
+            assert disclosed["data"]["log_file"] == "/srv/log?[REDACTED:credential-assignment]"
+            assert session.audit["project"] == {
+                "unavailable_reason": "no project is loaded; use the project command"
+            }
+            assert "svd.peripherals" in server.methods and "rtos.status" in server.methods
+            usage = controller.usage
+            assert usage is not None
+            assert usage.used == len(json.dumps(asdict(session.context))) + len(
+                json.dumps(session.audit)
+            )
+            await controller.close()
 
     asyncio.run(exercise())
 

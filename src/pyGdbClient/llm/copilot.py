@@ -18,7 +18,14 @@ from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from .contracts import JsonValue, TargetContext, ToolCall, ToolDefinition, ToolResult
+from .contracts import (
+    JsonObject,
+    JsonValue,
+    TargetContext,
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+)
 from .instructions import agent_instructions
 from .provider import (
     AuthenticationState,
@@ -232,7 +239,11 @@ class CopilotProvider:
         return ProviderUsage(quotas)
 
     async def open_session(
-        self, session_id: str, context: TargetContext, tools: tuple[ToolDefinition, ...]
+        self,
+        session_id: str,
+        context: TargetContext,
+        tools: tuple[ToolDefinition, ...],
+        audit: JsonObject | None = None,
     ) -> LlmSession:
         """Create a fresh restricted conversation; never resume SDK session state."""
         if not session_id.strip():
@@ -246,7 +257,7 @@ class CopilotProvider:
         async with self._lock:
             if self._closed:
                 raise ProviderError("Copilot provider is closed")
-            return await self._create_session(client, session_id, context, tools)
+            return await self._create_session(client, session_id, context, tools, audit)
 
     async def _create_session(
         self,
@@ -254,6 +265,7 @@ class CopilotProvider:
         session_id: str,
         context: TargetContext,
         tools: tuple[ToolDefinition, ...],
+        audit: JsonObject | None,
     ) -> LlmSession:
         from copilot import Tool
 
@@ -269,7 +281,7 @@ class CopilotProvider:
             )
             for name, tool in zip(names, tools, strict=True)
         ]
-        instructions = agent_instructions(context)
+        instructions = agent_instructions(context, audit)
         sdk_session = await _rpc(
             client.create_session(
                 session_id=str(uuid4()),
