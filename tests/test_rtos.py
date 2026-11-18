@@ -87,15 +87,22 @@ def test_registry_supports_additional_rtos_without_camelot_branches() -> None:
 
 def test_manifest_expands_applications_from_project() -> None:
     """Remote transfer and local ELF discovery share the same ordered file names."""
-    content = b"[kernel]\n[application.demo]\n[runtime]\n"
+    content = (
+        b"[kernel]\n[runtime]\n"
+        b"[application.demo]\nprovides = ['demo.elf', 'demo-tool.elf']\n"
+        b"[application.sample_c_app]\nprovides = ['sample-c-app.elf']\n"
+    )
     manifest = project_manifest("camelot", content)
-    assert manifest.required[:3] == (
+    assert manifest.required[:4] == (
         "project.toml",
         f"{PRIVATE_BUILD}/sentry-kernel.elf",
-        f"{PRIVATE_BUILD}/demo-app.elf",
+        f"{PRIVATE_BUILD}/demo.elf",
+        f"{PRIVATE_BUILD}/sample-c-app.elf",
     )
-    assert manifest.permits(f"{PRIVATE_BUILD}/demo-app.elf")
-    assert not manifest.permits(f"{PRIVATE_BUILD}/demo-app.dummy.elf")
+    assert manifest.permits(f"{PRIVATE_BUILD}/demo.elf")
+    assert not manifest.permits(f"{PRIVATE_BUILD}/demo-tool.elf")
+    assert not manifest.permits(f"{PRIVATE_BUILD}/demo-app.elf")
+    assert not manifest.permits(f"{PRIVATE_BUILD}/demo.dummy.elf")
     assert manifest.permits("output/build/kernel/subprojects/kconfig-v1/generated_kconfig.json")
     assert not manifest.permits(
         "output/build/kernel/subprojects/kconfig-v1/extra/generated_kconfig.json"
@@ -118,8 +125,15 @@ def test_manifest_rejects_noncanonical_paths(path: object) -> None:
     "project",
     [
         {"application": []},
-        {"application": {"../evil": {}}},
-        {"application": {"..\\evil": {}}},
+        {"application": {"demo": []}},
+        {"application": {"demo": {}}},
+        {"application": {"demo": {"provides": []}}},
+        {"application": {"demo": {"provides": "demo.elf"}}},
+        {"application": {"demo": {"provides": [1]}}},
+        {"application": {"demo": {"provides": ["../evil.elf"]}}},
+        {"application": {"demo": {"provides": ["sub/evil.elf"]}}},
+        {"application": {"demo": {"provides": ["..\\evil.elf"]}}},
+        {"application": {"a": {"provides": ["x.elf"]}, "b": {"provides": ["x.elf"]}}},
         {},
     ],
 )
@@ -131,16 +145,20 @@ def test_invalid_project_elf_declarations(project: dict[str, object]) -> None:
 
 def test_remote_requires_kernel_but_local_application_only_is_unchanged() -> None:
     """The remote complete-context contract does not change standalone ELF discovery."""
-    assert project_elf_paths({"application": {"demo": {}}}) == (f"{PRIVATE_BUILD}/demo-app.elf",)
+    assert project_elf_paths({"application": {"demo": {"provides": ["demo.elf"]}}}) == (
+        f"{PRIVATE_BUILD}/demo.elf",
+    )
     with pytest.raises(ValueError, match="kernel ELF"):
-        project_manifest("camelot", b"[application.demo]\n")
+        project_manifest("camelot", b"[application.demo]\nprovides = ['demo.elf']\n")
     with pytest.raises(ValueError, match="Unsupported RTOS"):
         project_manifest("other")
 
 
 def _project(tmp_path: Path) -> None:
-    (tmp_path / "project.toml").write_text("[kernel]\n[application.demo]\n")
-    for name in ("sentry-kernel.elf", "demo-app.elf"):
+    (tmp_path / "project.toml").write_text(
+        "[kernel]\n[application.demo]\nprovides = ['demo.elf']\n"
+    )
+    for name in ("sentry-kernel.elf", "demo.elf"):
         path = tmp_path / PRIVATE_BUILD / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"ELF fixture")
