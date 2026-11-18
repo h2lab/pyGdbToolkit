@@ -50,5 +50,6 @@ llm
 ocd
 providers-svd
 rtos-camelot
+rtos-zephyr
 session
 ```
