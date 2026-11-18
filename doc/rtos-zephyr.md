@@ -10,7 +10,9 @@ builds**. It supports both direct GDB loading and the pyGdbClient `project`
 command. Live thread identity/state inspection supports Zephyr **4.1 through
 4.x**, using DWARF field names rather than fixed structure offsets. Supported
 Cortex-M builds also expose core registers, stack measurements and backtrace
-evidence. Scheduler tracing is not implemented yet.
+evidence. Semaphores, mutexes and event groups can be inspected by explicit type
+and address, including bounded simple-list wait queues. Scheduler tracing is
+not implemented yet.
 
 ## Build inputs
 
@@ -146,6 +148,62 @@ and upward-growing stacks retain thread identity inspection but explicitly
 report stack/context unavailability. Unknown exception-return modes are rejected.
 Commands never write target memory/registers, switch GDB threads/frames, resume
 the target or install an unwinder. Target read failures remain errors.
+
+## Waits, synchronization and events
+
+`rtos show task <name-or-address>` reports `base.pended_on` when the pending
+flag is set. Sleeping without pending is not called an object wait; stale
+queue/event fields on nonpending, dummy or terminated threads are not decoded.
+A pending thread with a null queue is labeled explicitly. The queue pointer
+alone does **not** identify its containing object or its type.
+
+For a known object, supply its complete hexadecimal address and type:
+
+```gdb
+(gdb) rtos show object sem 0x20002000
+(gdb) rtos show object mutex 0x20002040
+(gdb) rtos show object event 0x20002080
+```
+
+These are illustrative addresses, not objects assumed to exist in your firmware.
+Find the actual address using your application's symbols in GDB. The toolkit
+accepts only hexadecimal addresses, not GDB expressions or function calls.
+Object and thread type lookup starts in the loaded image's `_kernel` DWARF
+compilation unit. If a type is only available through global lookup, its owning
+object file must still be the loaded image. Missing types or types belonging
+to another image are explicit errors, not a reason to guess a memory layout.
+
+| Type | Sampled state |
+| --- | --- |
+| `sem` | Count and limit; invalid count/limit combinations are errors |
+| `mutex` | Owner `k_thread` address and recursive lock count; no inferred ownership history |
+| `event` | Posted mask, each waiter's requested mask, any/all mode and raw option bits; requires `CONFIG_EVENTS=y` |
+
+With `CONFIG_WAITQ_SIMPLE=y` (or its older name `CONFIG_WAITQ_DUMB=y`, used in
+Zephyr 4.1), the command traverses the object's actual
+`wait_q.waitq` circular list, independently of `CONFIG_THREAD_MONITOR`. DWARF
+member addresses determine the embedded thread-node offset; no fixed C layout
+is assumed. Each waiter must be pending, not terminated, and point back to this
+queue through `base.pended_on`. Doubly linked/sentinel consistency, cycles,
+32-bit aligned address ranges and the maximum of **4096 waiters** are checked.
+Corruption, unreadable memory or exceeding this bound fails the command rather
+than displaying a truncated healthy-looking list. The displayed order is queue
+order, not a prediction of which thread will execute next. Dummy pending nodes
+may represent kernel-internal waiters rather than application threads.
+
+Scalable tree queues (`CONFIG_WAITQ_SCALABLE=y`) and unknown queue configurations
+retain object-field inspection but report waiter enumeration as **unavailable**,
+never as zero waiters. There is no global object registry scan or automatic
+reverse resolution of a queue pointer. The caller-supplied type/address does not
+prove allocation, initialization or lifetime, even when fields are consistent.
+Other object classes (queues, pipes, poll objects, etc.) are not decoded yet.
+
+Timeouts are explicitly unavailable: a thread's delta-list `dticks` is not a
+remaining duration and newer timeout backends use different representations.
+This sample does not reconstruct wait history, priority inheritance history
+or prove a deadlock. Halting inside a kernel update can expose inconsistent
+intermediate data; errors do not establish persistent corruption.
+Inspection performs no writes, resumes, frame selections or kernel API calls.
 
 ## Remote client and audit context
 

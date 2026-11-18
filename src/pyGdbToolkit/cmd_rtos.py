@@ -41,6 +41,9 @@ class RtosCmd(gdb.Command):
                 "rtos show task <identifier>", "Inspect a task by RTOS-specific name or identifier"
             ),
             CommandUsage("rtos show threads", "Enumerate threads on the stopped target"),
+            CommandUsage(
+                "rtos show object <type> <hex-address>", "Inspect a synchronization object"
+            ),
             CommandUsage("rtos showsched <num>", "Trace the next num scheduler elections"),
         ),
         notes=(
@@ -129,6 +132,21 @@ class RtosCmd(gdb.Command):
             CONSOLE.print(state.project.show_threads())
         except (OSError, ValueError, KeyError, TypeError, gdb.error) as error:
             raise gdb.GdbError(f"Cannot enumerate RTOS threads: {error}") from error
+
+    def _invoke_show_object(self, args: list[str]) -> None:
+        if len(args) != 2:
+            raise gdb.GdbError("Usage: rtos show object <type> <hex-address>")
+        state = self.state
+        if state.selected_rtos is None or state.project is None:
+            raise gdb.GdbError("Select an RTOS and load a project before rtos show object")
+        if not state.project.capabilities.object_inspection:
+            raise gdb.GdbError(
+                f"Object inspection is unavailable for this {state.selected_rtos.name} build"
+            )
+        try:
+            CONSOLE.print(state.project.show_object(*args))
+        except (OSError, ValueError, KeyError, TypeError, gdb.error) as error:
+            raise gdb.GdbError(f"Cannot inspect RTOS object: {error}") from error
 
     def _invoke_showsched(self, args: list[str]) -> None:
         if len(args) != 1 or not args[0].isdecimal() or int(args[0]) < 1:
@@ -369,3 +387,15 @@ class RtosShowThreadsCmd(_RtosSubcommand):
         """Display thread identities, state and enumeration coverage."""
         del from_tty
         self.parent._invoke_show_threads(self._argv(arg))
+
+
+class RtosShowObjectCmd(_RtosSubcommand):
+    """Inspect an explicitly typed synchronization object."""
+
+    def __init__(self, parent: RtosCmd) -> None:
+        super().__init__(parent, "show object")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Display object state and waiter evidence."""
+        del from_tty
+        self.parent._invoke_show_object(self._argv(arg))

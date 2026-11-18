@@ -70,6 +70,10 @@ class CamelotProject:
         """Reject thread enumeration; Camelot exposes its static tasks through show."""
         raise ValueError("Camelot thread enumeration is unavailable; use rtos show")
 
+    def show_object(self, kind: str, address: str) -> Group:
+        """Reject the separate synchronization-object operation for Camelot."""
+        raise ValueError("Camelot synchronization object inspection is unavailable")
+
     def trace_scheduler(
         self, limit: int, console: Console, on_delete: Callable[[SchedulerTrace], None]
     ) -> SchedulerTrace:

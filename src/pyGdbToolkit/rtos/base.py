@@ -20,6 +20,7 @@ class RtosCapabilities:
     task_inspection: bool
     scheduler_trace: bool
     thread_enumeration: bool = False
+    object_inspection: bool = False
 
 
 class SchedulerTrace(Protocol):
@@ -97,6 +98,28 @@ class RtosProject(Protocol):
         ------
         ValueError
             If enumeration is unsupported or required target data is inaccessible.
+        """
+        ...
+
+    def show_object(self, kind: str, address: str) -> Group:
+        """Inspect a typed synchronization object on the stopped target.
+
+        Parameters
+        ----------
+        kind : str
+            Implementation-specific object type, not a GDB expression.
+        address : str
+            Hexadecimal object address.
+
+        Returns
+        -------
+        Group
+            Sampled object state and explicit waiter coverage.
+
+        Raises
+        ------
+        ValueError
+            If inspection is unsupported, input is invalid or data is unreadable.
         """
         ...
 

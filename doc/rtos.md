@@ -8,7 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 The `rtos` GDB prefix groups project symbol loading, task inspection, and
 scheduler tracing. **Camelot** supports all three; **Zephyr** currently supports
 build loading/display, live thread inspection and supported Cortex-M saved
-contexts/stacks, but not scheduler tracing. The `rtos select <name>` interface and
+contexts/stacks, plus explicit semaphore/mutex/event inspection, but not
+scheduler tracing. The `rtos select <name>` interface and
 RTOS-specific modules keep these capabilities separate without changing command
 names. Output uses Rich tables.
 
@@ -110,7 +111,7 @@ metadata decoding or task inspection. GDB-side contracts live in
 - `RtosImplementation` validates the ELF list, primary image first, before GDB
   loads any symbols, then decodes a build context after symbol loading.
 - `RtosProject` owns that context, its build-specific `RtosCapabilities`, build
-  display, live thread enumeration, task inspection and scheduler observation.
+  display, live thread enumeration, task/object inspection and scheduler observation.
 - `SchedulerTrace` exposes collected observations and releases all of its
   breakpoints when cancelled. The implementation chooses its observation
   point and sampling strategy; generic commands do not assume a scheduler
@@ -139,6 +140,7 @@ for supported versions and scheduler tracing still disabled.
 | `rtos show` | Show build identity and linked memory mapping | No |
 | `rtos show threads` | Enumerate observable Zephyr threads with explicit coverage | Yes |
 | `rtos show task <identifier>` | Inspect a Camelot task or a Zephyr thread by exact name/hex address | Yes |
+| `rtos show object <type> <hex-address>` | Inspect a Zephyr `sem`, `mutex` or `event` and available waiters | Yes |
 | `rtos showsched <num>` | Observe the next positive number of elections (Camelot) | Connected target required |
 
 ### Project symbols and mapping
