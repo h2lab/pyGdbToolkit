@@ -69,6 +69,10 @@ class AgentSettings:
 
     ``test_data`` disables disclosure masking for analysis of test targets,
     including test cryptographic material. It never changes target protection.
+
+    ``copilot_allow_project_sources`` explicitly permits disclosing source-tool
+    results from loaded projects to GitHub Copilot. It defaults to False and
+    never enables native SDK filesystem tools.
     """
 
     provider: LlmProvider
@@ -79,12 +83,17 @@ class AgentSettings:
     context_limit_chars: int = 120_000
     recollection_chars: int = 12_000
     test_data: bool = False
+    copilot_allow_project_sources: bool = False
 
     def __post_init__(self) -> None:
         """Reject unbounded deadlines and inconsistent context limits."""
         timeout = self.approval_timeout
         if not isinstance(self.test_data, bool):
             raise ValueError("test_data must be a boolean")
+        if not isinstance(self.copilot_allow_project_sources, bool):
+            raise ValueError("copilot_allow_project_sources must be a boolean")
+        if self.copilot_allow_project_sources and self.provider.provider_id != "github-copilot":
+            raise ValueError("copilot_allow_project_sources requires the github-copilot provider")
         if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("approval_timeout must be finite and positive")
         limit = _positive_integer(self.context_limit_chars, "context_limit_chars")
@@ -342,7 +351,9 @@ class AgentController:
                 redactions += masked
         project = None if audit is None else audit.project
         sources = None
-        if provider.provider_id == "opencode" and project is not None:
+        if project is not None and (
+            provider.provider_id == "opencode" or self._settings.copilot_allow_project_sources
+        ):
             try:
                 sources = SourceBrowser(Path(project.local_root))
             except SourceError as error:
@@ -393,6 +404,21 @@ class AgentController:
             self._settings.test_data,
             audit,
         )
+        if provider.provider_id == "github-copilot" and project is not None:
+            if sources is not None:
+                self._sink(
+                    AgentNotice(
+                        "Project source access enabled: read, glob and grep results may be "
+                        "sent to GitHub Copilot without another approval; masking is best effort."
+                    )
+                )
+            else:
+                self._sink(
+                    AgentNotice(
+                        "Project source tools disabled for GitHub Copilot; restart with "
+                        "--copilot-allow-project-sources only if source disclosure is authorized."
+                    )
+                )
         return self._session
 
     async def _close_session(self) -> None:

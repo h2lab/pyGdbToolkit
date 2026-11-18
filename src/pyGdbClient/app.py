@@ -913,17 +913,29 @@ def _help_text(
         Text("  erase FILE    Delete one server workspace file (no directories or paths)."),
         Text("    Agent use requires auditor approval; symbolic links are removed, not followed."),
         Text(
-            f"  project DIR TYPE  Load a local RTOS project (TYPE: "
+            f"  project <path> <type>  Load a local RTOS project (types: "
             f"{', '.join(supported_project_types())}) into the remote GDB session."
         ),
         Text(
             "    Stages the manifest-declared build artifacts on the server, then selects and"
             " loads the RTOS project."
         ),
+        Text(
+            "    Example: project /path/to/sample-project camelot (quote paths containing spaces)."
+        ),
+        Text(
+            "    Records the local source root and artifact digests for the agent;"
+            " use /new in the agent input if a session is already open."
+        ),
         Text("  audit [FILE]  Show the audit context; optionally save it as JSON to a local FILE."),
         Text(
-            "    Project, software identity and digests, RTOS, execution state, cores, SVD map;"
-            " sent to the agent."
+            "    Refreshes project, software identity and digests, RTOS, execution state, cores,"
+            " SVD metadata and server status; unavailable parts include a reason."
+        ),
+        Text("    Example: audit audit.json (replaces FILE; the local export is not masked)."),
+        Text(
+            "    The agent receives a fresh context when its session opens;"
+            " audit does not update an existing agent session."
         ),
         Text("  quit          Exit the dashboard; keep pyGdbServer, GDB, and the OCD running."),
         Text("  quit --all    Shut down pyGdbServer, GDB, and the OCD, then exit the dashboard."),
