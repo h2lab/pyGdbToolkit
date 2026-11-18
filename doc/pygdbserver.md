@@ -327,14 +327,14 @@ Runs a raw MI command, which must start with `-`.
 
 These methods load a complete RTOS build context from a remote client's
 filesystem without mounting it on the server. They do not flash the target.
-Camelot is currently supported. The existing GDB command
+Camelot and single-image Cortex-M Zephyr builds are supported. The existing GDB command
 `rtos load-project --from <path>` continues to refer to the GDB host's filesystem.
-A dedicated pyGdbClient upload command is not implemented yet.
+The pyGdbClient `project <path> <type>` command uploads from the client's filesystem.
 
 #### `rtos.project.begin`
 
 Parameters: `name` (1-64 ASCII letters, digits, `_` or `-`, starting with a
-letter or digit), `rtos` (`"camelot"`).
+letter or digit), `rtos` (`"camelot"` or `"zephyr"`).
 
 ```json
 {"jsonrpc":"2.0","id":30,"method":"rtos.project.begin","params":{"name":"build-1","rtos":"camelot"}}
@@ -346,7 +346,11 @@ file paths) and `required_patterns` (each must match exactly one uploaded file).
 Upload the declaration first; for Camelot this is `project.toml`, whose completed
 contents expand `required` to include the declared applications' linked ELFs.
 No sources or arbitrary build directories need to be sent. See
-[Camelot project inputs](rtos-camelot.md#project-inputs).
+[Camelot project inputs](rtos-camelot.md#project-inputs). For Zephyr the declaration
+is `build_info.yml`; it expands the manifest to exactly that metadata file,
+`zephyr/zephyr.elf`, `zephyr/.config` and `zephyr/zephyr.dts`. See
+[Zephyr build inputs](rtos-zephyr.md#build-inputs). Compilation paths in metadata
+do not authorize filesystem or source access.
 
 Names must be unique within the server instance; `begin` never overwrites an
 existing transfer. Up to 16 projects are retained, each in a private temporary

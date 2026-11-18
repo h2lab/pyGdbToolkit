@@ -6,9 +6,10 @@ SPDX-License-Identifier: Apache-2.0
 # `rtos` command
 
 The `rtos` GDB prefix groups project symbol loading, task inspection, and
-scheduler tracing. Currently **only Camelot is supported**. The `rtos select
-<name>` interface and RTOS-specific modules allow additional implementations
-to be added without changing the command names. Output uses Rich tables.
+scheduler tracing. **Camelot** supports all three; **Zephyr** currently supports
+build loading and display only. The `rtos select <name>` interface and
+RTOS-specific modules keep these capabilities separate without changing command
+names. Output uses Rich tables.
 
 ## Getting started
 
@@ -32,6 +33,10 @@ stop it first:
 (gdb) rtos show task calculator-app
 ```
 
+For Zephyr, select `zephyr` and load the build directory containing
+`build_info.yml`, for example `rtos load-project --from /path/to/workspace/build`.
+See [Zephyr support](rtos-zephyr.md) for required inputs and current limitations.
+
 The RTOS selection, loaded project, and decoded task-list slots belong to the
 current GDB session. Selecting another RTOS clears the project and its task
 list; loading another project replaces them. These commands do not flash the
@@ -49,7 +54,7 @@ No shared filesystem or server-to-client filesystem access is needed.
 See [the RTOS RPC protocol](pygdbserver.md#remote-rtos-projects) for parameters,
 chunk limits and the versioned status format. In the pyGdbClient dashboard, the
 `project <path> <type>` command drives this sequence: it validates the project
-type against the shared registry (currently `camelot`), uploads the declaration
+type against the shared registry (`camelot` or `zephyr`), uploads the declaration
 and every manifest-required build artifact from the local `<path>`, then commits
 the transfer so GDB selects the RTOS and loads the project. Standalone GDB use
 does not require the server or the transfer protocol.
@@ -65,6 +70,11 @@ is recorded with its size and the SHA-256 digest of the bytes the server
 received. Both feed the [audit context](llm.md#audit-context), which the
 `audit [FILE]` dashboard command displays and optionally saves as JSON.
 
+For Zephyr, use `project /path/to/workspace/build zephyr`. Its components identify
+the application and kernel; the audit context records the declared Zephyr version
+and artifact hashes, but does not yet authorize application/kernel/module source
+access. Absolute compilation paths are not trusted source roots.
+
 ### Shared contracts and RTOS extensions
 
 `pyGdbToolkit.shared` contains contracts usable by the toolkit, server and
@@ -79,7 +89,8 @@ The shared RTOS package separates:
 - `pyGdbToolkit.shared.rtos.models`: snapshots, manifests and path validation;
 - `pyGdbToolkit.shared.rtos.registry`: the `ProjectProvider` protocol,
   `ProjectRegistry` and `DEFAULT_PROJECT_REGISTRY`;
-- `pyGdbToolkit.shared.rtos.camelot`: Camelot's declaration parser and build paths.
+- `pyGdbToolkit.shared.rtos.camelot`: Camelot's declaration parser and build paths;
+- `pyGdbToolkit.shared.rtos.zephyr`: Zephyr's metadata parser and build paths.
 
 To support another RTOS, implement a shared provider exposing its `name`,
 `manifest(project: bytes | None)` and `describe(project: bytes)`, then register
@@ -112,9 +123,9 @@ These GDB-side contracts are not imported by the host-safe shared providers.
 
 Camelot retains its kernel ELF requirement, static `.task_list` decoding and
 return-based election sampling in its own implementation. The version 1 RPC
-snapshot and Camelot command output are unchanged. Only Camelot is registered
-at this stage; the contracts prepare additional implementations without claiming
-that they are already supported.
+snapshot and Camelot command output are unchanged. Zephyr registers its own
+build loader and cached context, with live capabilities disabled until their
+implementations are available.
 
 ## Command reference
 
@@ -122,15 +133,15 @@ that they are already supported.
 | --- | --- | --- |
 | `rtos` | Show the command reference | No |
 | `rtos list` | List supported RTOS names and mark the selection | No |
-| `rtos select <name>` | Select an implementation (`camelot` today) | No |
-| `rtos load-project --from <path>` | Load built ELF symbols and task-list metadata | No |
-| `rtos show` | Show kernel and task mapping with build-time metadata | No |
-| `rtos show task <taskname>` | Inspect one task's live kernel context and saved stack | Yes |
-| `rtos showsched <num>` | Observe the next positive number of elections | Connected target required |
+| `rtos select <name>` | Select `camelot` or `zephyr` | No |
+| `rtos load-project --from <path>` | Load built ELF symbols and RTOS build metadata | No |
+| `rtos show` | Show build identity and linked memory mapping | No |
+| `rtos show task <taskname>` | Inspect one task's live context and saved stack (Camelot) | Yes |
+| `rtos showsched <num>` | Observe the next positive number of elections (Camelot) | Connected target required |
 
 ### Project symbols and mapping
 
-`rtos load-project` reads `project.toml`, loads the linked kernel ELF and one
+For Camelot, `rtos load-project` reads `project.toml`, loads the linked kernel ELF and one
 linked ELF for each declared application with `add-symbol-file`, and records
 the `.task_list` section. Dummy application ELFs are not loaded. The symbols
 remain usable in GDB for `info symbol`, breakpoints, and backtraces. The build
@@ -144,7 +155,13 @@ address, handles, and HMAC values. `idle` can be in the mapping without having
 an entry in `.task_list`. This is **build-time information**, not a live
 snapshot of the target.
 
+For Zephyr, the command instead reads generated build metadata and configuration,
+loads only `zephyr/zephyr.elf`, and displays its linked segments. No static task
+table is assumed; see [Zephyr build inputs](rtos-zephyr.md#build-inputs).
+
 ### Live task inspection
+
+The live commands below currently apply to Camelot only.
 
 `rtos show task <taskname>` reads `task_table` in the halted kernel using
 its DWARF type. It displays the task mapping, canonical job state, handle,

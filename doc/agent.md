@@ -113,7 +113,7 @@ Use the **command prompt**, not the agent prompt, for these client commands:
 
 | Command | Purpose |
 | ------- | ------- |
-| `project <path> <type>` | Load a local source project; currently `camelot` is the supported type. Transfer the manifest-declared build artifacts to pyGdbServer and load the RTOS project in GDB. Keep the local source root, declared software identity and artifact SHA-256 digests in the audit context. |
+| `project <path> <type>` | Load a local Camelot project (`camelot`) or Zephyr build directory (`zephyr`). Transfer the manifest-declared build artifacts to pyGdbServer and load the RTOS project in GDB. Keep the local root, declared software identity and artifact SHA-256 digests in the audit context. |
 | `audit` | Refresh the audit context from server status queries and display its summary: project, RTOS, execution state, cores, SVD metadata and server session. Missing information includes an unavailability reason. |
 | `audit FILE` | Also save the complete context as local JSON, replacing `FILE` if it exists. This export is **not masked**; protect it like other audit data. |
 | `help` | Display these commands along with the toolkit, GDB, OCD and agent command reference. |
@@ -133,6 +133,11 @@ with the current project and target context. If a conversation was already open,
 enter `/new` in the **agent prompt** after loading or changing the project.
 Running `audit` displays fresh information but does not update an existing
 agent conversation.
+
+For Zephyr, use `project /absolute/path/to/zephyr-workspace/build zephyr`.
+Build identity and artifact digests enter the same audit context, but application,
+kernel and module source access is not available yet. Absolute source paths in
+build metadata are not authorized read roots. See [Zephyr support](rtos-zephyr.md).
 
 ## Reading project sources
 

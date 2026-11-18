@@ -47,6 +47,7 @@ def test_client_modules_import_without_target_side_packages(module: str) -> None
         "pyGdbToolkit.shared.rtos.models",
         "pyGdbToolkit.shared.rtos.registry",
         "pyGdbToolkit.shared.rtos.camelot",
+        "pyGdbToolkit.shared.rtos.zephyr",
     ],
 )
 def test_shared_modules_import_without_target_side_dependencies(module: str) -> None:

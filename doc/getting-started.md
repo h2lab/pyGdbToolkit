@@ -24,6 +24,8 @@ gdb-multiarch -nx -batch -ex 'python import sys; print(sys.version); print(sys.p
 
 If GDB cannot import the package, install it using a compatible Python interpreter
 or add that environment's `site-packages` directory to GDB's `sys.path`.
+This includes runtime dependencies such as PyYAML and pyelftools used by the
+Zephyr build loader.
 
 ## Choose a session mode
 
