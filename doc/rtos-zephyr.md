@@ -11,8 +11,8 @@ command. Live thread identity/state inspection supports Zephyr **4.1 through
 4.x**, using DWARF field names rather than fixed structure offsets. Supported
 Cortex-M builds also expose core registers, stack measurements and backtrace
 evidence. Semaphores, mutexes and event groups can be inspected by explicit type
-and address, including bounded simple-list wait queues. Scheduler tracing is
-not implemented yet.
+and address, including bounded simple-list wait queues. Supported mono-CPU
+Cortex-M builds also expose bounded scheduler observations at PendSV entry.
 
 ## Build inputs
 
@@ -204,6 +204,54 @@ This sample does not reconstruct wait history, priority inheritance history
 or prove a deadlock. Halting inside a kernel update can expose inconsistent
 intermediate data; errors do not establish persistent corruption.
 Inspection performs no writes, resumes, frame selections or kernel API calls.
+
+## Scheduler observations
+
+```gdb
+(gdb) rtos showsched 8
+(gdb) continue
+```
+
+For Zephyr, this installs one internal breakpoint at the **exact entry address**
+of `z_arm_pendsv`, resolved from the loaded build's final ELF symbol table. It
+does not rely on optional Zephyr tracing instrumentation, a C return value or
+GDB's function-prologue skipping. Activation requires a stopped target, matching
+loaded symbols, the handler's executable ELF symbol and readable supported
+kernel structures.
+
+Each hit records `_kernel.cpus[0].current` and `_kernel.ready_q.cache`, the
+candidate the Cortex-M PendSV path will subsequently load. Addresses are the
+identities; bounded names are appended when `CONFIG_THREAD_NAME=y`. No full
+thread-list traversal or `CONFIG_THREAD_MONITOR` is required. Repeated pairs,
+including current equal to candidate, are preserved. After exactly the requested
+**1 to 4096 observations**, GDB stops and prints a numbered table, then releases
+the breakpoint. The final stop is **before** PendSV performs that switch:
+outgoing-thread registers/context may not yet have been saved.
+
+These are **pre-switch ready-cache observations**, not confirmed switch
+completion, execution by the candidate, every scheduler decision, timing,
+CPU utilization or an exhaustive historical trace. Higher-priority interrupts
+may change the candidate after a sample. Breakpoint stops/resumes perturb target
+timing and may affect application behavior. The user must explicitly continue;
+the command does not itself resume, call kernel functions, write registers or
+select GDB frames. GDB manages the observation breakpoint, which can use target
+debug resources or patch executable memory depending on the target/backend.
+
+This backend supports Zephyr 4.1 through 4.x with `CONFIG_CPU_CORTEX_M=y`,
+`CONFIG_MP_MAX_NUM_CPUS=1`, and a single DWARF CPU slot. SMP, USE_SWITCH and
+TrustZone firmware variants are not supported. Build eligibility is reported
+without reading the target; missing symbols/layout or inaccessible data fail
+explicitly when starting a trace. If a later observation fails, GDB stops,
+reports the error and releases the trace rather than silently skipping the hit.
+
+A new trace replaces the old one; selecting an RTOS, loading another project
+or resetting toolkit session state cancels it. Target exit, clearing/removing
+the loaded image, or deleting its breakpoint also releases the trace with an
+explicit cancellation message. Manual interruption leaves an unfinished trace
+armed; cancel it by reselecting the RTOS if no more observations are wanted.
+Only one entry breakpoint is owned; no return breakpoint or unwinder is installed.
+The existing `rtos.status.scheduler_trace.elections` list contains these labeled
+`current -> candidate` strings while tracing; the RPC schema is unchanged.
 
 ## Remote client and audit context
 

@@ -23,7 +23,7 @@ from rich.text import Text
 from ..shared.rtos import TaskListSnapshot
 from ..shared.rtos import zephyr as project_contract
 from .base import RtosCapabilities, SchedulerTrace
-from . import zephyr_sync, zephyr_threads
+from . import zephyr_sync, zephyr_threads, zephyr_trace
 
 NAME = project_contract.NAME
 
@@ -137,7 +137,10 @@ class ZephyrProject:
         """Enable thread decoding only for the supported kernel state ABI."""
         supported = zephyr_threads.supports_version(self.build.version)
         return RtosCapabilities(
-            supported, False, thread_enumeration=supported, object_inspection=supported
+            supported,
+            supported and zephyr_trace.supports_trace(self.config),
+            thread_enumeration=supported,
+            object_inspection=supported,
         )
 
     def task_list_snapshot(self) -> TaskListSnapshot | None:
@@ -185,6 +188,8 @@ class ZephyrProject:
             "CONFIG_WAITQ_DUMB",
             "CONFIG_WAITQ_SCALABLE",
             "CONFIG_EVENTS",
+            "CONFIG_MP_MAX_NUM_CPUS",
+            "CONFIG_USE_SWITCH",
         ):
             options.add_row(key, self.config.get(key, "unavailable (not recorded)"))
         return Group(
@@ -197,7 +202,8 @@ class ZephyrProject:
             Text(
                 "Live thread inspection requires Zephyr 4.1 through 4.x and a stopped target "
                 "(rtos show threads). "
-                "Scheduler tracing is not implemented yet."
+                "rtos showsched observes ready-cache candidates at PendSV entry on supported "
+                "mono-CPU Cortex-M builds; activation requires the handler symbol and layout."
             ),
         )
 
@@ -220,8 +226,10 @@ class ZephyrProject:
     def trace_scheduler(
         self, limit: int, console: Console, on_delete: Callable[[SchedulerTrace], None]
     ) -> SchedulerTrace:
-        """Reject scheduler observation until the Zephyr trace backend is implemented."""
-        raise ValueError("Zephyr scheduler tracing is not implemented yet")
+        """Observe bounded ready-cache candidates at Cortex-M PendSV entry."""
+        if not zephyr_threads.supports_version(self.build.version):
+            raise ValueError("Zephyr scheduler observation requires version 4.1 through 4.x")
+        return zephyr_trace.PendSvTrace(self.config, self.image, limit, console, on_delete)
 
 
 def _read_project(path: Path) -> ZephyrProject:

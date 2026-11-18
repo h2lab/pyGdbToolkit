@@ -335,7 +335,7 @@ def test_build_context_requires_stopped_target_and_rejects_wrong_primary(
     project = backend.load_project(build, build / shared.KERNEL_ELF)
     with pytest.raises(fake_gdb.error, match="no inferior selected"):
         project.show_task("worker")
-    with pytest.raises(ValueError, match="not implemented"):
+    with pytest.raises(ValueError, match="one configured CPU"):
         project.trace_scheduler(2, Console(file=StringIO()), Mock())
     with pytest.raises(ValueError, match="primary"):
         backend.load_project(build, build / "zephyr/zephyr_pre0.elf")
