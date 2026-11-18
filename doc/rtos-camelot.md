@@ -8,8 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 This page describes the current `rtos select camelot` implementation. For the
 GDB commands and a user workflow, see [`rtos.md`](rtos.md). Camelot-specific
 ELF discovery, metadata decoding and task inspection live in its own module.
-[Zephyr build loading and thread identity/state inspection](rtos-zephyr.md)
-are supported separately; saved-stack decoding remains Camelot-only at this stage.
+[Zephyr build loading, thread inspection and supported Cortex-M stack contexts](rtos-zephyr.md)
+are implemented separately, with explicit limitations for unsupported kernel layouts.
 
 ## Project inputs
 

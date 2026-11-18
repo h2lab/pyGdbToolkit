@@ -197,7 +197,9 @@ class ZephyrProject:
 
     def show_task(self, name: str) -> Group:
         """Inspect a Zephyr thread by exact name or hexadecimal k_thread address."""
-        return zephyr_threads.show_threads(self.config, self.build.version, name, self.image)
+        return zephyr_threads.show_threads(
+            self.config, self.build.version, name, self.image, context=True
+        )
 
     def show_threads(self) -> Group:
         """Enumerate observable threads with explicit monitor and name availability."""

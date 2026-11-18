@@ -3,7 +3,7 @@
 
 """Bounded, DWARF-driven Zephyr thread inspection on a stopped target."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from typing import Mapping
@@ -13,6 +13,8 @@ from rich import box
 from rich.console import Group
 from rich.table import Table
 from rich.text import Text
+
+from . import zephyr_context
 
 MAX_THREADS = 4096
 MAX_CPUS = 256
@@ -46,6 +48,8 @@ class ThreadInfo:
     options: int
     roles: tuple[str, ...]
     entry: int | None
+    value: gdb.Value | None = field(default=None, repr=False, compare=False)
+    current: bool = False
 
     @property
     def state_text(self) -> str:
@@ -60,6 +64,7 @@ class ThreadSnapshot:
     threads: tuple[ThreadInfo, ...]
     notes: tuple[str, ...]
     names_available: bool
+    cpu_count: int = 1
 
 
 def _require_stopped() -> None:
@@ -136,20 +141,23 @@ def read_threads(
         if first != 0 or not 0 < last + 1 <= MAX_CPUS:
             raise ValueError("Zephyr DWARF: invalid _kernel.cpus array bounds")
         roles: dict[int, list[str]] = {}
+        current_addresses: set[int] = set()
         notes: list[str] = []
         for index in range(last + 1):
             cpu = cpus[index]
             nested = int(cpu["nested"])
-            for field in ("current", "idle_thread"):
-                address = int(cpu[field])
+            for member in ("current", "idle_thread"):
+                address = int(cpu[member])
                 if address:
                     _address(address, size)
-                    role = f"{field} CPU {index}"
-                    if field == "current" and nested:
+                    if member == "current":
+                        current_addresses.add(address)
+                    role = f"{member} CPU {index}"
+                    if member == "current" and nested:
                         role += f" (IRQ nesting {nested})"
                     roles.setdefault(address, []).append(role)
                 else:
-                    notes.append(f"CPU {index} {field} is null; kernel may not be initialized.")
+                    notes.append(f"CPU {index} {member} is null; kernel may not be initialized.")
         monitored = config.get("CONFIG_THREAD_MONITOR") == "y"
         names = config.get("CONFIG_THREAD_NAME") == "y"
         addresses: list[int] = []
@@ -211,9 +219,11 @@ def read_threads(
                     options=int(base["user_options"]),
                     roles=tuple(roles.get(address, ())),
                     entry=int(thread["entry"]["pEntry"]) if monitored else None,
+                    value=thread,
+                    current=address in current_addresses,
                 )
             )
-        return ThreadSnapshot(tuple(result), tuple(notes), names)
+        return ThreadSnapshot(tuple(result), tuple(notes), names, last + 1)
     except gdb.error as error:
         raise ValueError(f"Cannot read Zephyr thread data or DWARF: {error}") from error
 
@@ -223,6 +233,7 @@ def show_threads(
     version: str,
     identifier: str | None = None,
     image: Path | None = None,
+    context: bool = False,
 ) -> Group:
     """Render a fresh thread list or inspect an exact name/hexadecimal address.
 
@@ -236,6 +247,8 @@ def show_threads(
         Exact thread name or hexadecimal k_thread address; None lists all threads.
     image : Path | None
         Loaded image whose symbols must be used instead of another project's.
+    context : bool
+        Whether a selected thread's Cortex-M stack/context should also be inspected.
 
     Returns
     -------
@@ -297,12 +310,26 @@ def show_threads(
             "Entry",
             f"0x{thread.entry:08X}" if thread.entry is not None else "unavailable (no monitor)",
         )
+    blocks: list[Group | Text] = []
+    if context and identifier is not None:
+        thread = selected[0]
+        if thread.value is None:
+            raise ValueError("Zephyr thread context has no sampled DWARF value")
+        if thread.state & 0x09:
+            blocks.append(Text("Stack/context unavailable: dummy or terminated thread."))
+        else:
+            blocks.append(
+                zephyr_context.show_context(
+                    thread.value, thread.current, snapshot.cpu_count, config, image
+                )
+            )
     return Group(
         table,
         *((details,) if identifier is not None else ()),
         *(Text(note) for note in snapshot.notes),
+        *blocks,
         Text(
             "Current means scheduled by the kernel, not necessarily executing outside an ISR. "
-            "Stack/register decoding, wait-object resolution and scheduler tracing are not included."
+            "Wait-object resolution and scheduler tracing are not included."
         ),
     )

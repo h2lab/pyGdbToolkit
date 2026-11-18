@@ -7,8 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 
 The `rtos` GDB prefix groups project symbol loading, task inspection, and
 scheduler tracing. **Camelot** supports all three; **Zephyr** currently supports
-build loading/display and live thread identity/state inspection, but not saved
-stacks or scheduler tracing. The `rtos select <name>` interface and
+build loading/display, live thread inspection and supported Cortex-M saved
+contexts/stacks, but not scheduler tracing. The `rtos select <name>` interface and
 RTOS-specific modules keep these capabilities separate without changing command
 names. Output uses Rich tables.
 
@@ -166,13 +166,22 @@ table is assumed; see [Zephyr build inputs](rtos-zephyr.md#build-inputs).
 For Zephyr, `rtos show threads` enumerates the monitored list when available;
 otherwise it explicitly reports incomplete current/idle coverage. Use
 `rtos show task <name-or-hex-address>` for identity, signed priority, state bits,
-CPU roles and available entry metadata. Names must be unique; use an address
+CPU roles and available entry metadata, plus supported stack/register context.
+Names must be unique; use an address
 when names collide or are unavailable. These commands require all GDB threads of
 the selected target to be stopped, and never modify registers or memory.
 See [Zephyr live threads](rtos-zephyr.md#live-threads) for version/configuration
 requirements and failure handling.
 
-The saved-context and stack behavior below applies to Camelot only.
+For supported Cortex-M configurations, Zephyr uses live newest-frame registers
+and GDB backtraces for the current thread in Thread mode; inactive threads show
+saved core registers and symbolized PC/LR evidence without claiming a complete
+unwind. Stack bounds exclude reserved top storage, and optional INIT_STACKS fill
+scans are bounded and labeled as estimates. See
+[Zephyr stack context](rtos-zephyr.md#stack-and-core-register-context) for supported
+layouts, current-thread/ISR limits and watermark requirements.
+
+The detailed task-table and event behavior below applies to Camelot only.
 
 `rtos show task <taskname>` reads `task_table` in the halted kernel using
 its DWARF type. It displays the task mapping, canonical job state, handle,
