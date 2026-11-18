@@ -38,7 +38,7 @@ class ExampleTrace:
 class ExampleProject:
     """Loaded project with dynamic tasks, not a static Camelot task table."""
 
-    capabilities: RtosCapabilities = RtosCapabilities(True, True)
+    capabilities: RtosCapabilities = RtosCapabilities(True, True, True)
     shown_tasks: list[str] = field(default_factory=list)
 
     def task_list_snapshot(self) -> TaskListSnapshot | None:
@@ -53,6 +53,10 @@ class ExampleProject:
         """Record a live inspection request."""
         self.shown_tasks.append(name)
         return Group(f"Example task {name}")
+
+    def show_threads(self) -> Group:
+        """Expose a separate enumeration operation for generic dispatch tests."""
+        return Group("Example threads")
 
     def trace_scheduler(
         self, limit: int, console: Console, on_delete: Callable[[SchedulerTrace], None]
@@ -117,15 +121,17 @@ def test_second_rtos_dispatches_without_static_tasks(
     command._invoke_list([])
     command._invoke_show([])
     command._invoke_show_task(["worker"])
+    command._invoke_show_threads([])
     assert command.state.project is example_project
     assert example_project.shown_tasks == ["worker"]
     output = capsys.readouterr().out
     assert "Selected" in output
     assert "Example build" in output
     assert "Example task worker" in output
+    assert "Example threads" in output
 
 
-@pytest.mark.parametrize("operation", ["task", "scheduler"])
+@pytest.mark.parametrize("operation", ["task", "scheduler", "threads"])
 def test_build_capabilities_gate_live_operations(
     operation: str,
     example_project: ExampleProject,
@@ -138,16 +144,21 @@ def test_build_capabilities_gate_live_operations(
     load_rtos_project("example", str(tmp_path))
     inspect = Mock(side_effect=AssertionError("must not inspect"))
     trace = Mock(side_effect=AssertionError("must not trace"))
+    enumerate_threads = Mock(side_effect=AssertionError("must not enumerate"))
     monkeypatch.setattr(example_project, "show_task", inspect)
     monkeypatch.setattr(example_project, "trace_scheduler", trace)
+    monkeypatch.setattr(example_project, "show_threads", enumerate_threads)
     command = RtosCmd()
     with pytest.raises(fake_gdb.GdbError, match="unavailable for this example build"):
         if operation == "task":
             command._invoke_show_task(["worker"])
-        else:
+        elif operation == "scheduler":
             command._invoke_showsched(["2"])
+        else:
+            command._invoke_show_threads([])
     inspect.assert_not_called()
     trace.assert_not_called()
+    enumerate_threads.assert_not_called()
     assert rtos_status()["loaded"]
 
 

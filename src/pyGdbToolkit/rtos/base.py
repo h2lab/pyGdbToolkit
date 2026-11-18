@@ -19,6 +19,7 @@ class RtosCapabilities:
 
     task_inspection: bool
     scheduler_trace: bool
+    thread_enumeration: bool = False
 
 
 class SchedulerTrace(Protocol):
@@ -81,6 +82,21 @@ class RtosProject(Protocol):
         ------
         ValueError
             If the identifier is unknown or required metadata is invalid.
+        """
+        ...
+
+    def show_threads(self) -> Group:
+        """Enumerate live threads, explicitly labeling any incomplete coverage.
+
+        Returns
+        -------
+        Group
+            Thread identities and states sampled on the stopped target.
+
+        Raises
+        ------
+        ValueError
+            If enumeration is unsupported or required target data is inaccessible.
         """
         ...
 

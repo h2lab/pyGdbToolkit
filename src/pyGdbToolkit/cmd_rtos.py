@@ -37,7 +37,10 @@ class RtosCmd(gdb.Command):
                 "rtos load-project --from <path>", "Load project symbols and task metadata"
             ),
             CommandUsage("rtos show", "Show the kernel and task memory layout and metadata"),
-            CommandUsage("rtos show task <taskname>", "Inspect a task on the stopped target"),
+            CommandUsage(
+                "rtos show task <identifier>", "Inspect a task by RTOS-specific name or identifier"
+            ),
+            CommandUsage("rtos show threads", "Enumerate threads on the stopped target"),
             CommandUsage("rtos showsched <num>", "Trace the next num scheduler elections"),
         ),
         notes=(
@@ -99,7 +102,7 @@ class RtosCmd(gdb.Command):
 
     def _invoke_show_task(self, args: list[str]) -> None:
         if len(args) != 1:
-            raise gdb.GdbError("Usage: rtos show task <taskname>")
+            raise gdb.GdbError("Usage: rtos show task <identifier>")
         state = self.state
         if state.selected_rtos is None or state.project is None:
             raise gdb.GdbError("Select an RTOS and load a project before rtos show task")
@@ -111,6 +114,21 @@ class RtosCmd(gdb.Command):
             CONSOLE.print(state.project.show_task(args[0]))
         except (OSError, ValueError, KeyError, TypeError, ET.ParseError, gdb.error) as error:
             raise gdb.GdbError(f"Cannot show task {args[0]}: {error}") from error
+
+    def _invoke_show_threads(self, args: list[str]) -> None:
+        if args:
+            raise gdb.GdbError("Usage: rtos show threads")
+        state = self.state
+        if state.selected_rtos is None or state.project is None:
+            raise gdb.GdbError("Select an RTOS and load a project before rtos show threads")
+        if not state.project.capabilities.thread_enumeration:
+            raise gdb.GdbError(
+                f"Thread enumeration is unavailable for this {state.selected_rtos.name} build"
+            )
+        try:
+            CONSOLE.print(state.project.show_threads())
+        except (OSError, ValueError, KeyError, TypeError, gdb.error) as error:
+            raise gdb.GdbError(f"Cannot enumerate RTOS threads: {error}") from error
 
     def _invoke_showsched(self, args: list[str]) -> None:
         if len(args) != 1 or not args[0].isdecimal() or int(args[0]) < 1:
@@ -339,3 +357,15 @@ class RtosShowschedCmd(_RtosSubcommand):
         """Trace the requested number of scheduler elections."""
         del from_tty
         self.parent._invoke_showsched(self._argv(arg))
+
+
+class RtosShowThreadsCmd(_RtosSubcommand):
+    """Enumerate live threads using the selected RTOS implementation."""
+
+    def __init__(self, parent: RtosCmd) -> None:
+        super().__init__(parent, "show threads")
+
+    def invoke(self, arg: str, from_tty: bool) -> None:
+        """Display thread identities, state and enumeration coverage."""
+        del from_tty
+        self.parent._invoke_show_threads(self._argv(arg))

@@ -233,12 +233,8 @@ def test_loads_only_final_image_and_keeps_status_nonintrusive(
     assert "0x08000000-0x08000004" in output
     assert "0x20000000-0x20000020" in output
     assert "R-X" in output and "RW-" in output
-    for invoke, args in (
-        (command._invoke_show_task, ["worker"]),
-        (command._invoke_showsched, ["3"]),
-    ):
-        with pytest.raises(fake_gdb.GdbError, match="unavailable for this zephyr build"):
-            invoke(args)
+    with pytest.raises(fake_gdb.GdbError, match="unavailable for this zephyr build"):
+        command._invoke_showsched(["3"])
     memory.assert_not_called()
 
 
@@ -331,11 +327,13 @@ def test_transfer_staging_never_resolves_original_source_paths(
         store.close()
 
 
-def test_build_context_rejects_live_calls_and_wrong_primary(build: Path) -> None:
-    """Unsupported direct backend calls also fail rather than returning an empty result."""
+def test_build_context_requires_stopped_target_and_rejects_wrong_primary(
+    build: Path, fake_gdb: ModuleType
+) -> None:
+    """Thread inspection needs a target; unsupported scheduler calls fail explicitly."""
     backend = zephyr.ZephyrRtos()
     project = backend.load_project(build, build / shared.KERNEL_ELF)
-    with pytest.raises(ValueError, match="not implemented"):
+    with pytest.raises(fake_gdb.error, match="no inferior selected"):
         project.show_task("worker")
     with pytest.raises(ValueError, match="not implemented"):
         project.trace_scheduler(2, Console(file=StringIO()), Mock())

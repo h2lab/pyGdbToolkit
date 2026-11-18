@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 H2Lab Development Team
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load and display a single-image Cortex-M Zephyr build without live target reads."""
+"""Load Cortex-M Zephyr builds, display cached metadata and inspect live threads."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -23,6 +23,7 @@ from rich.text import Text
 from ..shared.rtos import TaskListSnapshot
 from ..shared.rtos import zephyr as project_contract
 from .base import RtosCapabilities, SchedulerTrace
+from . import zephyr_threads
 
 NAME = project_contract.NAME
 
@@ -129,7 +130,13 @@ class ZephyrProject:
     build: project_contract.ZephyrBuild
     config: Mapping[str, str]
     regions: tuple[LoadRegion, ...]
-    capabilities: RtosCapabilities = RtosCapabilities(False, False)
+    image: Path
+
+    @property
+    def capabilities(self) -> RtosCapabilities:
+        """Enable thread decoding only for the supported kernel state ABI."""
+        supported = zephyr_threads.supports_version(self.build.version)
+        return RtosCapabilities(supported, False, thread_enumeration=supported)
 
     def task_list_snapshot(self) -> TaskListSnapshot | None:
         """Report that Zephyr has no Camelot-style static task table."""
@@ -181,12 +188,20 @@ class ZephyrProject:
                 "ELF flags are link-time attributes, not measured MPU permissions or memory capacity."
             ),
             options,
-            Text("Live thread inspection and scheduler tracing are not implemented yet."),
+            Text(
+                "Live thread inspection requires Zephyr 4.1 through 4.x and a stopped target "
+                "(rtos show threads). "
+                "Scheduler tracing is not implemented yet."
+            ),
         )
 
     def show_task(self, name: str) -> Group:
-        """Reject live inspection until the Zephyr thread decoder is implemented."""
-        raise ValueError("Zephyr live thread inspection is not implemented yet")
+        """Inspect a Zephyr thread by exact name or hexadecimal k_thread address."""
+        return zephyr_threads.show_threads(self.config, self.build.version, name, self.image)
+
+    def show_threads(self) -> Group:
+        """Enumerate observable threads with explicit monitor and name availability."""
+        return zephyr_threads.show_threads(self.config, self.build.version, image=self.image)
 
     def trace_scheduler(
         self, limit: int, console: Console, on_delete: Callable[[SchedulerTrace], None]
@@ -205,7 +220,8 @@ def _read_project(path: Path) -> ZephyrProject:
         raise ValueError("Zephyr board mismatch between build_info.yml and .config")
     if config.get("CONFIG_CPU_CORTEX_M") != "y" or _config_text(config, "CONFIG_ARCH") != "arm":
         raise ValueError("Only Arm Cortex-M Zephyr builds are supported at this stage")
-    return ZephyrProject(build, config, _elf_regions(path / project_contract.KERNEL_ELF))
+    image = path / project_contract.KERNEL_ELF
+    return ZephyrProject(build, config, _elf_regions(image), image)
 
 
 class ZephyrRtos:

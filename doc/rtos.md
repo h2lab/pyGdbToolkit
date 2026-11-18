@@ -7,7 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 
 The `rtos` GDB prefix groups project symbol loading, task inspection, and
 scheduler tracing. **Camelot** supports all three; **Zephyr** currently supports
-build loading and display only. The `rtos select <name>` interface and
+build loading/display and live thread identity/state inspection, but not saved
+stacks or scheduler tracing. The `rtos select <name>` interface and
 RTOS-specific modules keep these capabilities separate without changing command
 names. Output uses Rich tables.
 
@@ -109,7 +110,7 @@ metadata decoding or task inspection. GDB-side contracts live in
 - `RtosImplementation` validates the ELF list, primary image first, before GDB
   loads any symbols, then decodes a build context after symbol loading.
 - `RtosProject` owns that context, its build-specific `RtosCapabilities`, build
-  display, live task inspection and scheduler observation.
+  display, live thread enumeration, task inspection and scheduler observation.
 - `SchedulerTrace` exposes collected observations and releases all of its
   breakpoints when cancelled. The implementation chooses its observation
   point and sampling strategy; generic commands do not assume a scheduler
@@ -124,8 +125,8 @@ These GDB-side contracts are not imported by the host-safe shared providers.
 Camelot retains its kernel ELF requirement, static `.task_list` decoding and
 return-based election sampling in its own implementation. The version 1 RPC
 snapshot and Camelot command output are unchanged. Zephyr registers its own
-build loader and cached context, with live capabilities disabled until their
-implementations are available.
+build loader and cached context, with thread identity/state inspection enabled
+for supported versions and scheduler tracing still disabled.
 
 ## Command reference
 
@@ -136,7 +137,8 @@ implementations are available.
 | `rtos select <name>` | Select `camelot` or `zephyr` | No |
 | `rtos load-project --from <path>` | Load built ELF symbols and RTOS build metadata | No |
 | `rtos show` | Show build identity and linked memory mapping | No |
-| `rtos show task <taskname>` | Inspect one task's live context and saved stack (Camelot) | Yes |
+| `rtos show threads` | Enumerate observable Zephyr threads with explicit coverage | Yes |
+| `rtos show task <identifier>` | Inspect a Camelot task or a Zephyr thread by exact name/hex address | Yes |
 | `rtos showsched <num>` | Observe the next positive number of elections (Camelot) | Connected target required |
 
 ### Project symbols and mapping
@@ -161,7 +163,16 @@ table is assumed; see [Zephyr build inputs](rtos-zephyr.md#build-inputs).
 
 ### Live task inspection
 
-The live commands below currently apply to Camelot only.
+For Zephyr, `rtos show threads` enumerates the monitored list when available;
+otherwise it explicitly reports incomplete current/idle coverage. Use
+`rtos show task <name-or-hex-address>` for identity, signed priority, state bits,
+CPU roles and available entry metadata. Names must be unique; use an address
+when names collide or are unavailable. These commands require all GDB threads of
+the selected target to be stopped, and never modify registers or memory.
+See [Zephyr live threads](rtos-zephyr.md#live-threads) for version/configuration
+requirements and failure handling.
+
+The saved-context and stack behavior below applies to Camelot only.
 
 `rtos show task <taskname>` reads `task_table` in the halted kernel using
 its DWARF type. It displays the task mapping, canonical job state, handle,
