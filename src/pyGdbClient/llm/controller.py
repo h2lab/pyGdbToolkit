@@ -40,6 +40,7 @@ from .provider import (
 )
 from .recollection import MIN_RECOLLECTION_CHARS, build_recollection
 from .store import ContextStore, HistoryEntry, StoredSession
+from .sources import SourceBrowser, SourceError
 from .tools import ToolCatalogue
 
 _READY = {AuthenticationState.AUTHENTICATED, AuthenticationState.NOT_REQUIRED}
@@ -339,9 +340,21 @@ class AgentController:
             if audit_document is not None:
                 audit_document, masked = redactor.document(audit_document)
                 redactions += masked
+        project = None if audit is None else audit.project
+        sources = None
+        if provider.provider_id == "opencode" and project is not None:
+            try:
+                sources = SourceBrowser(Path(project.local_root))
+            except SourceError as error:
+                raise AgentControllerError(
+                    f"cannot enable project source access: {error}"
+                ) from error
         session_id = self._session_ids()
         session = await provider.open_session(
-            session_id, disclosed, ToolCatalogue().definitions(), audit_document
+            session_id,
+            disclosed,
+            ToolCatalogue().definitions(include_sources=sources is not None),
+            audit_document,
         )
         try:
             title = f"continues {continues}" if continues is not None else ""
@@ -351,6 +364,8 @@ class AgentController:
                 ProtectionPolicy(),
                 approver=self._approver,
                 approval_timeout=self._settings.approval_timeout,
+                sources=sources,
+                sources_current=lambda: self._audit is not None and self._audit.project is project,
             )
             self._orchestrator = AgentOrchestrator(
                 session,
