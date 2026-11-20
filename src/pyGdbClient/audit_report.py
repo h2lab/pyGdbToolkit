@@ -34,7 +34,7 @@ _REFERENCE_KEYS = {
 
 def _mask(value: JsonValue, redactor: Redactor) -> JsonValue:
     if isinstance(value, dict):
-        return {
+        masked: JsonObject = {
             key: (
                 "[REDACTED:credential-field]"
                 if _SECRET_KEY.fullmatch(key)
@@ -42,6 +42,12 @@ def _mask(value: JsonValue, redactor: Redactor) -> JsonValue:
             )
             for key, item in value.items()
         }
+        # The approval plan already contains the redactable text; its RPC copy is base64.
+        params = masked.get("params")
+        if value.get("method") == "workspace.upload" and isinstance(params, dict):
+            if "content" in params:
+                params["content"] = "[REDACTED:encoded-upload]"
+        return masked
     if isinstance(value, list):
         return [_mask(item, redactor) for item in value]
     return redactor.text(value)[0] if isinstance(value, str) else value

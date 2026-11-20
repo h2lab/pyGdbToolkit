@@ -21,7 +21,8 @@ from pyGdbClient.audit import (
     ProjectContext,
 )
 from pyGdbClient.llm.rendering import describe_audit
-from pyGdbClient.audit_report import write_report
+from pyGdbClient.audit_report import make_report, write_report
+from pyGdbClient.llm.confidentiality import Redactor
 from pyGdbClient.llm.contracts import ContextFact, MemoryMapContext, TargetContext
 from pyGdbClient.llm.controller import AgentSettings
 from pyGdbClient.llm.provider import TextDelta, TurnFinished
@@ -374,3 +375,25 @@ def test_invalid_report_preserves_destination(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="does not match the schema"):
         write_report(path, {"schema_version": 1})
     assert path.read_text() == "existing"
+
+
+def test_masked_report_omits_encoded_upload_from_approval() -> None:
+    """The encoded RPC copy must not undo masking of the human-readable plan."""
+    events = [
+        {
+            "sequence": 1,
+            "kind": "approval_requested",
+            "payload": {
+                "request": {
+                    "plan": {"content": "password=example"},
+                    "rpc_calls": [
+                        {"method": "workspace.upload", "params": {"content": "encoded-copy"}}
+                    ],
+                }
+            },
+        }
+    ]
+    metadata = {"title": "test", "stopped_at": None}
+    masked = json.dumps(make_report(metadata, events, Redactor()))
+    assert "password=example" not in masked and "encoded-copy" not in masked
+    assert "encoded-copy" in json.dumps(make_report(metadata, events, None))
