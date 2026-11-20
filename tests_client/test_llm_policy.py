@@ -137,12 +137,15 @@ def test_every_current_catalogue_tool_has_an_explicit_policy_expectation() -> No
         "toolkit_commands",
         "toolkit_help",
         "register_names",
+        "workspace_list",
     }
     approval = {
         "memory_read",
         "register_values",
         "target_select_core",
         "workspace_erase",
+        "workspace_upload",
+        "workspace_download",
         "toolkit_command",
         "gdb_command",
         "ocd_command",

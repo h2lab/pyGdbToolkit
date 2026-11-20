@@ -128,7 +128,9 @@ def test_definitions_and_prepared_calls_are_detached() -> None:
     """Mutating advertised schemas or proposed arguments cannot alter trusted routes."""
     catalogue = ToolCatalogue()
     definitions = catalogue.definitions()
-    assert len(definitions) == 16
+    assert {"workspace_list", "workspace_upload", "workspace_download"} <= {
+        definition.name for definition in definitions
+    }
     assert len({definition.name for definition in definitions}) == len(definitions)
     assert all(not hasattr(definition, "handler") for definition in definitions)
     definitions[0].input_schema.clear()
@@ -159,6 +161,11 @@ def test_definitions_and_prepared_calls_are_detached() -> None:
         ("workspace_erase", {"filename": "file\0"}),
         ("workspace_erase", {"filename": "file", "directory": "/tmp"}),
         ("workspace_erase", {"filename": "file", "approved": True}),
+        ("workspace_download", {"filename": "../file"}),
+        ("workspace_download", {"filename": "file", "directory": "/tmp"}),
+        ("workspace_download", {"filename": "file", "offset": 1}),
+        ("workspace_upload", {"filename": "file", "path": "/tmp/file"}),
+        ("workspace_upload", {"filename": "file", "content": "é" * 8193}),
         ("target_context", {"method": "server.shutdown"}),
         ("target_context", {"effects": ["observe"]}),
         ("target_context", {1: "not a string key"}),

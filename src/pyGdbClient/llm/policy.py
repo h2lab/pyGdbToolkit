@@ -26,6 +26,7 @@ _METADATA_TOOLS = frozenset(
         "toolkit_commands",
         "toolkit_help",
         "register_names",
+        "workspace_list",
     }
 )
 _OPAQUE_TOOLS = frozenset({"toolkit_command", "gdb_command", "ocd_command", "mi_command"})
@@ -196,6 +197,19 @@ class ProtectionPolicy:
                 (
                     "deleting a server workspace file is a persistent filesystem change; "
                     "auditor approval is required and deletion cannot be rolled back",
+                ),
+            )
+        if call.name == "workspace_upload":
+            return PolicyDecision(
+                PolicyOutcome.REQUIRE_APPROVAL,
+                ("upload writes generated text to the server workspace and may overwrite a file",),
+            )
+        if call.name == "workspace_download":
+            return PolicyDecision(
+                PolicyOutcome.REQUIRE_APPROVAL,
+                (
+                    "download saves the named file in a new private directory on the client; "
+                    "one approval covers its chunks, and file contents are not sent to the model",
                 ),
             )
         if call.name in _METADATA_TOOLS and call.effects == (ActionEffect.OBSERVE,):

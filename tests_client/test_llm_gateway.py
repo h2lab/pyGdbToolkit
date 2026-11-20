@@ -4,13 +4,17 @@
 """A local policy and a fresh target snapshot gate every agent tool dispatch."""
 
 import asyncio
+import base64
 from collections.abc import Mapping
 from dataclasses import asdict, replace
 import json
+from pathlib import Path
+import tempfile
 from typing import Any
 
 import pytest
 
+from pyGdbClient.llm.approval import ApprovalRequest, ApprovalResponse
 from pyGdbClient.llm.contracts import (
     ActionEffect,
     ActionPlan,
@@ -28,9 +32,63 @@ from pyGdbClient.llm.gateway import (
     MAX_RESULT_BYTES,
     ToolGateway,
 )
+from pyGdbClient.llm.policy import ProtectionPolicy
 from pyGdbClient.llm.tools import ToolValidationError
 from pyGdbClient.rpc import JsonRpcClient, RpcError
 from rpc_fakes import FakeRpcServer, RpcFailure
+
+
+@pytest.mark.parametrize("operation", ["upload", "download"])
+@pytest.mark.parametrize("approved", [False, True])
+def test_workspace_transfers_require_approval_and_download_stays_local(
+    operation: str, approved: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only consent dispatches a transfer, and a binary download never reaches the model."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    filename = "report.txt"
+    text = "résultat\n"
+    binary = b"\xff\x01private-file"
+    encoded = base64.b64encode(binary).decode("ascii")
+    method = f"workspace.{operation}"
+    args = {"filename": filename}
+    if operation == "upload":
+        args["content"] = text
+    response = (
+        {"path": filename, "size": len(text.encode())}
+        if operation == "upload"
+        else {"filename": filename, "offset": 0, "size": len(binary), "content": encoded}
+    )
+    requester = RecordingRequester(response=response)
+
+    async def approve(request: ApprovalRequest) -> ApprovalResponse:
+        assert all(route != method for route, _, _ in requester.requests)
+        invocation = json.loads(request.payload_json)["rpc_calls"][0]
+        assert invocation["method"] == method
+        if operation == "upload":
+            assert base64.b64decode(invocation["params"]["content"]).decode("utf-8") == text
+        return request.respond(approved=approved)
+
+    async def exercise() -> None:
+        plan = _plan(ToolCall("transfer", f"workspace_{operation}", args))
+        gateway = ToolGateway(requester, ProtectionPolicy(), approver=approve)
+        if not approved:
+            with pytest.raises(GatewayError):
+                await gateway.execute(plan, _context())
+            assert all(route != method for route, _, _ in requester.requests)
+            assert not list(tmp_path.iterdir())
+            return
+        (result,) = await gateway.execute(plan, _context())
+        assert not result.is_error
+        assert sum(route == method for route, _, _ in requester.requests) == 1
+        if operation == "download":
+            metadata = json.loads(result.content)["result"]
+            path = Path(metadata["local_path"])
+            assert path.parent.parent == tmp_path
+            assert path.read_bytes() == binary
+            assert metadata == {"filename": filename, "local_path": str(path), "size": len(binary)}
+            assert encoded not in result.content
+
+    asyncio.run(exercise())
 
 
 def _context() -> TargetContext:
