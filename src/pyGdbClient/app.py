@@ -156,10 +156,11 @@ class PyGdbClientApp(App[None]):
     }
     """
 
-    BINDINGS = [("ctrl+q", "quit", "Quit")]
+    BINDINGS = [("ctrl+q", "quit", "Quit"),("ctrl+t", "toggle_dark", "toggle dark mode")]
 
     def __init__(self, url: str, agent: AgentSettings | None = None) -> None:
         super().__init__()
+        self.dark = False
         self.client = JsonRpcClient(url)
         self._transcript = AgentTranscript()
         self._audit = AuditContextManager()
