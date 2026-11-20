@@ -5,12 +5,12 @@
 
 import asyncio
 import base64
-import binascii
 import json
 from pathlib import Path
 import shlex
-from tempfile import NamedTemporaryFile
+import sqlite3
 from typing import Any
+from uuid import uuid4
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -19,8 +19,10 @@ from textual.events import Key, Resize
 from textual.widgets import Footer, Header, Input, RichLog, Select, Static, Tree
 
 from .audit import AuditContextManager
+from .audit_report import make_report, write_report
 from .llm.approval import ApprovalRequest, ApprovalResponse
 from .llm.approval_screen import ApprovalScreen
+from .llm.contracts import JsonObject
 from .llm.controller import AgentController, AgentSettings, OpenedSession
 from .llm.orchestrator import AgentEvent
 from .llm.rendering import (
@@ -34,13 +36,15 @@ from .llm.rendering import (
     describe_usage,
     printable,
 )
+from .llm.store import ContextStore, StoreError
 from .project import load_project, supported_project_types
 from .rpc import JsonRpcClient, RpcError
-from .workspace import validate_workspace_filename
+from .workspace import download_workspace_file, validate_workspace_filename
 
-_WORKSPACE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _COMMAND_HISTORY_LIMIT = 40
 _CREDITS_REFRESH_SECONDS = 60.0
+_AUDIT_SUBCOMMANDS = {"start", "status", "resume", "stop", "--export"}
+_AUDIT_LOCAL = {"status", "--export"}
 _AGENT_COMMANDS = {"/status", "/new", "/compact", "/sessions", "/cancel", "/end"}
 _AGENT_HELP = (
     ("TEXT", "Send a natural-language request; the first one opens a session."),
@@ -163,6 +167,11 @@ class PyGdbClientApp(App[None]):
         self.client = JsonRpcClient(url)
         self._transcript = AgentTranscript()
         self._audit = AuditContextManager()
+        self._agent_settings = agent
+        self._audit_journal: ContextStore | None = None
+        self._audit_transition = False
+        self._manual_running = 0
+        self._agent_running = 0
         self._agent = (
             None
             if agent is None
@@ -205,6 +214,14 @@ class PyGdbClientApp(App[None]):
         response: ApprovalResponse | None = None
         mount = None
         try:
+            self._record_audit(
+                "approval_requested",
+                {
+                    "request_id": request.request_id,
+                    "digest": request.digest,
+                    "request": json.loads(request.payload_json),
+                },
+            )
             mount = self.push_screen(screen, respond)
             await mount
             response = await future
@@ -216,6 +233,12 @@ class PyGdbClientApp(App[None]):
             )
             return response if response is not None else request.respond(approved=False)
         finally:
+            outcome = "closed_without_consent"
+            if response is not None:
+                outcome = "approved" if response.approved else "rejected"
+            self._record_audit(
+                "approval_decision", {"request_id": request.request_id, "outcome": outcome}
+            )
             if self.is_running and mount is not None and screen in self.screen_stack:
                 await mount
                 await screen.dismiss(None)
@@ -436,22 +459,32 @@ class PyGdbClientApp(App[None]):
         return self._agent
 
     async def _agent_request(self, text: str) -> None:
+        if self._audit_transition:
+            self._append_output("Wait for the audit snapshot to complete", error=True)
+            return
         agent = self._agent_ready()
         if agent is None:
             return
         self._append_output(f"agent› {printable(text)}")
+        self._agent_running += 1
         try:
             await agent.submit(text, on_session=self._show_agent_session)
         except Exception as error:
             self._show_agent_error(error)
         finally:
+            self._agent_running -= 1
             self.refresh_credits()
 
     async def _agent_command(self, name: str, argument: str = "") -> None:
         local = name in {"/status", "/sessions"}
+        if not local and self._audit_transition:
+            self._append_output("Wait for the audit snapshot to complete", error=True)
+            return
         agent = self._agent if local and self._agent is not None else self._agent_ready()
         if agent is None:
             return
+        if not local:
+            self._agent_running += 1
         try:
             if name == "/status":
                 self._write_output(describe_status(agent.provider_id, await agent.status()))
@@ -474,6 +507,9 @@ class PyGdbClientApp(App[None]):
                 self._append_output("No agent session is open")
         except Exception as error:
             self._show_agent_error(error)
+        finally:
+            if not local:
+                self._agent_running -= 1
 
     def _show_agent_session(self, session: OpenedSession) -> None:
         self._write_output(describe_session(session))
@@ -482,6 +518,7 @@ class PyGdbClientApp(App[None]):
         self._write_output(self._transcript.feed(event))
 
     def _show_agent_error(self, error: Exception) -> None:
+        self._record_audit("agent_error", {"message": str(error) or type(error).__name__})
         self._write_output(self._transcript.flush())
         self._append_output(
             f"Agent error: {printable(str(error) or type(error).__name__)}", error=True
@@ -541,32 +578,76 @@ class PyGdbClientApp(App[None]):
 
     async def execute_command(self, command: str, *, show_command: bool = True) -> None:
         """Send a natural GDB/toolkit/OCD command to the server."""
-        if not self._connected:
+        words = command.split(maxsplit=2)
+        is_audit = bool(words) and words[0].lower() == "audit"
+        local = is_audit and len(words) > 1 and words[1] in _AUDIT_LOCAL
+        if not self._connected and not local:
             self._append_output("Not connected to pyGdbServer", error=True)
             return
         if show_command:
             self._append_output(f"› {command}")
         try:
+            if is_audit:
+                await self._execute_audit_command(command)
+            elif self._audit_transition:
+                raise StoreError("wait for the audit snapshot to complete")
+            else:
+                await self._execute_manual_command(command)
+        except (RpcError, OSError, ValueError, StoreError, sqlite3.Error) as error:
+            self._append_output(str(error), error=True)
+
+    def _record_audit(self, kind: str, payload: JsonObject) -> None:
+        if self._audit_journal is not None:
+            try:
+                self._audit_journal.record_audit(kind, payload)
+            except (StoreError, sqlite3.Error, ValueError) as error:
+                self._append_output(f"Audit event not recorded: {error}", error=True)
+
+    def _begin_manual(self, command: str) -> str:
+        operation = uuid4().hex
+        self._record_audit("manual_start", {"operation_id": operation, "command": command})
+        return operation
+
+    def _finish_manual(self, operation: str, outcome: str, data: JsonObject) -> None:
+        self._record_audit(
+            "manual_result", {"operation_id": operation, "outcome": outcome, "data": data}
+        )
+
+    async def _execute_manual_command(self, command: str) -> None:
+        self._manual_running += 1
+        operation = self._begin_manual(command)
+        try:
             if await self._execute_project_command(command):
+                project = self._audit.project
+                self._finish_manual(operation, "ok", {} if project is None else project.to_json())
+                await self._audit_checkpoint()
                 return
-            if await self._execute_audit_command(command):
-                return
-            if await self._execute_workspace_command(command):
+            workspace = await self._execute_workspace_command(command)
+            if workspace is not None:
+                self._finish_manual(operation, "ok", workspace)
                 return
             response = await self.client.request(
                 "command.execute", {"command": command}, timeout=300
             )
-            output = response.get("output", [])
-            self._append_rendered_output(output)
-            if command.strip().lower() == "lscpu":
-                summary = self.query_one("#target-summary", RichLog)
-                summary.clear()
-                for part in output:
-                    summary.write(Text.from_ansi(part))
-            if response.get("class") == "error":
-                self._append_output(response.get("record", "GDB command failed"), error=True)
-        except (RpcError, ConnectionError, TimeoutError, OSError, ValueError) as error:
-            self._append_output(str(error), error=True)
+        except asyncio.CancelledError:
+            self._finish_manual(operation, "cancelled", {})
+            raise
+        except (RpcError, OSError, ValueError) as error:
+            self._finish_manual(operation, "error", {"message": str(error)})
+            raise
+        finally:
+            self._manual_running -= 1
+        failed = response.get("class") == "error"
+        self._finish_manual(operation, "error" if failed else "ok", response)
+        output = response.get("output", [])
+        self._append_rendered_output(output)
+        if command.strip().lower() == "lscpu":
+            summary = self.query_one("#target-summary", RichLog)
+            summary.clear()
+            for part in output:
+                summary.write(Text.from_ansi(part))
+        if failed:
+            self._append_output(response.get("record", "GDB command failed"), error=True)
         if command.strip().lower().startswith(("svd load", "svd read")):
             await self.refresh_svd_tree()
         normalized = command.strip().lower()
@@ -577,9 +658,10 @@ class PyGdbClientApp(App[None]):
         """Select a physical CPU through the structured server RPC."""
         if event.select.id != "core-select" or event.value is Select.BLANK:
             return
-        if not self._connected or self._core_selecting:
+        if not self._connected or self._core_selecting or self._audit_transition:
             return
         self._core_selecting = True
+        operation = self._begin_manual(f"select core {event.value}")
         selector = self.query_one("#core-select", Select)
         selector.disabled = True
         try:
@@ -587,9 +669,15 @@ class PyGdbClientApp(App[None]):
                 "target.select_core", {"core": event.value}, timeout=60
             )
             core = response["core"]
+            self._finish_manual(operation, "ok", response)
             self._append_output(f"Active core: {core['id']} ({core['name']})")
+            await self._audit_checkpoint()
         except (RpcError, ConnectionError, TimeoutError) as error:
+            self._finish_manual(operation, "error", {"message": str(error)})
             self._append_output(f"Core selection failed: {error}", error=True)
+        except asyncio.CancelledError:
+            self._finish_manual(operation, "cancelled", {})
+            raise
         finally:
             self._core_selecting = False
             await self._refresh_target_status()
@@ -668,21 +756,110 @@ class PyGdbClientApp(App[None]):
         if name != "audit":
             return False
         arguments = shlex.split(command)[1:]
+        if arguments and arguments[0] in _AUDIT_SUBCOMMANDS:
+            await self._execute_audit_dossier(arguments[0], arguments[1:])
+            return True
         if len(arguments) > 1:
             raise ValueError("Usage: audit [FILE]")
         audit = await self._audit.refresh(self.client)
         self._write_output(describe_audit(audit))
+        await self._audit_checkpoint()
         if arguments:
             path = Path(arguments[0]).expanduser()
+            self._check_audit_path(path)
             document = json.dumps(audit.to_json(), indent=2, ensure_ascii=False) + "\n"
             await asyncio.to_thread(path.write_text, document, "utf-8")
             self._append_output(f"Audit context saved to {path}")
         return True
 
-    async def _execute_workspace_command(self, command: str) -> bool:
+    def _check_audit_path(self, path: Path) -> None:
+        if self._agent_settings is None or self._agent_settings.store_path is None:
+            return
+        store = self._agent_settings.store_path.resolve()
+        for protected in (
+            store,
+            *(store.with_name(store.name + s) for s in ("-wal", "-shm", "-journal")),
+        ):
+            if path.resolve() == protected or (
+                path.exists() and protected.exists() and path.samefile(protected)
+            ):
+                raise ValueError("export destination would overwrite the audit database")
+
+    async def _audit_checkpoint(self) -> None:
+        if self._audit_journal is not None and self._audit_journal.active_audit is not None:
+            snapshot = await self._audit.refresh(self.client, detailed_svd=True)
+            self._record_audit("snapshot", {"stage": "checkpoint", "data": snapshot.to_json()})
+
+    async def _execute_audit_dossier(self, action: str, arguments: list[str]) -> None:
+        if action in {"start", "resume"} and (len(arguments) != 1 or not arguments[0].strip()):
+            raise ValueError(f"Usage: audit {action} {'TITLE' if action == 'start' else 'ID'}")
+        if action in {"stop", "status"} and arguments:
+            raise ValueError(f"Usage: audit {action}")
+        if self._agent is None or self._agent_settings is None:
+            raise StoreError("audit dossiers require --llm PROVIDER and --llm-store FILE")
+        journal = self._agent.audit_store()
+        self._audit_journal = journal
+        if action == "status":
+            if journal.active_audit is None:
+                self._append_output("No audit is active")
+            else:
+                metadata, events = journal.read_audit()
+                report = make_report(metadata, events, None)
+                gaps = report["collection_gaps"]
+                self._append_output(
+                    f"Active audit: {journal.active_audit} ({len(gaps) if isinstance(gaps, list) else 0} collection gaps)"
+                )
+            return
+        if action == "--export":
+            await self._export_audit(journal, arguments)
+            return
+        if (
+            self._audit_transition
+            or self._manual_running
+            or self._core_selecting
+            or self._agent_running
+        ):
+            raise StoreError("wait for the current command or agent request before changing audit")
+        if action == "stop" and journal.active_audit is None:
+            raise StoreError("no audit is active")
+        if action != "stop" and journal.active_audit is not None:
+            raise StoreError("an audit is already active")
+        self._audit_transition = True
+        try:
+            snapshot = (await self._audit.refresh(self.client, detailed_svd=True)).to_json()
+            if action == "start":
+                self._append_output(f"Audit started: {journal.start_audit(arguments[0], snapshot)}")
+            elif action == "resume":
+                journal.resume_audit(arguments[0], snapshot)
+                self._append_output(f"Audit resumed: {arguments[0]}")
+            else:
+                self._append_output(f"Audit closed: {journal.stop_audit(snapshot)}")
+        finally:
+            self._audit_transition = False
+
+    async def _export_audit(self, journal: ContextStore, arguments: list[str]) -> None:
+        usage = "Usage: audit --export FILE [--id ID] [--raw]"
+        if not arguments or arguments[0].startswith("--"):
+            raise ValueError(usage)
+        path = Path(arguments[0]).expanduser()
+        options = arguments[1:]
+        raw = "--raw" in options
+        if raw:
+            options.remove("--raw")
+        if options and (len(options) != 2 or options[0] != "--id" or options[1].startswith("--")):
+            raise ValueError(usage)
+        self._check_audit_path(path)
+        metadata, events = journal.read_audit(options[1] if options else None)
+        assert self._agent_settings is not None
+        redactor = None if raw else self._agent_settings.redactor
+        document = make_report(metadata, events, redactor)
+        await asyncio.to_thread(write_report, path, document)
+        self._append_output(f"Audit report saved to {path}" + (" (unmasked)" if raw else ""))
+
+    async def _execute_workspace_command(self, command: str) -> JsonObject | None:
         name = command.split(maxsplit=1)[0].lower() if command.strip() else ""
         if name not in {"download", "upload", "ls", "erase"}:
-            return False
+            return None
         arguments = shlex.split(command)[1:]
         if name == "upload":
             if len(arguments) != 1:
@@ -698,8 +875,11 @@ class PyGdbClientApp(App[None]):
                 raise ValueError("Usage: download <server-file> [local-dir]")
             filename = validate_workspace_filename(arguments[0])
             local_directory = Path(arguments[1]).expanduser() if len(arguments) == 2 else Path.cwd()
-            destination, size = await self._download_workspace_file(filename, local_directory)
+            destination, size = await download_workspace_file(
+                self.client, filename, local_directory
+            )
             self._append_output(f"Downloaded {filename} to {destination} ({size} bytes)")
+            return {"filename": filename, "destination": str(destination), "size": size}
         elif name == "erase":
             if len(arguments) != 1:
                 raise ValueError("Usage: erase <server-file>")
@@ -714,39 +894,8 @@ class PyGdbClientApp(App[None]):
             for entry in response["entries"]:
                 suffix = "/" if entry["is_directory"] else ""
                 self._append_output(f"  {entry['name']}{suffix}")
-        return True
-
-    async def _download_workspace_file(
-        self, filename: str, local_directory: Path
-    ) -> tuple[Path, int]:
-        """Download a server workspace file in bounded chunks and replace atomically."""
-        local_directory = local_directory.resolve()
-        if not local_directory.is_dir():
-            raise NotADirectoryError(f"Not a directory: {local_directory}")
-        destination = local_directory / filename
-        temporary_path: Path | None = None
-        total_size: int | None = None
-        offset = 0
-        try:
-            with NamedTemporaryFile(dir=local_directory, delete=False) as temporary:
-                temporary_path = Path(temporary.name)
-                while total_size is None or offset < total_size:
-                    params: dict[str, Any] = {
-                        "filename": filename,
-                        "offset": offset,
-                        "chunk_size": _WORKSPACE_DOWNLOAD_CHUNK_SIZE,
-                    }
-                    response = await self.client.request("workspace.download", params, timeout=300)
-                    total_size, content = _decode_download_chunk(
-                        response, filename, offset, total_size
-                    )
-                    temporary.write(content)
-                    offset += len(content)
-            temporary_path.replace(destination)
-            return destination, total_size
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+        result: JsonObject = response
+        return result
 
     async def _load_svd(self) -> None:
         """Load the target-matched SVD once and populate the peripheral tree."""
@@ -855,40 +1004,6 @@ def _read_upload_file(path: Path) -> bytes:
     return content
 
 
-def _decode_download_chunk(
-    response: Any, filename: str, offset: int, expected_size: int | None
-) -> tuple[int, bytes]:
-    """Validate a server download chunk before writing it to the local file."""
-    if not isinstance(response, dict):
-        raise ValueError("invalid download response")
-    response_filename = response.get("filename")
-    response_offset = response.get("offset")
-    size = response.get("size")
-    encoded_content = response.get("content")
-    if response_filename != filename:
-        raise ValueError("download response filename does not match the request")
-    if (
-        isinstance(response_offset, bool)
-        or not isinstance(response_offset, int)
-        or response_offset != offset
-    ):
-        raise ValueError("download response offset does not match the request")
-    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-        raise ValueError("download response has an invalid file size")
-    if expected_size is not None and size != expected_size:
-        raise ValueError("server file changed while downloading")
-    if not isinstance(encoded_content, str):
-        raise ValueError("download response content must be base64")
-    try:
-        content = base64.b64decode(encoded_content, validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise ValueError("download response content is not valid base64") from error
-    expected_chunk_size = min(_WORKSPACE_DOWNLOAD_CHUNK_SIZE, size - offset)
-    if expected_chunk_size < 0 or len(content) != expected_chunk_size:
-        raise ValueError("download response has an invalid chunk size")
-    return size, content
-
-
 def _help_text(
     ocd_executable: str, toolkit_commands: list[dict[str, Any]] | None = None
 ) -> list[Text]:
@@ -940,6 +1055,8 @@ def _help_text(
             "inside that client workspace; source disclosure still requires provider consent."
         ),
         Text("  audit [FILE]  Show the audit context; optionally save it as JSON to a local FILE."),
+        Text("    audit start TITLE | status | resume ID | stop  Manage a dossier (--llm-store)."),
+        Text("    audit --export FILE [--id ID] [--raw]  Export a validated JSON dossier."),
         Text(
             "    Refreshes project, software identity and digests, RTOS, execution state, cores,"
             " SVD metadata and server status; unavailable parts include a reason."

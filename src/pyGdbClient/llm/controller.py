@@ -39,7 +39,7 @@ from .provider import (
     UsageReporter,
 )
 from .recollection import MIN_RECOLLECTION_CHARS, build_recollection
-from .store import ContextStore, HistoryEntry, StoredSession
+from .store import ContextStore, HistoryEntry, StoreError, StoredSession
 from .sources import SourceBrowser, SourceError
 from .tools import ToolCatalogue
 
@@ -175,6 +175,12 @@ class AgentController:
     def running(self) -> bool:
         """Return whether an auditor request is in progress."""
         return self._orchestrator is not None and self._orchestrator.running
+
+    def audit_store(self) -> ContextStore:
+        """Return the shared persistent journal for the dashboard's audit dossier."""
+        if self._settings.store_path is None:
+            raise StoreError("audit dossiers require --llm-store FILE")
+        return self._open_store()
 
     @property
     def usage(self) -> ContextUsage | None:

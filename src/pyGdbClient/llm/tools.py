@@ -4,17 +4,24 @@
 """Fixed tool routes, argument schemas and locally owned effect classifications."""
 
 from dataclasses import dataclass
+import base64
 import json
 import math
 from typing import Literal
 
-from pyGdbClient.workspace import WORKSPACE_FILENAME_MAX_LENGTH, validate_workspace_filename
+from pyGdbClient.workspace import (
+    AGENT_DOWNLOAD_MAX_BYTES,
+    WORKSPACE_DOWNLOAD_CHUNK_SIZE,
+    WORKSPACE_FILENAME_MAX_LENGTH,
+    validate_workspace_filename,
+)
 
 from .contracts import ActionEffect, JsonObject, JsonValue, ToolCall, ToolDefinition
 from .sources import SourceError, validate_source_arguments
 
 MAX_MEMORY_READ_BYTES = 4096
 MAX_COMMAND_CHARACTERS = 4096
+MAX_AGENT_UPLOAD_BYTES = 16 * 1024
 
 
 class ToolValidationError(ValueError):
@@ -24,7 +31,7 @@ class ToolValidationError(ValueError):
 @dataclass(frozen=True)
 class _Parameter:
     name: str
-    kind: Literal["string", "integer", "number"]
+    kind: Literal["string", "text", "integer", "number"]
     description: str
     required: bool = True
     minimum: int | float = 0
@@ -33,10 +40,15 @@ class _Parameter:
     default: int | float | None = None
 
     def schema(self) -> JsonObject:
-        result: JsonObject = {"type": self.kind, "description": self.description}
+        result: JsonObject = {
+            "type": "string" if self.kind == "text" else self.kind,
+            "description": self.description,
+        }
         if self.kind == "string":
             result.update(minLength=1, maxLength=self.max_length, pattern=r"\S")
             result["not"] = {"pattern": r"[\u0000-\u001f\u007f]"}
+        elif self.kind == "text":
+            result["maxLength"] = self.max_length
         else:
             result.update(minimum=self.minimum, maximum=self.maximum)
         if self.default is not None:
@@ -52,6 +64,8 @@ class _Parameter:
                 and len(value) <= self.max_length
                 and all(ord(character) >= 32 and ord(character) != 127 for character in value)
             )
+        elif self.kind == "text":
+            valid = isinstance(value, str) and len(value) <= self.max_length
         elif not isinstance(value, bool) and isinstance(value, (int, float)):
             valid = (
                 (self.kind == "number" or isinstance(value, int))
@@ -66,6 +80,12 @@ _TIMEOUT = _Parameter(
     "timeout", "number", "RPC execution timeout in seconds.", False, 0.001, 300, default=30
 )
 _COMMAND = _Parameter("command", "string", "One command line; never considered safe by its name.")
+_WORKSPACE_FILENAME = _Parameter(
+    "filename",
+    "string",
+    "Plain workspace file name; no directory separators, '.' or '..'.",
+    max_length=WORKSPACE_FILENAME_MAX_LENGTH,
+)
 
 
 @dataclass(frozen=True)
@@ -161,18 +181,41 @@ _TOOLS = (
         ),
     ),
     _Tool(
+        "workspace_list",
+        "List names and entry types in the server workspace (workspace.list), without contents.",
+        "workspace.list",
+    ),
+    _Tool(
+        "workspace_upload",
+        "Upload generated text to the server workspace (workspace.upload); may replace a file "
+        "and requires auditor approval. This tool cannot read a local file.",
+        "workspace.upload",
+        (ActionEffect.PERSISTENT_CHANGE,),
+        (
+            _WORKSPACE_FILENAME,
+            _Parameter(
+                "content",
+                "text",
+                f"UTF-8 text, at most {MAX_AGENT_UPLOAD_BYTES} bytes.",
+                max_length=MAX_AGENT_UPLOAD_BYTES,
+            ),
+        ),
+    ),
+    _Tool(
+        "workspace_download",
+        "Save one server workspace file in a new private client directory (workspace.download). "
+        f"Requires auditor approval, up to {AGENT_DOWNLOAD_MAX_BYTES} bytes. "
+        "Returns file metadata only, never its contents.",
+        "workspace.download",
+        (ActionEffect.PERSISTENT_CHANGE,),
+        (_WORKSPACE_FILENAME,),
+    ),
+    _Tool(
         "workspace_erase",
         "Delete one server workspace file. Requires auditor approval; never follows symlinks.",
         "workspace.erase",
         (ActionEffect.PERSISTENT_CHANGE,),
-        (
-            _Parameter(
-                "filename",
-                "string",
-                "Plain workspace file name; no directory separators, '.' or '..'.",
-                max_length=WORKSPACE_FILENAME_MAX_LENGTH,
-            ),
-        ),
+        (_WORKSPACE_FILENAME,),
     ),
     _Tool(
         "toolkit_command",
@@ -287,14 +330,8 @@ class ToolCatalogue:
                 validate_source_arguments(tool.name, arguments)
             except SourceError as error:
                 raise ToolValidationError(str(error)) from error
-        elif tool.name == "workspace_erase":
-            filename = arguments["filename"]
-            if not isinstance(filename, str):
-                raise ToolValidationError("filename must be a string")
-            try:
-                validate_workspace_filename(filename)
-            except ValueError as error:
-                raise ToolValidationError(str(error)) from error
+        elif tool.name.startswith("workspace_"):
+            params = _workspace_params(tool.name, arguments)
         elif tool.name == "memory_read":
             address, length = arguments["address"], arguments["length"]
             if not isinstance(address, int) or not isinstance(length, int):
@@ -331,3 +368,31 @@ class ToolCatalogue:
             float(timeout),
             tool.effects,
         )
+
+
+def _workspace_params(name: str, arguments: JsonObject) -> JsonObject:
+    if name == "workspace_list":
+        return {}
+    filename = arguments["filename"]
+    if not isinstance(filename, str):
+        raise ToolValidationError("filename must be a string")
+    try:
+        validate_workspace_filename(filename)
+    except ValueError as error:
+        raise ToolValidationError(str(error)) from error
+    if name == "workspace_upload":
+        text = arguments["content"]
+        if not isinstance(text, str):
+            raise ToolValidationError("content must be a string")
+        try:
+            content = text.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ToolValidationError("content must be valid UTF-8 text") from None
+        if len(content) > MAX_AGENT_UPLOAD_BYTES:
+            raise ToolValidationError(
+                f"content must not exceed {MAX_AGENT_UPLOAD_BYTES} UTF-8 bytes"
+            )
+        return {"filename": filename, "content": base64.b64encode(content).decode("ascii")}
+    if name == "workspace_download":
+        return {"filename": filename, "offset": 0, "chunk_size": WORKSPACE_DOWNLOAD_CHUNK_SIZE}
+    return dict(arguments)

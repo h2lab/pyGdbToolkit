@@ -316,6 +316,33 @@ earlier approvals are not inherited, and every new plan is checked again.
 Long conversations continue the same way automatically when
 `--llm-context-limit` is reached; `/compact` triggers it manually.
 
+### Export an audit dossier
+
+Start the dashboard with `--llm PROVIDER --llm-store FILE`, then use:
+
+```text
+audit start "Firmware review"
+audit status
+audit stop
+audit --export report.json
+```
+
+The dossier starts at `audit start`, not at the beginning of the conversation.
+It includes target snapshots, observed agent messages and tool results, approval
+decisions, and manual commands and their outcomes. `/new`, `/compact` and
+`/resume` do not end the dossier. After restarting with the same database, use
+`audit resume ID` to reattach an open dossier; the unobserved interval is
+reported as a gap. `audit --export FILE --id ID` selects a particular dossier,
+and exporting an open dossier produces a provisional report. `audit` and
+`audit FILE` still show and save single snapshots.
+
+The report is validated against the installed package resource
+`pyGdbClient/schemas/audit-report-v1.schema.json`.
+Recognizable secrets are masked by default using the configured rules, even in
+LLM test-data mode. Review the export before sharing: masking is best effort
+and does not remove all target data, source content or paths. Use `--raw` only
+when the recipient may see the unmasked data. PDF generation is separate.
+
 ## Confidentiality
 
 By default, recognizable textual secrets (keys, tokens, credential

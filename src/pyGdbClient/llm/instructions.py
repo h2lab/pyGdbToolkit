@@ -33,6 +33,9 @@ def agent_instructions(context: TargetContext, audit: JsonObject | None = None) 
         "Propose only the declared tools; the local orchestrator decides whether to execute. "
         "Explain the purpose and risks of the complete proposed chain before requesting tools. "
         "A denial is not permission to bypass policy. Never claim an unexecuted action succeeded. "
+        "Use the declared workspace tools for server workspace operations. "
+        "Uploads, downloads and deletion require explicit auditor approval. "
+        "A download saves a file locally for the auditor; its contents are not a tool result. "
         "Server paths are metadata, not client files to read. Target snapshot:\n"
         + json.dumps(asdict(context), ensure_ascii=True, allow_nan=False)
     )

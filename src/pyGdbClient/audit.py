@@ -258,6 +258,36 @@ def _identity(data: JsonObject) -> JsonObject:
     return data
 
 
+def _detailed_svd(data: JsonObject) -> JsonObject | str:
+    if data.get("loaded") is not True:
+        return "no SVD device is loaded in the GDB session; use svd load"
+    peripherals = data.get("peripherals")
+    if not isinstance(data.get("device"), str) or not isinstance(peripherals, list):
+        raise AuditContextError("svd.peripherals returned malformed device metadata")
+    for peripheral in peripherals:
+        if not _svd_address_item(peripheral, "base_address") or not isinstance(peripheral, dict):
+            raise AuditContextError("svd.peripherals returned a malformed peripheral")
+        registers = peripheral.get("registers")
+        if not isinstance(registers, list) or not all(
+            _svd_address_item(register, "address_offset") for register in registers
+        ):
+            raise AuditContextError("svd.peripherals returned a malformed register list")
+    return {**data, "peripheral_count": len(peripherals), "truncated": False}
+
+
+def _svd_address_item(item: JsonValue, address_field: str) -> bool:
+    if not isinstance(item, dict):
+        return False
+    address = item.get(address_field)
+    return (
+        isinstance(item.get("name"), str)
+        and (item.get("description") is None or isinstance(item["description"], str))
+        and isinstance(address, int)
+        and not isinstance(address, bool)
+        and address >= 0
+    )
+
+
 class AuditContextManager:
     """Hold the audit context of one client session and refresh it from pyGdbServer.
 
@@ -305,13 +335,16 @@ class AuditContextManager:
         """Forget the loaded project."""
         self._project = None
 
-    async def refresh(self, client: RpcRequester) -> AuditContext:
+    async def refresh(self, client: RpcRequester, *, detailed_svd: bool = False) -> AuditContext:
         """Gather a new audit context from pyGdbServer.
 
         Parameters
         ----------
         client : RpcRequester
             Connected JSON-RPC client.
+        detailed_svd : bool
+            Keep the full SVD metadata for a local report, without replacing the
+            compact agent snapshot.
 
         Returns
         -------
@@ -324,13 +357,13 @@ class AuditContextManager:
             self._observe(client, "rtos.status", {"timeout": timeout}, _rtos),
             self._observe(client, "target.status", None, _identity),
             self._observe(client, "target.cores", {"timeout": timeout}, _identity),
-            self._observe(client, "svd.peripherals", None, _svd),
+            self._observe(client, "svd.peripherals", None, _detailed_svd if detailed_svd else _svd),
             self._observe(client, "server.status", None, _identity),
         )
-        self._latest = AuditContext(
-            self._clock(), self._project, rtos, execution, cores, svd, server
-        )
-        return self._latest
+        snapshot = AuditContext(self._clock(), self._project, rtos, execution, cores, svd, server)
+        if not detailed_svd:
+            self._latest = snapshot
+        return snapshot
 
     async def _observe(
         self,

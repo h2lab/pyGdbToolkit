@@ -12,12 +12,13 @@ from pathlib import Path
 import sqlite3
 from types import TracebackType
 from typing import Self
+from uuid import uuid4
 
 from .context import parse_target_context
 from .contracts import JsonObject, JsonValue, TargetContext
 
 _APPLICATION_ID = 0x5047444C
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _SCHEMA = (
     """CREATE TABLE sessions (
         session_id TEXT PRIMARY KEY,
@@ -42,6 +43,18 @@ _SCHEMA = (
         PRIMARY KEY (session_id, sequence),
         FOREIGN KEY (session_id, context_id)
             REFERENCES contexts(session_id, context_id) ON DELETE CASCADE
+    )""",
+)
+_AUDIT_SCHEMA = (
+    """CREATE TABLE audits (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, started_at TEXT NOT NULL,
+        stopped_at TEXT, writer TEXT NOT NULL
+    )""",
+    """CREATE TABLE audit_events (
+        audit_id TEXT NOT NULL REFERENCES audits(id),
+        sequence INTEGER NOT NULL, created_at TEXT NOT NULL, kind TEXT NOT NULL,
+        payload TEXT NOT NULL, context_key TEXT,
+        PRIMARY KEY (audit_id, sequence), UNIQUE (audit_id, context_key)
     )""",
 )
 
@@ -138,7 +151,9 @@ class ContextStore:
     """
 
     def __init__(self, path: str | Path) -> None:
-        """Open a database, creating schema version 1 only in an empty database."""
+        """Open or migrate a conversation database."""
+        self._active_audit: str | None = None
+        self._writer = uuid4().hex
         self._connection = sqlite3.connect(path, isolation_level="IMMEDIATE")
         self._connection.row_factory = sqlite3.Row
         try:
@@ -155,6 +170,11 @@ class ContextStore:
             application = self._connection.execute("PRAGMA application_id").fetchone()[0]
             if version == _SCHEMA_VERSION and application == _APPLICATION_ID:
                 return
+            if version == 1 and application == _APPLICATION_ID:
+                for statement in _AUDIT_SCHEMA:
+                    self._connection.execute(statement)
+                self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+                return
             tables = self._connection.execute(
                 "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
             ).fetchall()
@@ -162,7 +182,7 @@ class ContextStore:
                 raise StoreError(
                     f"unsupported conversation database: application={application}, version={version}"
                 )
-            for statement in _SCHEMA:
+            for statement in (*_SCHEMA, *_AUDIT_SCHEMA):
                 self._connection.execute(statement)
             self._connection.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
             self._connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -183,6 +203,106 @@ class ContextStore:
     def close(self) -> None:
         """Close the connection idempotently; later operations fail explicitly."""
         self._connection.close()
+
+    @property
+    def active_audit(self) -> str | None:
+        """Return the dossier attached to this client run."""
+        return self._active_audit
+
+    def start_audit(self, title: str, snapshot: JsonObject) -> str:
+        """Open a dossier and commit its initial snapshot atomically."""
+        if self._active_audit is not None:
+            raise StoreError("an audit is already active")
+        audit_id = uuid4().hex
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO audits VALUES (?, ?, ?, NULL, ?)",
+                (audit_id, title, _now(), self._writer),
+            )
+            self._audit_event(audit_id, "snapshot", {"stage": "initial", "data": snapshot})
+        self._active_audit = audit_id
+        return audit_id
+
+    def resume_audit(self, audit_id: str, snapshot: JsonObject) -> None:
+        """Attach an open dossier and mark the unobserved interval."""
+        if self._active_audit is not None:
+            raise StoreError("an audit is already active")
+        with self._connection:
+            updated = self._connection.execute(
+                "UPDATE audits SET writer = ? WHERE id = ? AND stopped_at IS NULL",
+                (self._writer, audit_id),
+            )
+            if updated.rowcount != 1:
+                raise StoreError(f"no open audit with ID {audit_id}")
+            self._audit_event(audit_id, "gap", {"reason": "collection interrupted before resume"})
+            self._audit_event(audit_id, "snapshot", {"stage": "resumed", "data": snapshot})
+        self._active_audit = audit_id
+
+    def stop_audit(self, snapshot: JsonObject) -> str:
+        """Commit a final snapshot and close the active dossier."""
+        audit_id = self._active_audit
+        if audit_id is None:
+            raise StoreError("no audit is active")
+        with self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._audit_event(audit_id, "snapshot", {"stage": "final", "data": snapshot})
+            self._connection.execute(
+                "UPDATE audits SET stopped_at = ? WHERE id = ?", (_now(), audit_id)
+            )
+        self._active_audit = None
+        return audit_id
+
+    def record_audit(self, kind: str, payload: JsonObject) -> None:
+        """Append a client observation to the active dossier, if any."""
+        if self._active_audit is not None:
+            with self._connection:
+                self._connection.execute("BEGIN IMMEDIATE")
+                self._audit_event(self._active_audit, kind, payload)
+
+    def _audit_event(
+        self, audit_id: str, kind: str, payload: JsonObject, context_key: str | None = None
+    ) -> None:
+        updated = self._connection.execute(
+            """INSERT INTO audit_events
+               SELECT a.id, COALESCE((SELECT MAX(e.sequence) FROM audit_events e
+                   WHERE e.audit_id = a.id), 0) + 1, ?, ?, ?, ?
+               FROM audits a WHERE a.id = ? AND a.writer = ? AND a.stopped_at IS NULL
+               ON CONFLICT(audit_id, context_key) DO NOTHING""",
+            (_now(), kind, _encode(payload), context_key, audit_id, self._writer),
+        )
+        if updated.rowcount == 0:
+            owner = self._connection.execute(
+                "SELECT 1 FROM audits WHERE id = ? AND writer = ? AND stopped_at IS NULL",
+                (audit_id, self._writer),
+            ).fetchone()
+            if owner is None:
+                raise StoreError("audit is no longer attached to this client")
+
+    def read_audit(self, audit_id: str | None = None) -> tuple[JsonObject, list[JsonObject]]:
+        """Read a consistent dossier, defaulting to active or most recently closed."""
+        selected = self._active_audit if audit_id is None else audit_id
+        with self._connection:
+            self._connection.execute("BEGIN")
+            if selected is None:
+                row = self._connection.execute(
+                    """SELECT id, title, started_at, stopped_at FROM audits
+                       WHERE stopped_at IS NOT NULL ORDER BY stopped_at DESC, id LIMIT 1"""
+                ).fetchone()
+            else:
+                row = self._connection.execute(
+                    "SELECT id, title, started_at, stopped_at FROM audits WHERE id = ?", (selected,)
+                ).fetchone()
+            if row is None:
+                raise StoreError("no matching audit dossier")
+            events = self._connection.execute(
+                """SELECT sequence, created_at, kind, payload FROM audit_events
+                   WHERE audit_id = ? ORDER BY sequence""",
+                (row["id"],),
+            )
+            return dict(row), [
+                {**dict(event), "payload": _payload(json.loads(event["payload"]))}
+                for event in events
+            ]
 
     def create_session(
         self, session_id: str, provider_id: str, context: TargetContext, title: str = ""
@@ -285,6 +405,30 @@ class ContextStore:
                 "INSERT INTO entries VALUES (?, ?, ?, ?, ?, ?)",
                 (session_id, sequence, context.context_id, kind.value, encoded, created_at),
             )
+            if self._active_audit is not None:
+                session = self.get_session(session_id)
+                self._audit_event(
+                    self._active_audit,
+                    "llm_context",
+                    {
+                        "session_id": session_id,
+                        "provider": session.provider_id,
+                        "session_created_at": session.created_at,
+                        "context_id": context.context_id,
+                        "data": _payload(json.loads(_context_payload(context))),
+                    },
+                    _encode([session_id, context.context_id]),
+                )
+                self._audit_event(
+                    self._active_audit,
+                    f"llm_{kind.value}",
+                    {
+                        "session_id": session_id,
+                        "context_id": context.context_id,
+                        "entry_sequence": sequence,
+                        "data": _payload(json.loads(encoded)),
+                    },
+                )
         return HistoryEntry(
             sequence, context.context_id, kind, _payload(json.loads(encoded)), created_at
         )
