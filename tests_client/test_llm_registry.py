@@ -357,6 +357,33 @@ def test_agent_is_disabled_without_llm() -> None:
     assert arguments.url == "ws://server:1"
 
 
+def test_knowledge_tools_require_llm_and_knowledge_url(capsys: pytest.CaptureFixture[str]) -> None:
+    registry = default_registry()
+    parser, arguments = _parse(registry, "--knowledge-url", "http://localhost:8081")
+    with pytest.raises(SystemExit):
+        agent_settings(parser, arguments, registry, {})
+    assert "--llm" in capsys.readouterr().err
+
+
+def test_knowledge_options_configure_client_without_exposing_read_token(tmp_path: Path) -> None:
+    token_file = tmp_path / "read-token"
+    token_file.write_text("test-read-token\n", encoding="utf-8")
+    registry = ProviderRegistry((ScriptedFactory(),))
+    parser, arguments = _parse(
+        registry,
+        "--llm",
+        "scripted",
+        "--knowledge-url",
+        "http://localhost:8081",
+        "--knowledge-rd-token",
+        str(token_file),
+    )
+    settings = agent_settings(parser, arguments, registry, {})
+    assert settings is not None and settings.knowledge is not None
+    assert "test-read-token" not in repr(settings)
+    assert "test-read-token" not in parser.format_help()
+
+
 def test_test_data_mode_is_explicit() -> None:
     registry = ProviderRegistry((ScriptedFactory(),))
     parser, arguments = _parse(registry, "--llm", "scripted", "--llm-test-data")
@@ -373,6 +400,7 @@ def test_test_data_mode_is_explicit() -> None:
         ("--llm", "scripted", "--llm-test-data", "--llm-redact", "board"),
         ("--llm-redact", "SN-[0-9]+"),
         ("--llm-context-limit", "50000"),
+        ("--knowledge-rd-token", "read-token"),
         ("--llm", "scripted", "--llm-redact", "("),
         ("--llm", "scripted", "--llm-redact", "a*"),
         ("--llm", "scripted", "--llm-context-limit", "100"),

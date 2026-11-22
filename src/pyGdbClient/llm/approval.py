@@ -39,10 +39,14 @@ type AuditorApprover = Callable[[ApprovalRequest], Awaitable[ApprovalResponse]]
 
 
 def create_approval_request(
-    plan: ActionPlan, context: TargetContext, decision: PolicyDecision
+    plan: ActionPlan,
+    context: TargetContext,
+    decision: PolicyDecision,
+    *,
+    knowledge_enabled: bool = False,
 ) -> ApprovalRequest:
     """Freeze the normalized plan, exact RPC routes, context and policy explanation."""
-    catalogue = ToolCatalogue()
+    catalogue = ToolCatalogue(include_knowledge=knowledge_enabled)
     calls = tuple(catalogue.prepare(step.call) for step in plan.steps)
     normalized = ActionPlan(
         plan.plan_id,

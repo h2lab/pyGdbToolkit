@@ -23,6 +23,7 @@ from .contracts import (
     TargetPolicy,
     ToolResult,
 )
+from .knowledge import KnowledgeClient, KnowledgeError
 from .tools import ToolCatalogue
 from .sources import SourceBrowser, SourceError
 
@@ -110,6 +111,7 @@ class ToolGateway:
         approval_timeout: float = 120.0,
         sources: SourceBrowser | None = None,
         sources_current: Callable[[], bool] | None = None,
+        knowledge: KnowledgeClient | None = None,
     ) -> None:
         """Bind transport, policy and an optional auditor UI with a finite deadline."""
         if (
@@ -124,7 +126,8 @@ class ToolGateway:
         self._approval_timeout = approval_timeout
         self._sources = sources
         self._sources_current = sources_current
-        self._catalogue = ToolCatalogue()
+        self._knowledge = knowledge
+        self._catalogue = ToolCatalogue(include_knowledge=knowledge is not None)
         self._lock = asyncio.Lock()
 
     async def execute(self, plan: ActionPlan, context: TargetContext) -> tuple[ToolResult, ...]:
@@ -185,6 +188,27 @@ class ToolGateway:
                             tuple(results),
                             decision=current,
                         )
+                    if call.method.startswith("knowledge."):
+                        if self._knowledge is None:
+                            raise GatewayError(
+                                "knowledge access is unavailable; open a configured agent session",
+                                tuple(results),
+                            )
+                        try:
+                            knowledge_result = await self._knowledge.execute(
+                                call.name, json.loads(call.params_json), call.timeout
+                            )
+                        except KnowledgeError as error:
+                            results.append(
+                                ToolResult(
+                                    call.call_id,
+                                    json.dumps({"error": str(error)}, ensure_ascii=True),
+                                    is_error=True,
+                                )
+                            )
+                            break
+                        results.append(_result(call.call_id, knowledge_result, False))
+                        continue
                     if call.method.startswith("local.source."):
                         if (
                             self._sources is None
@@ -265,7 +289,9 @@ class ToolGateway:
     ) -> None:
         if self._approver is None:
             raise GatewayError("no auditor approver configured", decision=decision)
-        request = create_approval_request(plan, context, decision)
+        request = create_approval_request(
+            plan, context, decision, knowledge_enabled=self._knowledge is not None
+        )
         deadline = asyncio.get_running_loop().time() + self._approval_timeout
         try:
             response = await asyncio.wait_for(

@@ -26,6 +26,9 @@ _METADATA_TOOLS = frozenset(
         "toolkit_commands",
         "toolkit_help",
         "register_names",
+        "knowledge_search",
+        "knowledge_get_document",
+        "knowledge_get_section",
     }
 )
 _OPAQUE_TOOLS = frozenset({"toolkit_command", "gdb_command", "ocd_command", "mi_command"})
@@ -81,9 +84,10 @@ class ProtectionPolicy:
         *,
         denied_tools: Iterable[str] = (),
         denied_memory: Iterable[MemoryRegion] = (),
+        knowledge_enabled: bool = False,
     ) -> None:
         """Bind optional tool prohibitions and half-open protected address ranges."""
-        self._catalogue = ToolCatalogue()
+        self._catalogue = ToolCatalogue(include_knowledge=knowledge_enabled)
         known = {
             definition.name for definition in self._catalogue.definitions(include_sources=True)
         }

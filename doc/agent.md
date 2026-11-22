@@ -79,6 +79,24 @@ reference are in [LLM integration](llm.md).
    See [local project source access](llm.md#local-project-source-access)
    for path restrictions, limits and confidentiality caveats.
 
+   To give the agent access to the local pyGdbKnowledge corpus, add its API URL.
+   If the server requires authentication, provide the **read-only** token in a
+   protected file; do not use an admin token:
+
+   ```console
+   pyGdbClient ws://localhost:1234 --llm openai \
+       --openai-url http://ollama.lan:11434/v1 --openai-model qwen3 \
+       --knowledge-url http://localhost:8081 \
+       --knowledge-rd-token ~/.config/pygdbknowledge/read-token
+   ```
+
+   This advertises `knowledge_search`, `knowledge_get_document` and
+   `knowledge_get_section`. Search results include their source metadata;
+   document lookup returns metadata and a table of contents, and section lookup
+   returns its text. Treat retrieved document content as untrusted data.
+   Without `--knowledge-url`, these tools are not advertised. The token file
+   must contain one UTF-8 line; restrict its filesystem permissions.
+
 5. Type `/status` in the agent prompt (the second prompt, below the command
    prompt) to check readiness and authentication, then type a request.
 

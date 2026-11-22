@@ -12,6 +12,7 @@ from pathlib import Path
 from .app import PyGdbClientApp
 from .llm.controller import AgentSettings
 from .llm.confidentiality import Redactor
+from .llm.knowledge import KnowledgeClient, KnowledgeError, read_knowledge_token
 from .llm.registry import ProviderRegistry, default_registry
 
 
@@ -61,6 +62,17 @@ def _parser(registry: ProviderRegistry) -> argparse.ArgumentParser:
         metavar="CHARS",
         help="Characters exchanged before continuing in a new session (default: %(default)s)",
     )
+    agent.add_argument(
+        "--knowledge-url",
+        metavar="URL",
+        help="pyGdbKnowledge API base URL; enables local knowledge tools",
+    )
+    agent.add_argument(
+        "--knowledge-rd-token",
+        type=Path,
+        metavar="FILE",
+        help="File containing the pyGdbKnowledge read-only bearer token",
+    )
     registry.add_arguments(parser)
     return parser
 
@@ -75,15 +87,19 @@ def agent_settings(
     copilot_sources: bool = getattr(arguments, "copilot_allow_project_sources", False)
     if copilot_sources and arguments.llm != "github-copilot":
         parser.error("--copilot-allow-project-sources requires --llm github-copilot")
+    if arguments.knowledge_rd_token is not None and arguments.knowledge_url is None:
+        parser.error("--knowledge-rd-token requires --knowledge-url")
     if arguments.llm is None:
         if (
             arguments.llm_store is not None
             or arguments.llm_redact
             or arguments.llm_test_data
             or arguments.llm_context_limit != AgentSettings.context_limit_chars
+            or arguments.knowledge_url is not None
+            or arguments.knowledge_rd_token is not None
         ):
             parser.error(
-                "--llm-store, --llm-redact, --llm-test-data and --llm-context-limit require --llm"
+                "agent options, including --knowledge-url and --knowledge-rd-token, require --llm"
             )
         return None
     if arguments.llm_test_data and arguments.llm_redact:
@@ -91,7 +107,17 @@ def agent_settings(
     try:
         redactor = Redactor.with_patterns(arguments.llm_redact)
         provider = registry.create(arguments.llm, arguments, environ)
+        knowledge = None
+        if arguments.knowledge_url is not None:
+            token = (
+                read_knowledge_token(arguments.knowledge_rd_token)
+                if arguments.knowledge_rd_token is not None
+                else None
+            )
+            knowledge = KnowledgeClient(arguments.knowledge_url, token)
     except ValueError as error:
+        parser.error(str(error))
+    except KnowledgeError as error:
         parser.error(str(error))
     store = arguments.llm_store.expanduser() if arguments.llm_store is not None else None
     try:
@@ -102,6 +128,7 @@ def agent_settings(
             context_limit_chars=arguments.llm_context_limit,
             test_data=arguments.llm_test_data,
             copilot_allow_project_sources=copilot_sources,
+            knowledge=knowledge,
         )
     except ValueError as error:
         parser.error(f"--llm-context-limit: {error}")

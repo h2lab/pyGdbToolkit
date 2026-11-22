@@ -93,6 +93,15 @@ def test_only_explicit_metadata_queries_are_allowed(name: str, arguments: JsonOb
     assert all("metadata" in reason for reason in assessment.decision.reasons)
 
 
+def test_knowledge_queries_are_allowed_only_when_configured() -> None:
+    call = ToolCall("search", "knowledge_search", {"query": "UART DMA"})
+    assert (
+        ProtectionPolicy(knowledge_enabled=True).assess(_plan(call), _context()).decision.outcome
+        is PolicyOutcome.ALLOW
+    )
+    assert ProtectionPolicy().assess(_plan(call), _context()).decision.outcome is PolicyOutcome.DENY
+
+
 @pytest.mark.parametrize(
     "name,arguments",
     [

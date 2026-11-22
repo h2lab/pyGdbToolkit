@@ -40,6 +40,7 @@ from pyGdbClient.llm.orchestrator import (
     AgentText,
     AgentToolResults,
 )
+from pyGdbClient.llm.knowledge import KnowledgeClient
 from pyGdbClient.llm.provider import (
     AuthenticationState,
     LlmSession,
@@ -222,6 +223,31 @@ def test_first_request_transmits_snapshot_and_catalogue_then_runs_policy_allowed
             assert len(opened) == 1
             assert len(provider.sessions) == 1
             await controller.close()
+
+    asyncio.run(exercise())
+
+
+def test_configured_knowledge_is_advertised_to_the_provider() -> None:
+    async def exercise() -> None:
+        provider = TrackedProvider(_answer("ready"))
+        recorder = Recorder()
+        async with FakeRpcServer(_responses()) as server:
+            controller = await _controller(
+                server,
+                provider,
+                recorder,
+                knowledge=KnowledgeClient("http://localhost:8081"),
+            )
+            try:
+                await controller.ensure_session()
+                names = {tool.name for tool in provider.sessions[0].tools}
+                assert {
+                    "knowledge_search",
+                    "knowledge_get_document",
+                    "knowledge_get_section",
+                } <= names
+            finally:
+                await controller.close()
 
     asyncio.run(exercise())
 
