@@ -136,6 +136,7 @@ class CopilotProvider:
 
     def __init__(self, config: CopilotConfig) -> None:
         self._config = config
+        self._model = config.model
         self._client: CopilotClient | None = None
         self._directory: TemporaryDirectory[str] | None = None
         self._sessions: list[CopilotLlmSession] = []
@@ -238,6 +239,43 @@ class CopilotProvider:
             raise ProviderError("Copilot returned an invalid quota snapshot.") from None
         return ProviderUsage(quotas)
 
+    @property
+    def model(self) -> str | None:
+        """Return the model requested for new conversations, or None for Copilot's default."""
+        return self._model
+
+    async def models(self) -> tuple[str, ...]:
+        """Return the identifiers of the models served to the authenticated account.
+
+        Raises
+        ------
+        ProviderError
+            When the runtime cannot be queried or returns an invalid listing.
+        """
+        client = await self._connect()
+        listed = await _rpc(client.list_models(), "model listing", self._config.rpc_timeout)
+        identifiers: set[str] = set()
+        for entry in listed:
+            identifier = getattr(entry, "id", None)
+            if not isinstance(identifier, str) or not identifier.strip():
+                raise ProviderError("Copilot returned an invalid model listing.")
+            identifiers.add(identifier)
+        return tuple(sorted(identifiers))
+
+    async def select_model(self, model: str) -> None:
+        """Use a served model for conversations opened afterwards.
+
+        Raises
+        ------
+        ProviderError
+            When Copilot does not serve ``model`` or cannot be queried.
+        """
+        if model not in await self.models():
+            raise ProviderError(
+                "Copilot does not serve the requested model; list the served models first."
+            )
+        self._model = model
+
     async def open_session(
         self,
         session_id: str,
@@ -286,7 +324,7 @@ class CopilotProvider:
             client.create_session(
                 session_id=str(uuid4()),
                 client_name="pyGdbClient",
-                model=self._config.model,
+                model=self._model,
                 tools=definitions,
                 available_tools=list(names),
                 on_permission_request=_deny_permission,

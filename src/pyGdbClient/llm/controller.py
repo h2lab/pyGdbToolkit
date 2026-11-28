@@ -35,6 +35,7 @@ from .policy import ProtectionPolicy
 from .provider import (
     AuthenticationState,
     LlmProvider,
+    ModelCatalogue,
     ProviderStatus,
     ProviderUsage,
     UsageReporter,
@@ -129,6 +130,14 @@ class ContextUsage:
     limit: int
 
 
+@dataclass(frozen=True)
+class ModelListing:
+    """Models served by the provider and the one requested for new conversations."""
+
+    models: tuple[str, ...]
+    current: str | None
+
+
 class AgentController:
     """Open, run, continue and close agent conversations bound to the live target.
 
@@ -203,6 +212,44 @@ class AgentController:
         if not isinstance(provider, UsageReporter):
             return None
         return await provider.usage()
+
+    async def models(self) -> ModelListing:
+        """Return the provider's served models and the current selection.
+
+        Raises
+        ------
+        AgentControllerError
+            When the provider does not expose its model catalogue.
+        """
+        provider = self._settings.provider
+        if not isinstance(provider, ModelCatalogue):
+            raise AgentControllerError(
+                f"provider {provider.provider_id} does not support model listing"
+            )
+        return ModelListing(await provider.models(), provider.model)
+
+    async def use_model(self, model: str) -> bool:
+        """Select the model used by conversations opened afterwards.
+
+        Returns
+        -------
+        bool
+            Whether a conversation is open; the selection then only applies
+            from the next opened conversation (``/new``, ``/compact``,
+            ``/resume`` or the automatic continuation).
+
+        Raises
+        ------
+        AgentControllerError
+            When the provider does not expose its model catalogue.
+        """
+        provider = self._settings.provider
+        if not isinstance(provider, ModelCatalogue):
+            raise AgentControllerError(
+                f"provider {provider.provider_id} does not support model selection"
+            )
+        await provider.select_model(model)
+        return self._session is not None
 
     async def ensure_session(self) -> OpenedSession | None:
         """Open a conversation when none exists; return it only when newly opened."""

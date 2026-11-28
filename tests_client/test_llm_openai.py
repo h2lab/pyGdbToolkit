@@ -628,3 +628,77 @@ def test_missing_httpx_dependency_is_explicit_guidance(
         await provider.close()
 
     asyncio.run(exercise())
+
+
+def _catalogue(handler: Handler, *responses: httpx.Response) -> tuple[_Script, OpenAiProvider]:
+    script = _Script(*responses)
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models" and request.method == "GET":
+            return handler(request)
+        return script(request)
+
+    return script, _provider(route)
+
+
+def test_models_are_listed_sorted_and_deduplicated() -> None:
+    """The /v1/models identifiers are returned sorted, without duplicates."""
+
+    def served(request: httpx.Request) -> httpx.Response:
+        data = [{"id": "qwen3"}, {"id": "llama3.2:latest"}, {"id": "qwen3"}]
+        return httpx.Response(200, json={"data": data})
+
+    async def exercise() -> None:
+        _, provider = _catalogue(served)
+        assert provider.model == "test-model"
+        assert await provider.models() == ("llama3.2:latest", "qwen3")
+        await provider.close()
+
+    asyncio.run(exercise())
+
+
+def test_selected_model_binds_the_sessions_opened_afterwards() -> None:
+    """/use switches new conversations; the configured model stays the default before."""
+
+    def served(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "qwen3"}]})
+
+    async def exercise() -> None:
+        script, provider = _catalogue(served, _text_turn("one"), _text_turn("two"))
+        first = await provider.open_session("s1", _context(), _TOOLS)
+        await _events(first, UserPrompt("hello"))
+        assert script.bodies[-1]["model"] == "test-model"
+        with pytest.raises(ProviderError, match="does not serve"):
+            await provider.select_model("missing")
+        assert provider.model == "test-model"
+        await provider.select_model("qwen3")
+        assert provider.model == "qwen3"
+        second = await provider.open_session("s2", _context(), _TOOLS)
+        await _events(second, UserPrompt("hello"))
+        assert script.bodies[-1]["model"] == "qwen3"
+        await provider.close()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        (httpx.Response(500), "HTTP 500"),
+        (httpx.Response(401), "--openai-key-env"),
+        (httpx.Response(200, text="not json"), "invalid model list"),
+        (httpx.Response(200, json={"data": {"id": "x"}}), "invalid model list"),
+        (httpx.Response(200, json={"data": [{"id": " "}]}), "invalid model list"),
+        (httpx.Response(200, json={"data": ["qwen3"]}), "invalid model list"),
+    ],
+)
+def test_model_listing_failures_are_sanitized(response: httpx.Response, message: str) -> None:
+    """Listing failures surface neutral guidance, never the server body."""
+
+    async def exercise() -> None:
+        _, provider = _catalogue(lambda request: response)
+        with pytest.raises(ProviderError, match=message):
+            await provider.models()
+        await provider.close()
+
+    asyncio.run(exercise())

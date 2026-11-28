@@ -9,7 +9,7 @@ from rich.text import Text
 
 from ..audit import AuditContext, AuditObservation
 from .contracts import ContextFact, JsonObject, JsonValue, TargetContext
-from .controller import ContextUsage, OpenedSession
+from .controller import ContextUsage, ModelListing, OpenedSession
 from .orchestrator import (
     AgentEvent,
     AgentNotice,
@@ -228,6 +228,20 @@ def describe_status(provider_id: str, status: ProviderStatus) -> list[Text]:
         style=_INFO_STYLE if ready else _ERROR_STYLE,
     )
     return [heading, *_lines(status.message, "" if ready else "red", "  ")]
+
+
+def describe_models(provider_id: str, listing: ModelListing) -> list[Text]:
+    """List the provider's served models, marking the one used for new conversations."""
+    lines = [Text(f"Models served by {printable(provider_id)}", style=_INFO_STYLE)]
+    if not listing.models:
+        lines.append(Text("  no model reported", style="dim"))
+    for model in listing.models:
+        current = model == listing.current
+        marker = "*" if current else " "
+        lines.append(Text(f"  {marker} {printable(model)}", style="bold green" if current else ""))
+    if listing.current is None:
+        lines.append(Text("  Using the server's default model; select one with /use MODEL"))
+    return lines
 
 
 def describe_credits(provider_id: str, usage: ProviderUsage | None) -> Text:
