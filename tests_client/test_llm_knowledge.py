@@ -57,6 +57,7 @@ def test_knowledge_search_translates_filters_and_sends_only_read_token(
             {
                 "query": "UART DMA RX lost bytes",
                 "manufacturer": "ST",
+                "device_family": "STM32H7",
                 "device": "STM32H743",
                 "peripheral": "USART",
                 "document_types": ["reference_manual", "errata"],
@@ -80,6 +81,7 @@ def test_knowledge_search_translates_filters_and_sends_only_read_token(
                 "query": "UART DMA RX lost bytes",
                 "filters": {
                     "manufacturer": "ST",
+                    "device_family": "STM32H7",
                     "device": "STM32H743",
                     "peripheral": "USART",
                     "document_type": ["reference_manual", "errata"],
@@ -102,6 +104,7 @@ def test_get_document_returns_metadata_and_table_of_contents(
             _Response(
                 {
                     "sections": [{"section_id": "usart", "title": "USART"}],
+                    "offset": 0,
                     "has_more": False,
                 }
             ),
@@ -123,13 +126,152 @@ def test_get_document_returns_metadata_and_table_of_contents(
         "document": {"document_id": "manual", "status": "active", "version": 2},
         "table_of_contents": {
             "sections": [{"section_id": "usart", "title": "USART"}],
+            "offset": 0,
             "has_more": False,
         },
     }
     assert requests_seen == [
         ("GET", "http://localhost:8081/api/v1/documents/manual"),
-        ("GET", "http://localhost:8081/api/v1/documents/manual/sections?limit=100"),
+        ("GET", "http://localhost:8081/api/v1/documents/manual/sections?limit=100&offset=0"),
     ]
+
+
+def test_document_pagination_is_forwarded_to_the_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls: list[str] = []
+
+    def request(session: requests.Session, method: str, url: str, **kwargs: Any) -> _Response:
+        urls.append(url)
+        if "/sections?" in url:
+            return _Response(
+                {"sections": [{"section_id": "s0100"}], "offset": 100, "has_more": False}
+            )
+        return _Response({"document_id": "manual"})
+
+    monkeypatch.setattr(requests.Session, "request", request)
+    call = ToolCatalogue(include_knowledge=True).prepare(
+        ToolCall(
+            "page", "knowledge_get_document", {"document_id": "manual", "offset": 100, "limit": 20}
+        )
+    )
+    result = asyncio.run(
+        KnowledgeClient("http://localhost:8081").execute(
+            call.name, json.loads(call.params_json), call.timeout
+        )
+    )
+    assert result["table_of_contents"]["sections"][0]["section_id"] == "s0100"
+    assert urls[-1].endswith("/documents/manual/sections?limit=20&offset=100")
+
+
+@pytest.mark.parametrize("pagination", [{"offset": -1}, {"offset": True}, {"limit": 101}])
+def test_invalid_document_pagination_is_rejected_before_http(
+    monkeypatch: pytest.MonkeyPatch, pagination: dict[str, Any]
+) -> None:
+    def unexpected_request(*args: object, **kwargs: object) -> _Response:
+        pytest.fail("invalid pagination must not trigger an HTTP request")
+
+    monkeypatch.setattr(requests.Session, "request", unexpected_request)
+    with pytest.raises(KnowledgeError, match="pagination"):
+        asyncio.run(
+            KnowledgeClient("http://localhost:8081").execute(
+                "knowledge_get_document", {"document_id": "manual", **pagination}, 5
+            )
+        )
+
+
+def test_large_search_keeps_ranked_results_and_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    passages = [
+        {
+            "chunk_id": f"chunk-{index}",
+            "document_id": "manual",
+            "page": index + 1,
+            "score": 1.0,
+            "url": "https://example.test/manual",
+            "truncated": False,
+            "text": "é" * 1500,
+        }
+        for index in range(10)
+    ]
+    monkeypatch.setattr(
+        requests.Session, "request", lambda *args, **kwargs: _Response({"results": passages})
+    )
+    result = asyncio.run(
+        KnowledgeClient("http://localhost:8081").execute("knowledge_search", {"query": "USART"}, 5)
+    )
+    results = result["results"]
+    assert 0 < len(results) < len(passages)
+    assert results == passages[: len(results)]
+    assert result["client_truncated"] is True
+    assert result["client_omitted_items"] == len(passages) - len(results)
+    content = json.dumps({"result": result, "truncated": False}, ensure_ascii=True)
+    assert len(content.encode()) <= 24 * 1024
+
+
+@pytest.mark.parametrize("tool", ["knowledge_search", "knowledge_get_section"])
+def test_large_single_passage_keeps_structured_metadata_and_marks_text_truncation(
+    monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    passage = {
+        "document_id": "manual",
+        "section_id": "s0001",
+        "page": 42,
+        "text": "Ω" * 10000,
+        "truncated": False,
+    }
+    response = {"results": [passage]} if tool == "knowledge_search" else passage
+    monkeypatch.setattr(requests.Session, "request", lambda *args, **kwargs: _Response(response))
+    args = (
+        {"query": "USART"}
+        if tool == "knowledge_search"
+        else {"document_id": "manual", "section_id": "s0001"}
+    )
+    result = asyncio.run(KnowledgeClient("http://localhost:8081").execute(tool, args, 5))
+    kept = result["results"][0] if tool == "knowledge_search" else result
+    assert kept["document_id"] == "manual" and kept["page"] == 42
+    assert kept["truncated"] is False
+    assert kept["client_text_truncated"] is True
+    assert kept["client_original_text_characters"] == 10000
+    assert 0 < len(kept["text"]) < 10000
+    assert len(json.dumps({"result": result, "truncated": False}, ensure_ascii=True)) <= 24 * 1024
+
+
+def test_large_table_of_contents_can_continue_after_bounded_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sections = [{"section_id": f"s{index:04}", "title": "x" * 1000} for index in range(100)]
+
+    def request(session: requests.Session, method: str, url: str, **kwargs: Any) -> _Response:
+        if "/sections?" in url:
+            return _Response({"sections": sections, "offset": 100, "has_more": False})
+        return _Response({"document_id": "manual"})
+
+    monkeypatch.setattr(requests.Session, "request", request)
+    result = asyncio.run(
+        KnowledgeClient("http://localhost:8081").execute(
+            "knowledge_get_document", {"document_id": "manual", "offset": 100}, 5
+        )
+    )
+    page = result["table_of_contents"]
+    assert 0 < len(page["sections"]) < 100
+    assert page["offset"] == 100 and page["has_more"] is True
+    assert page["client_truncated"] is True
+    assert page["client_omitted_items"] == 100 - len(page["sections"])
+    assert len(json.dumps({"result": result, "truncated": False}, ensure_ascii=True)) <= 24 * 1024
+
+
+def test_oversized_metadata_fails_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        requests.Session,
+        "request",
+        lambda *args, **kwargs: _Response(
+            {"results": [{"document_id": "x" * 30000, "text": "passage"}]}
+        ),
+    )
+    with pytest.raises(KnowledgeError, match="metadata exceeds"):
+        asyncio.run(
+            KnowledgeClient("http://localhost:8081").execute(
+                "knowledge_search", {"query": "USART"}, 5
+            )
+        )
 
 
 def test_get_section_uses_encoded_fixed_document_route(monkeypatch: pytest.MonkeyPatch) -> None:
