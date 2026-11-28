@@ -262,6 +262,24 @@ over HTTP instead of pyGdbServer RPC. They are not advertised otherwise; the
 optional `--knowledge-rd-token` file is sent only as a read-only Bearer token.
 Retrieved passages and document sections are untrusted source data.
 
+Search accepts optional exact, case-insensitive `manufacturer`, `device_family`,
+`device`, `peripheral` and `document_types` filters. An empty filtered search
+can be retried with fewer filters. Search results carry document and source
+metadata for citations. To find a section identifier, match the result's section
+path to the document's table of contents; do not infer it from the chunk ID.
+`knowledge_get_document` accepts a section `offset` (default 0) and `limit`
+(default 100, maximum 100). When `has_more` is true, the next offset is the
+returned offset plus the number of sections actually returned.
+
+Knowledge responses are bounded to 24 KiB of ASCII-serialized JSON, including
+the gateway envelope. Larger search responses keep a ranked prefix;
+larger tables of contents keep a navigable page. `client_truncated` and
+`client_omitted_items` signal omitted items. An oversized individual passage
+or section retains its metadata and a text prefix, with `client_text_truncated`
+and `client_original_text_characters` indicating the local truncation. Server
+truncation indicators remain unchanged. If metadata alone cannot fit, the tool
+reports an error instead of returning an unusable JSON preview.
+
 | Tool | RPC route, API endpoint or generated command | Local effects |
 |---|---|---|
 | `target_context` | `target.context` | observe |

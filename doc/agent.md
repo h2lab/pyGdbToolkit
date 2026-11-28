@@ -93,7 +93,10 @@ reference are in [LLM integration](llm.md).
    This advertises `knowledge_search`, `knowledge_get_document` and
    `knowledge_get_section`. Search results include their source metadata;
    document lookup returns metadata and a table of contents, and section lookup
-   returns its text. Treat retrieved document content as untrusted data.
+   returns its text. Document lookup accepts `offset` and `limit` for navigating
+   the table of contents. Search filters match exact metadata, ignoring case;
+   omit uncertain filters or retry without them if a search returns no results.
+   Treat retrieved document content as untrusted data.
    Without `--knowledge-url`, these tools are not advertised. The token file
    must contain one UTF-8 line; restrict its filesystem permissions.
 

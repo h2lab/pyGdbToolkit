@@ -17,6 +17,7 @@ from .contracts import JsonObject, JsonValue
 
 _MAX_TOKEN_FILE_BYTES = 16 * 1024
 _MAX_RESPONSE_BYTES = 1024 * 1024
+_MAX_RESULT_BYTES = 24 * 1024
 _DOCUMENT_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
 
 
@@ -106,7 +107,7 @@ class KnowledgeClient:
         if tool_name == "knowledge_search":
             query = arguments["query"]
             filters: dict[str, JsonValue] = {}
-            for name in ("manufacturer", "device", "peripheral"):
+            for name in ("manufacturer", "device_family", "device", "peripheral"):
                 value = arguments.get(name)
                 if value is not None:
                     filters[name] = value
@@ -119,20 +120,38 @@ class KnowledgeClient:
             result = self._request("POST", "/search", timeout, body)
             if not isinstance(result, dict) or not isinstance(result.get("results"), list):
                 raise KnowledgeError("knowledge service returned an invalid search response")
-            return result
+            return _bounded_result(result, "search")
         if tool_name == "knowledge_get_document":
             document_id = _validated_id(arguments["document_id"], "document_id")
             encoded_id = quote(document_id, safe="")
+            limit = arguments.get("limit", 100)
+            offset = arguments.get("offset", 0)
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 100
+                or isinstance(offset, bool)
+                or not isinstance(offset, int)
+                or not 0 <= offset <= 2**31 - 1
+            ):
+                raise KnowledgeError("invalid document section pagination")
             document = self._request("GET", f"/documents/{encoded_id}", timeout)
-            sections = self._request("GET", f"/documents/{encoded_id}/sections?limit=100", timeout)
+            sections = self._request(
+                "GET", f"/documents/{encoded_id}/sections?limit={limit}&offset={offset}", timeout
+            )
             if (
                 not isinstance(document, dict)
                 or not isinstance(sections, dict)
                 or not isinstance(sections.get("sections"), list)
                 or not isinstance(sections.get("has_more"), bool)
+                or isinstance(sections.get("offset"), bool)
+                or not isinstance(sections.get("offset"), int)
+                or sections.get("offset") != offset
             ):
                 raise KnowledgeError("knowledge service returned invalid document metadata")
-            return {"document": document, "table_of_contents": sections}
+            return _bounded_result(
+                {"document": document, "table_of_contents": sections}, "document"
+            )
         if tool_name == "knowledge_get_section":
             document_id = _validated_id(arguments["document_id"], "document_id")
             section_id = _validated_id(arguments["section_id"], "section_id")
@@ -143,7 +162,7 @@ class KnowledgeClient:
             )
             if not isinstance(result, dict):
                 raise KnowledgeError("knowledge service returned an invalid section response")
-            return result
+            return _bounded_result(result, "section")
         raise KnowledgeError(f"unknown knowledge tool: {tool_name}")
 
     def _request(
@@ -187,3 +206,67 @@ def _validated_id(value: JsonValue, name: str) -> str:
     if not isinstance(value, str) or _DOCUMENT_ID.fullmatch(value) is None:
         raise KnowledgeError(f"invalid {name}")
     return value
+
+
+def _fits_result(result: JsonObject) -> bool:
+    return len(json.dumps({"result": result, "truncated": False}, ensure_ascii=True)) <= (
+        _MAX_RESULT_BYTES
+    )
+
+
+def _bounded_text(result: JsonObject, text_holder: JsonObject) -> None:
+    text = text_holder.get("text")
+    if not isinstance(text, str):
+        raise KnowledgeError("knowledge response is too large and has no reducible text")
+    text_holder["client_text_truncated"] = True
+    text_holder["client_original_text_characters"] = len(text)
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        text_holder["text"] = text[:middle]
+        if _fits_result(result):
+            low = middle
+        else:
+            high = middle - 1
+    text_holder["text"] = text[:low]
+    if not _fits_result(result) or (not low and text):
+        raise KnowledgeError("knowledge response metadata exceeds the result size limit")
+
+
+def _bounded_result(result: JsonObject, kind: str) -> JsonObject:
+    """Keep knowledge results structured and mark any client-side size truncation."""
+    if _fits_result(result):
+        return result
+    if kind == "section":
+        _bounded_text(result, result)
+        return result
+
+    container = result if kind == "search" else result.get("table_of_contents")
+    if not isinstance(container, dict):
+        raise KnowledgeError("knowledge response cannot be bounded")
+    key = "results" if kind == "search" else "sections"
+    items = container.get(key)
+    if not isinstance(items, list) or not items:
+        raise KnowledgeError("knowledge response metadata exceeds the result size limit")
+    container["client_truncated"] = True
+    if kind == "document":
+        container["has_more"] = True
+    low, high = 0, len(items)
+    while low < high:
+        middle = (low + high + 1) // 2
+        container[key] = items[:middle]
+        container["client_omitted_items"] = len(items) - middle
+        if _fits_result(result):
+            low = middle
+        else:
+            high = middle - 1
+    container[key] = items[:low]
+    container["client_omitted_items"] = len(items) - low
+    if low:
+        return result
+    if kind == "search" and isinstance(items[0], dict):
+        container[key] = [items[0]]
+        container["client_omitted_items"] = len(items) - 1
+        _bounded_text(result, items[0])
+        return result
+    raise KnowledgeError("knowledge response metadata exceeds the result size limit")
