@@ -172,6 +172,7 @@ class AgentOrchestrator:
         store: ContextStore | None = None,
         context_client: RpcRequester | None = None,
         redactor: Redactor | None = None,
+        knowledge_enabled: bool = False,
     ) -> None:
         """Bind one provider conversation to its gateway, target snapshot and sinks.
 
@@ -186,7 +187,7 @@ class AgentOrchestrator:
         self._store = store
         self._context_client = context_client
         self._redactor = redactor
-        self._catalogue = ToolCatalogue()
+        self._catalogue = ToolCatalogue(include_knowledge=knowledge_enabled)
         self._task: asyncio.Task[Any] | None = None
         self._cancel_requested = False
         self._unanswered: tuple[str, ...] = ()

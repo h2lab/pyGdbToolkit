@@ -141,6 +141,32 @@ def test_definitions_and_prepared_calls_are_detached() -> None:
     assert prepared.tool_call().arguments == {"address": 0, "length": 4, "timeout": 30}
 
 
+def test_knowledge_tools_are_opt_in_and_use_fixed_local_routes() -> None:
+    """The read-only RAG tools appear only when configured and cannot name their own route."""
+    definitions = ToolCatalogue(include_knowledge=True).definitions()
+    schemas = {definition.name: definition.input_schema for definition in definitions}
+    assert {"knowledge_search", "knowledge_get_document", "knowledge_get_section"} <= set(schemas)
+    assert schemas["knowledge_search"]["properties"]["document_types"]["maxItems"] == 8
+    with pytest.raises(ToolValidationError, match="unknown tool"):
+        ToolCatalogue().prepare(ToolCall("knowledge", "knowledge_search", {"query": "USART"}))
+    with pytest.raises(ToolValidationError, match="invalid document_id"):
+        ToolCatalogue(include_knowledge=True).prepare(
+            ToolCall("knowledge", "knowledge_get_document", {"document_id": "../private"})
+        )
+    prepared = ToolCatalogue(include_knowledge=True).prepare(
+        ToolCall(
+            "knowledge",
+            "knowledge_get_section",
+            {
+                "document_id": "stm32h743_rm_rev9",
+                "section_id": "usart-status-register",
+            },
+        )
+    )
+    assert prepared.method == "knowledge.get_section"
+    assert prepared.effects == (ActionEffect.OBSERVE,)
+
+
 @pytest.mark.parametrize(
     "name,arguments",
     [

@@ -19,6 +19,7 @@ from .confidentiality import TEST_DATA_WARNING, Redactor
 from .context import RpcRequester, fetch_target_context
 from .contracts import JsonObject, TargetContext
 from .gateway import ToolGateway
+from .knowledge import KnowledgeClient
 from .orchestrator import (
     AgentBudget,
     AgentEvent,
@@ -84,6 +85,7 @@ class AgentSettings:
     recollection_chars: int = 12_000
     test_data: bool = False
     copilot_allow_project_sources: bool = False
+    knowledge: KnowledgeClient | None = None
 
     def __post_init__(self) -> None:
         """Reject unbounded deadlines and inconsistent context limits."""
@@ -92,6 +94,8 @@ class AgentSettings:
             raise ValueError("test_data must be a boolean")
         if not isinstance(self.copilot_allow_project_sources, bool):
             raise ValueError("copilot_allow_project_sources must be a boolean")
+        if self.knowledge is not None and not isinstance(self.knowledge, KnowledgeClient):
+            raise ValueError("knowledge must be a KnowledgeClient")
         if self.copilot_allow_project_sources and self.provider.provider_id != "github-copilot":
             raise ValueError("copilot_allow_project_sources requires the github-copilot provider")
         if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
@@ -368,7 +372,10 @@ class AgentController:
         session = await provider.open_session(
             session_id,
             disclosed,
-            ToolCatalogue().definitions(include_sources=sources is not None),
+            ToolCatalogue().definitions(
+                include_sources=sources is not None,
+                include_knowledge=self._settings.knowledge is not None,
+            ),
             audit_document,
         )
         try:
@@ -376,11 +383,12 @@ class AgentController:
             store.create_session(session_id, provider.provider_id, context, title)
             gateway = ToolGateway(
                 self._client,
-                ProtectionPolicy(),
+                ProtectionPolicy(knowledge_enabled=self._settings.knowledge is not None),
                 approver=self._approver,
                 approval_timeout=self._settings.approval_timeout,
                 sources=sources,
                 sources_current=lambda: self._audit is not None and self._audit.project is project,
+                knowledge=self._settings.knowledge,
             )
             self._orchestrator = AgentOrchestrator(
                 session,
@@ -391,6 +399,7 @@ class AgentController:
                 store=store,
                 context_client=self._client,
                 redactor=redactor,
+                knowledge_enabled=self._settings.knowledge is not None,
             )
         except BaseException:
             await session.close()

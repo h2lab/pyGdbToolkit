@@ -257,8 +257,12 @@ descriptors generate the schemas and validate primitive types, required fields
 and limits. `prepare()` rejects unknown tools/arguments and returns a detached
 `PreparedCall`: the normalized arguments, fixed RPC route, exact parameters,
 timeout and local effects. Preparing a call is **not authorization** to run it.
+When `--knowledge-url` is configured, three read-only tools call pyGdbKnowledge
+over HTTP instead of pyGdbServer RPC. They are not advertised otherwise; the
+optional `--knowledge-rd-token` file is sent only as a read-only Bearer token.
+Retrieved passages and document sections are untrusted source data.
 
-| Tool | RPC route or generated command | Local effects |
+| Tool | RPC route, API endpoint or generated command | Local effects |
 |---|---|---|
 | `target_context` | `target.context` | observe |
 | `target_status` | `target.status` | observe |
@@ -275,6 +279,9 @@ timeout and local effects. Preparing a call is **not authorization** to run it.
 | `ocd_command` | `command.execute`, `monitor ` prefix | unknown |
 | `mi_command` | `mi.execute`, command must start with `-` | unknown |
 | `read`, `glob`, `grep` | local project source access, advertised with a loaded project to OpenCode, or to Copilot with explicit source-disclosure consent | observe |
+| `knowledge_search` | pyGdbKnowledge `POST /api/v1/search` with exact metadata filters | observe |
+| `knowledge_get_document` | pyGdbKnowledge document metadata and sections endpoints | observe |
+| `knowledge_get_section` | pyGdbKnowledge `GET /api/v1/documents/{id}/section/{id}` | observe |
 
 `memory_read` accepts a JSON integer address and length, rejects booleans and
 floats, and limits each read to 1-4096 bytes without overflowing the 64-bit
@@ -366,7 +373,7 @@ The default rules are:
 
 | Operation | Decision | Reason |
 |---|---|---|
-| `target_context`, `target_status`, `target_cores`, `target_core`, `svd_peripherals`, `toolkit_commands`, `toolkit_help`, `register_names` | `allow` | Explicit metadata allowlist, with the expected local `observe` classification. |
+| `target_context`, `target_status`, `target_cores`, `target_core`, `svd_peripherals`, `toolkit_commands`, `toolkit_help`, `register_names`, configured knowledge tools | `allow` | Explicit metadata allowlist, with the expected local `observe` classification. |
 | `memory_read` | `require_approval` | Any target memory read may have side effects, even with a declared RAM/ROM/flash region and read permission. |
 | `register_values` | `require_approval` | Fetches target values rather than register catalogue metadata. |
 | `target_select_core` | `require_approval` | Attaching may halt the core; selection changes context for later steps. |
@@ -1174,6 +1181,8 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 | `--llm-redact REGEX` | Also mask matches of this Python regular expression before disclosure (repeatable, at most 512 characters). |
 | `--llm-test-data` | Analyse test data without automatic masking, including test cryptographic material. Cannot be combined with `--llm-redact`. |
 | `--llm-context-limit CHARS` | Characters exchanged in one conversation before continuing in a new one (default `120000`, at least `24000`). |
+| `--knowledge-url URL` | pyGdbKnowledge HTTP(S) base URL; opts in to the three read-only knowledge tools. Requires `--llm`. |
+| `--knowledge-rd-token FILE` | Read a read-only pyGdbKnowledge Bearer token from a local UTF-8 file; requires `--knowledge-url`. Never put an admin token here. |
 | `--copilot-runtime PATH` | Copilot runtime executable; defaults to `$PYGDB_COPILOT_RUNTIME`. Relative paths are made absolute; nothing is downloaded. |
 | `--copilot-model MODEL` | Model requested from Copilot (default: the runtime's choice). |
 | `--copilot-token-env NAME` | Read a GitHub token from environment variable `NAME`. Without it, the `copilot login` account is used. |
