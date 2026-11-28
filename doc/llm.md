@@ -273,6 +273,9 @@ Retrieved passages and document sections are untrusted source data.
 | `register_names` | MI `-data-list-register-names` | observe |
 | `register_values` | MI `-data-list-register-values x` | observe |
 | `memory_read` | MI `-data-read-memory-bytes <address> <length>` | read memory |
+| `workspace_list` | `workspace.list` with no RPC parameters | observe filenames and entry types |
+| `workspace_upload` | `workspace.upload` with a plain `filename` and generated UTF-8 `content`, encoded as base64 by the client | persistent change on the server |
+| `workspace_download` | chunked `workspace.download` with a plain `filename` | local file creation; metadata-only result |
 | `workspace_erase` | `workspace.erase` with plain `filename` | persistent change |
 | `toolkit_command` | `command.execute`, unmodified command | unknown |
 | `gdb_command` | `command.execute`, `gdb ` prefix | unknown |
@@ -295,11 +298,15 @@ but its result is not disclosed. Source scans also use the limits described
 below. Command strings are nonblank, at most 4096 characters,
 and exclude control characters, including newlines. Toolkit help names are
 limited to 128 characters. Core IDs are integers from 0 to `2**31 - 1`.
-`workspace_erase` accepts only a workspace basename of at most 128 characters,
-with no directory separators or `.`/`..` components. It deletes one server-side
-file, never a directory tree; symbolic links are removed without following
-their targets. This structured tool uses the same filename validation as the
-dashboard file commands.
+The workspace tools accept only a basename of at most 128 characters, with no
+directory separators or `.`/`..` components. `workspace_upload` accepts up to
+16 KiB of generated UTF-8 text and cannot read a client file.
+`workspace_download` saves up to 5 MiB, including binary files, in a new private
+`pygdb-download-*` directory under the client's temporary directory. It only
+returns the filename, local path and size; the bytes never go to the model.
+One approval covers all chunks of the named file. Move downloads you want to
+retain to a permanent directory. `workspace_erase` deletes one server-side file
+or symlink, never a directory tree.
 
 The free-command tools retain the capabilities of GDB/OCD/toolkit, including
 memory writes, watchpoints, execution control and toolkit analyses. They are
@@ -308,8 +315,8 @@ access host files and execute host commands. Even `toolkit_command` is resolved
 by GDB and does not guarantee that the command belongs to the toolkit. These
 tools are always classified as unknown, irrespective of the command name or
 model's claimed effects. Shell/file/MI escape routes must never be treated as
-safe by string matching. Arbitrary RPC methods, workspace transfers, shutdown
-and log subscriptions are not exposed by the catalogue.
+safe by string matching. Arbitrary RPC methods, shutdown and log subscriptions
+are not exposed by the catalogue.
 
 `pyGdbClient.llm.gateway.ToolGateway.execute(plan, context)`:
 
@@ -378,6 +385,7 @@ The default rules are:
 | `register_values` | `require_approval` | Fetches target values rather than register catalogue metadata. |
 | `target_select_core` | `require_approval` | Attaching may halt the core; selection changes context for later steps. |
 | `workspace_erase` | `require_approval` | Deletes a server workspace file permanently; explicit auditor consent is required and deletion cannot be rolled back. |
+| `workspace_upload`, `workspace_download` | `require_approval` | Writes generated text on the server or saves a server file locally without disclosing its contents to the model. |
 | Free toolkit/GDB/OCD/MI commands | `require_approval` | Opaque command languages may alter memory, execution, flash/OTP, debug protection or the host filesystem/processes. Text matching cannot prove safety. |
 | Unknown tools, invalid arguments or operations without an explicit policy rule | `deny` | A new catalogue operation does not inherit blanket permission from an `observe` label. |
 | Plan bound to a different supplied target-context ID | `deny` | A fresh plan is required. |

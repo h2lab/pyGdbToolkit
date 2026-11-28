@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://h2lab.github.io/pyGdbToolkit/schemas/audit-report-v1.schema.json",
+  "title": "pyGdbClient audit dossier, version 1",
+  "type": "object",
+  "required": ["$schema", "schema_version", "exported_at", "redacted", "audit", "snapshots", "sessions_llm", "events", "collection_gaps"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {"const": "https://h2lab.github.io/pyGdbToolkit/schemas/audit-report-v1.schema.json"},
+    "schema_version": {"const": 1},
+    "exported_at": {"$ref": "#/$defs/time"},
+    "redacted": {"type": "boolean"},
+    "audit": {
+      "type": "object",
+      "required": ["id", "title", "started_at", "stopped_at", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "title": {"type": "string"},
+        "started_at": {"$ref": "#/$defs/time"},
+        "stopped_at": {"anyOf": [{"$ref": "#/$defs/time"}, {"type": "null"}]},
+        "status": {"enum": ["open", "closed"]}
+      },
+      "if": {"properties": {"status": {"const": "open"}}},
+      "then": {"properties": {"stopped_at": {"type": "null"}}},
+      "else": {"properties": {"stopped_at": {"$ref": "#/$defs/time"}}}
+    },
+    "snapshots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["sequence", "stage", "data"],
+        "additionalProperties": false,
+        "properties": {
+          "sequence": {"$ref": "#/$defs/sequence"},
+          "stage": {"$ref": "#/$defs/stage"},
+          "data": {"$ref": "#/$defs/snapshot"}
+        }
+      }
+    },
+    "sessions_llm": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "provider", "created_at"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "provider": {"type": "string"},
+          "created_at": {"$ref": "#/$defs/time"}
+        }
+      }
+    },
+    "events": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/event"}},
+    "collection_gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sequence", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "sequence": {"$ref": "#/$defs/sequence"},
+          "section": {"type": "string"},
+          "reason": {"$ref": "#/$defs/id"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "time": {"type": "string", "format": "date-time"},
+    "id": {"type": "string", "minLength": 1},
+    "sequence": {"type": "integer", "minimum": 1},
+    "stage": {"enum": ["initial", "resumed", "checkpoint", "final"]},
+    "unavailable": {"type": "object", "required": ["unavailable_reason"], "properties": {"unavailable_reason": {"$ref": "#/$defs/id"}}},
+    "observation": {
+      "type": "object",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {"$ref": "#/$defs/id"},
+        "data": {"type": "object"},
+        "unavailable_reason": {"$ref": "#/$defs/id"}
+      },
+      "oneOf": [{"required": ["data"]}, {"required": ["unavailable_reason"]}]
+    },
+    "project": {
+      "oneOf": [
+        {"$ref": "#/$defs/unavailable", "additionalProperties": true, "maxProperties": 1},
+        {
+          "type": "object",
+          "required": ["rtos", "local_root", "server_path", "loaded_at", "source_access", "name", "version", "components", "artifacts"],
+          "properties": {
+            "rtos": {"type": "string"},
+            "local_root": {"type": "string"},
+            "server_path": {"type": "string"},
+            "loaded_at": {"$ref": "#/$defs/time"},
+            "source_access": {"type": ["object", "null"]},
+            "name": {"type": ["string", "null"]},
+            "version": {"type": ["string", "null"]},
+            "components": {"type": "array", "items": {"type": "object"}},
+            "artifacts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["path", "size", "sha256"],
+                "properties": {
+                  "path": {"type": "string"},
+                  "size": {"type": "integer", "minimum": 0},
+                  "sha256": {"type": "string"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "svd": {
+      "$ref": "#/$defs/observation",
+      "properties": {
+        "data": {
+          "required": ["loaded", "device", "peripheral_count", "truncated", "peripherals"],
+          "properties": {
+            "loaded": {"const": true},
+            "device": {"type": "string"},
+            "peripheral_count": {"type": "integer", "minimum": 0},
+            "truncated": {"const": false},
+            "peripherals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name", "base_address", "registers"],
+                "properties": {
+                  "name": {"type": "string"},
+                  "description": {"type": ["string", "null"]},
+                  "base_address": {"type": "integer", "minimum": 0},
+                  "registers": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["name", "address_offset"],
+                      "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": ["string", "null"]},
+                        "address_offset": {"type": "integer", "minimum": 0}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["schema_version", "captured_at", "project", "rtos", "execution", "cores", "svd", "server"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "captured_at": {"$ref": "#/$defs/time"},
+        "project": {"$ref": "#/$defs/project"},
+        "rtos": {"$ref": "#/$defs/observation"},
+        "execution": {"$ref": "#/$defs/observation"},
+        "cores": {"$ref": "#/$defs/observation"},
+        "svd": {"$ref": "#/$defs/svd"},
+        "server": {"$ref": "#/$defs/observation"}
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": ["sequence", "created_at", "kind", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {"$ref": "#/$defs/sequence"},
+        "created_at": {"$ref": "#/$defs/time"},
+        "kind": {"enum": ["snapshot", "gap", "manual_start", "manual_result", "approval_requested", "approval_decision", "llm_context", "llm_user", "llm_assistant", "llm_tool_call", "llm_tool_result", "llm_summary", "llm_error", "agent_error"]},
+        "payload": {"type": "object"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "snapshot"}}},
+          "then": {"properties": {"payload": {"required": ["stage", "snapshot_sequence"], "properties": {"stage": {"$ref": "#/$defs/stage"}, "snapshot_sequence": {"$ref": "#/$defs/sequence"}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "gap"}}},
+          "then": {"properties": {"payload": {"required": ["reason"], "properties": {"reason": {"$ref": "#/$defs/id"}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"pattern": "^llm_"}}},
+          "then": {"properties": {"payload": {"required": ["session_id", "context_id", "data"], "properties": {"session_id": {"$ref": "#/$defs/id"}, "context_id": {"$ref": "#/$defs/id"}, "data": {"type": "object"}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"enum": ["manual_start", "manual_result"]}}},
+          "then": {"properties": {"payload": {"required": ["operation_id"], "properties": {"operation_id": {"$ref": "#/$defs/id"}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"enum": ["manual_result", "approval_decision"]}}},
+          "then": {"properties": {"payload": {"required": ["outcome"], "properties": {"outcome": {"$ref": "#/$defs/id"}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"enum": ["approval_requested", "approval_decision"]}}},
+          "then": {"properties": {"payload": {"required": ["request_id"], "properties": {"request_id": {"$ref": "#/$defs/id"}}}}}
+        }
+      ]
+    }
+  }
+}

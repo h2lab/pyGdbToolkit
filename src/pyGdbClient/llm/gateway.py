@@ -7,10 +7,13 @@ import asyncio
 from collections.abc import Callable
 import json
 import math
+from pathlib import Path
+from tempfile import mkdtemp
 
 from websockets.exceptions import ConnectionClosed
 
 from pyGdbClient.rpc import RpcError
+from pyGdbClient.workspace import AGENT_DOWNLOAD_MAX_BYTES, download_workspace_file
 
 from .approval import AuditorApprover, create_approval_request
 from .context import RpcRequester, TargetContextError, fetch_target_context
@@ -24,7 +27,7 @@ from .contracts import (
     ToolResult,
 )
 from .knowledge import KnowledgeClient, KnowledgeError
-from .tools import ToolCatalogue
+from .tools import PreparedCall, ToolCatalogue
 from .sources import SourceBrowser, SourceError
 
 MAX_RESULT_BYTES = 64 * 1024
@@ -262,6 +265,13 @@ class ToolGateway:
                             break
                         continue
                     pending_call_id = call.call_id
+                    if call.name == "workspace_download":
+                        result = await self._download(call)
+                        results.append(result)
+                        pending_call_id = None
+                        if result.is_error:
+                            break
+                        continue
                     try:
                         response = await self._client.request(
                             call.method, json.loads(call.params_json), timeout=call.timeout + 5
@@ -283,6 +293,39 @@ class ToolGateway:
             except asyncio.CancelledError as error:
                 raise GatewayCancelledError(tuple(results), pending_call_id) from error
         return tuple(results)
+
+    async def _download(self, call: PreparedCall) -> ToolResult:
+        filename = call.tool_call().arguments["filename"]
+        if not isinstance(filename, str):
+            return _failure(call.call_id, "workspace download requires a filename")
+        directory: Path | None = None
+        completed = False
+        try:
+            directory = Path(mkdtemp(prefix="pygdb-download-"))
+            async with asyncio.timeout(call.timeout + 5):
+                path, size = await download_workspace_file(
+                    self._client,
+                    filename,
+                    directory,
+                    timeout=call.timeout + 5,
+                    max_bytes=AGENT_DOWNLOAD_MAX_BYTES,
+                )
+            completed = True
+        except ValueError as error:
+            return _failure(call.call_id, f"workspace download failed: {error}")
+        except (RpcError, OSError, ConnectionClosed) as error:
+            return _failure(call.call_id, f"workspace download failed: {type(error).__name__}")
+        finally:
+            if directory is not None and not completed:
+                try:
+                    directory.rmdir()
+                except FileNotFoundError:
+                    pass
+        return _result(
+            call.call_id,
+            {"filename": filename, "local_path": str(path), "size": size},
+            False,
+        )
 
     async def _approve(
         self, plan: ActionPlan, context: TargetContext, decision: PolicyDecision

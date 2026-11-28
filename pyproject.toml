@@ -18,6 +18,7 @@ authors = [
 ]
 license = {file = "LICENSES/Apache-2.0.txt"}
 dependencies = [
+    "jsonschema>=4.23",
     "requests>=2.32",
     "rich>=13.6",
     "textual>=1.0",
@@ -69,6 +70,7 @@ dev = [
     "pytest",
     "pytest-cov",
     "types-gdb",
+    "types-jsonschema",
     "types-PyYAML",
     "sphinx>=8,<9",
     "myst-parser>=4,<5",
@@ -76,6 +78,9 @@ dev = [
 ]
 
 [tool.setuptools_scm]
+
+[tool.setuptools.package-data]
+pyGdbClient = ["schemas/audit-report-v1.schema.json"]
 
 [tool.black]
 line-length = 100

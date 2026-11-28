@@ -4,6 +4,7 @@
 """The audit context aggregates the loaded project and pyGdbServer session state."""
 
 import asyncio
+from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,12 @@ from pyGdbClient.audit import (
     ProjectContext,
 )
 from pyGdbClient.llm.rendering import describe_audit
+from pyGdbClient.audit_report import make_report, write_report
+from pyGdbClient.llm.confidentiality import Redactor
+from pyGdbClient.llm.contracts import ContextFact, MemoryMapContext, TargetContext
+from pyGdbClient.llm.controller import AgentSettings
+from pyGdbClient.llm.provider import TextDelta, TurnFinished
+from pyGdbClient.llm.scripted import ScriptedProvider
 from pyGdbClient.project import LoadedProject, ProjectArtifact
 from pyGdbClient.rpc import RpcError
 from pyGdbToolkit.shared.rtos import DEFAULT_PROJECT_REGISTRY
@@ -277,3 +284,116 @@ def test_dashboard_audit_command_reports_usage_errors() -> None:
 
     assert rpc.requests == []
     app._append_output.assert_called_with("Usage: audit [FILE]", error=True)
+
+
+def test_dossier_exports_only_work_in_scope_and_survives_restart(tmp_path: Path) -> None:
+    """A live agent session and a restarted dashboard share the dossier, not earlier turns."""
+    database = tmp_path / "audit.db"
+    report = tmp_path / "report.json"
+    raw = tmp_path / "raw.json"
+    fact = ContextFact("test", "fixture")
+    context = TargetContext(
+        "target", fact, fact, fact, fact, fact, fact, MemoryMapContext((), "fixture"), fact
+    )
+    responses = {
+        **_responses(),
+        "target.context": json.loads(json.dumps(asdict(context))),
+        "command.execute": {"class": "done", "output": ["password=manual-value"]},
+    }
+    peripheral = {
+        "name": "GPIO",
+        "base_address": 4096,
+        "description": "Port",
+        "registers": [{"name": "CONTROL", "address_offset": 4, "description": None}],
+    }
+    responses["svd.peripherals"] = {
+        "loaded": True,
+        "device": "Device",
+        "peripherals": [peripheral] * (MAX_SVD_PERIPHERALS + 1),
+    }
+
+    def dashboard() -> PyGdbClientApp:
+        provider = ScriptedProvider(((TextDelta("observed"), TurnFinished()),) * 2)
+        app = PyGdbClientApp("ws://localhost", AgentSettings(provider, store_path=database))
+        app._connected = True
+        app.client.request = FakeRpc(responses).request  # type: ignore[method-assign]
+        app._append_output = Mock()
+        app._append_rendered_output = Mock()
+        app._write_output = Mock()
+        app.refresh_credits = Mock()
+        return app
+
+    async def workflow() -> None:
+        first = dashboard()
+        assert first._agent is not None
+        await first._agent_request("before capture")
+        await first.execute_command('audit start "Firmware review"')
+        audit_id = first._agent.audit_store().active_audit
+        assert audit_id is not None
+        await first._agent_request("password=agent-value")
+        await first.execute_command("show version")
+        await first.execute_command(f'audit --export "{database}"')
+        first._append_output.assert_called_with(
+            "export destination would overwrite the audit database", error=True
+        )
+        await first._agent.close()
+
+        second = dashboard()
+        assert second._agent is not None
+        await second.execute_command(f"audit resume {audit_id}")
+        await second._agent_request("after restart")
+        await second.execute_command(f'audit --export "{report}"')
+        assert json.loads(report.read_text())["audit"]["status"] == "open"
+        await second.execute_command("audit stop")
+        second._connected = False
+        await second.execute_command(f'audit --export "{report}"')
+        await second.execute_command(f'audit --export "{raw}" --id {audit_id} --raw')
+        await second._agent.close()
+
+    asyncio.run(workflow())
+    text = report.read_text()
+    document = json.loads(text)
+    assert document["audit"]["status"] == "closed"
+    assert document["redacted"] and "manual-value" not in text and "agent-value" not in text
+    assert "before capture" not in text
+    assert {"llm_user", "llm_assistant", "manual_start", "manual_result"} <= {
+        event["kind"] for event in document["events"]
+    }
+    assert len(document["sessions_llm"]) == 2
+    assert [item["stage"] for item in document["snapshots"]] == ["initial", "resumed", "final"]
+    svd = document["snapshots"][0]["data"]["svd"]["data"]
+    assert len(svd["peripherals"]) == MAX_SVD_PERIPHERALS + 1
+    assert svd["peripherals"][-1] == peripheral
+    assert any("interrupted" in gap["reason"] for gap in document["collection_gaps"])
+    assert "password=manual-value" in raw.read_text()
+
+
+def test_invalid_report_preserves_destination(tmp_path: Path) -> None:
+    """Validation must happen before overwriting an existing export."""
+    path = tmp_path / "report.json"
+    path.write_text("existing")
+    with pytest.raises(ValueError, match="does not match the schema"):
+        write_report(path, {"schema_version": 1})
+    assert path.read_text() == "existing"
+
+
+def test_masked_report_omits_encoded_upload_from_approval() -> None:
+    """The encoded RPC copy must not undo masking of the human-readable plan."""
+    events = [
+        {
+            "sequence": 1,
+            "kind": "approval_requested",
+            "payload": {
+                "request": {
+                    "plan": {"content": "password=example"},
+                    "rpc_calls": [
+                        {"method": "workspace.upload", "params": {"content": "encoded-copy"}}
+                    ],
+                }
+            },
+        }
+    ]
+    metadata = {"title": "test", "stopped_at": None}
+    masked = json.dumps(make_report(metadata, events, Redactor()))
+    assert "password=example" not in masked and "encoded-copy" not in masked
+    assert "encoded-copy" in json.dumps(make_report(metadata, events, None))

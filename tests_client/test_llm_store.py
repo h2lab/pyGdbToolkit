@@ -251,7 +251,7 @@ def test_invalid_session_metadata_and_entry_kind_are_rejected(tmp_path: Path) ->
 @pytest.mark.parametrize(
     "version,application,foreign_table",
     [
-        (2, 0x5047444C, False),
+        (3, 0x5047444C, False),
         (1, 0, False),
         (0, 42, False),
         (0, 0, True),
@@ -272,6 +272,25 @@ def test_incompatible_databases_are_refused_without_changes(
     with pytest.raises(StoreError, match="unsupported"):
         ContextStore(path)
     assert path.read_bytes() == before
+
+
+def test_v1_journal_migration_preserves_conversation_and_enables_audit(tmp_path: Path) -> None:
+    """Opening a v1 file keeps its history and enables dossiers on the same connection."""
+    path = tmp_path / "v1.db"
+    with ContextStore(path) as store:
+        store.create_session("existing", "scripted", _context())
+        store.append("existing", EntryKind.USER, {"text": "old observation"})
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("DROP TABLE audit_events")
+        connection.execute("DROP TABLE audits")
+        connection.execute("PRAGMA user_version = 1")
+    with ContextStore(path) as store:
+        assert store.history("existing")[0].payload == {"text": "old observation"}
+        dossier = store.start_audit("Review", {})
+        store.append("existing", EntryKind.USER, {"text": "new observation"})
+        _, events = store.read_audit(dossier)
+        assert [event["kind"] for event in events] == ["snapshot", "llm_context", "llm_user"]
+        assert events[-1]["payload"]["data"] == {"text": "new observation"}
 
 
 def test_failed_write_rolls_back_both_session_and_snapshot(tmp_path: Path) -> None:
