@@ -76,6 +76,24 @@ class UsageReporter(Protocol):
         ...
 
 
+@runtime_checkable
+class ModelCatalogue(Protocol):
+    """Optional provider capability listing served models and switching between them."""
+
+    @property
+    def model(self) -> str | None:
+        """Return the model requested for new conversations, or None for the server default."""
+        ...
+
+    async def models(self) -> tuple[str, ...]:
+        """Return the identifiers of the served models, or raise ProviderError."""
+        ...
+
+    async def select_model(self, model: str) -> None:
+        """Use a served model for conversations opened afterwards, or raise ProviderError."""
+        ...
+
+
 @dataclass(frozen=True)
 class UserPrompt:
     """Auditor intent, distinct from tool observations."""

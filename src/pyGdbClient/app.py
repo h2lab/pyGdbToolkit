@@ -30,6 +30,7 @@ from .llm.rendering import (
     describe_audit,
     describe_credits,
     describe_credits_error,
+    describe_models,
     describe_session,
     describe_sessions,
     describe_status,
@@ -45,10 +46,12 @@ _COMMAND_HISTORY_LIMIT = 40
 _CREDITS_REFRESH_SECONDS = 60.0
 _AUDIT_SUBCOMMANDS = {"start", "status", "resume", "stop", "--export"}
 _AUDIT_LOCAL = {"status", "--export"}
-_AGENT_COMMANDS = {"/status", "/new", "/compact", "/sessions", "/cancel", "/end"}
+_AGENT_COMMANDS = {"/status", "/new", "/compact", "/sessions", "/cancel", "/end", "/list"}
 _AGENT_HELP = (
     ("TEXT", "Send a natural-language request; the first one opens a session."),
     ("/status", "Show provider readiness and authentication guidance."),
+    ("/list", "List the models served by the provider."),
+    ("/use MODEL", "Use a served model for the sessions opened afterwards."),
     ("/new", "Cancel any request and open a session on a fresh target snapshot."),
     ("/compact", "Continue the session in a new one seeded with a bounded recollection."),
     ("/sessions", "List journaled sessions (this run only, unless --llm-store is set)."),
@@ -160,7 +163,7 @@ class PyGdbClientApp(App[None]):
     }
     """
 
-    BINDINGS = [("ctrl+q", "quit", "Quit"),("ctrl+t", "toggle_dark", "toggle dark mode")]
+    BINDINGS = [("ctrl+q", "quit", "Quit"), ("ctrl+t", "toggle_dark", "toggle dark mode")]
 
     def __init__(self, url: str, agent: AgentSettings | None = None) -> None:
         super().__init__()
@@ -434,7 +437,7 @@ class PyGdbClientApp(App[None]):
                 self._show_agent_help()
             elif name in _AGENT_COMMANDS and not argument:
                 self.run_worker(self._agent_command(name), group="agent-control")
-            elif name == "/resume" and argument and " " not in argument:
+            elif name in ("/resume", "/use") and argument and " " not in argument:
                 self.run_worker(self._agent_command(name, argument), group="agent-control")
             else:
                 self._append_output(
@@ -477,7 +480,7 @@ class PyGdbClientApp(App[None]):
             self.refresh_credits()
 
     async def _agent_command(self, name: str, argument: str = "") -> None:
-        local = name in {"/status", "/sessions"}
+        local = name in {"/status", "/sessions", "/list", "/use"}
         if not local and self._audit_transition:
             self._append_output("Wait for the audit snapshot to complete", error=True)
             return
@@ -491,6 +494,16 @@ class PyGdbClientApp(App[None]):
                 self._write_output(describe_status(agent.provider_id, await agent.status()))
                 self._write_output([describe_usage(agent.usage)])
                 self.refresh_credits()
+            elif name == "/list":
+                self._write_output(describe_models(agent.provider_id, await agent.models()))
+            elif name == "/use":
+                if await agent.use_model(argument):
+                    self._append_output(
+                        f"Agent model set to {printable(argument)}; "
+                        "applies from the next session (/new, /compact or /resume)"
+                    )
+                else:
+                    self._append_output(f"Agent model set to {printable(argument)}")
             elif name == "/new":
                 self._show_agent_session(await agent.new_session())
             elif name == "/compact":

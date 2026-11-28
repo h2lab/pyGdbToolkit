@@ -805,3 +805,80 @@ def test_agent_cli_continuity_commands() -> None:
                 assert len(provider.sessions) == 3
 
     asyncio.run(exercise())
+
+
+class CataloguedProvider(TrackedProvider):
+    """Scripted provider exposing a switchable model catalogue."""
+
+    def __init__(self, *turns: ScriptedTurn) -> None:
+        super().__init__(*turns)
+        self.served = ("codellama", "qwen3")
+        self.model: str | None = "qwen3"
+
+    async def models(self) -> tuple[str, ...]:
+        return self.served
+
+    async def select_model(self, model: str) -> None:
+        if model not in self.served:
+            raise ProviderError("The endpoint does not serve the requested model.")
+        self.model = model
+
+
+def test_model_commands_require_a_catalogue_capable_provider() -> None:
+    async def exercise() -> None:
+        provider = TrackedProvider(_answer("done"))
+        async with FakeRpcServer(_responses()) as server:
+            controller = await _controller(server, provider, Recorder())
+            with pytest.raises(AgentControllerError, match="does not support model listing"):
+                await controller.models()
+            with pytest.raises(AgentControllerError, match="does not support model selection"):
+                await controller.use_model("any")
+            await controller.close()
+
+    asyncio.run(exercise())
+
+
+def test_model_catalogue_is_listed_and_switched_at_runtime() -> None:
+    async def exercise() -> None:
+        provider = CataloguedProvider(_answer("done"))
+        async with FakeRpcServer(_responses()) as server:
+            controller = await _controller(server, provider, Recorder())
+            listing = await controller.models()
+            assert listing.models == ("codellama", "qwen3")
+            assert listing.current == "qwen3"
+            assert await controller.use_model("codellama") is False
+            assert provider.model == "codellama"
+            await controller.submit("hello")
+            assert await controller.use_model("qwen3") is True
+            with pytest.raises(ProviderError, match="does not serve"):
+                await controller.use_model("missing")
+            await controller.close()
+
+    asyncio.run(exercise())
+
+
+def test_agent_cli_lists_and_switches_models() -> None:
+    async def exercise() -> None:
+        provider = CataloguedProvider(_answer("Done."))
+        async with FakeRpcServer(_responses()) as server:
+            app = AgentApp(server.url, AgentSettings(provider))
+            async with app.run_test(size=(110, 45)) as pilot:
+                await until(pilot, lambda: app._connected)
+                await type_agent(pilot, app, "/list")
+                await until(pilot, lambda: "Models served by scripted" in console(app))
+                assert "* qwen3" in console(app)
+                assert "codellama" in console(app)
+                await type_agent(pilot, app, "/use codellama")
+                await until(pilot, lambda: "Agent model set to codellama" in console(app))
+                assert provider.model == "codellama"
+                assert "next session" not in console(app)
+                await type_agent(pilot, app, "Summarize")
+                await until(pilot, lambda: "Agent request completed" in console(app))
+                await type_agent(pilot, app, "/use qwen3")
+                await until(pilot, lambda: "applies from the next session" in console(app))
+                await type_agent(pilot, app, "/use missing")
+                await until(pilot, lambda: "Agent error" in console(app))
+                await type_agent(pilot, app, "/use")
+                await until(pilot, lambda: "Unknown agent command: /use" in console(app))
+
+    asyncio.run(exercise())

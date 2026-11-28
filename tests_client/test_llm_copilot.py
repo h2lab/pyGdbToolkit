@@ -93,6 +93,10 @@ class Runtime:
             "premium_interactions": _quota(remaining=37.5, used=1875, entitlement=3000),
             "chat": _quota(remaining=100.0, used=0, entitlement=-1, unlimited=True),
         }
+        self.served_models: list[dict[str, Any]] = [
+            {"id": "gpt-5", "name": "GPT-5", "capabilities": {}},
+            {"id": "claude-sonnet-4.5", "name": "Claude Sonnet 4.5", "capabilities": {}},
+        ]
         self.started = 0
         self.stopped = 0
         self.sent = asyncio.Event()
@@ -185,6 +189,8 @@ class Runtime:
             return {"success": True}
         if method == "account.getQuota":
             return {"quotaSnapshots": self.quotas}
+        if method == "models.list":
+            return {"models": self.served_models}
         raise AssertionError(f"Unscripted SDK method {method}")
 
     @property
@@ -380,6 +386,34 @@ def test_runtime_is_never_downloaded_implicitly(runtime: Runtime, path: Path) ->
         status = await provider.status()
         assert not status.available and "Provision" in status.message
         assert not runtime.clients
+        await provider.close()
+
+    asyncio.run(exercise())
+
+
+def test_model_listing_and_selection_bind_new_sessions(runtime: Runtime) -> None:
+    async def exercise() -> None:
+        provider = CopilotProvider(replace(runtime.config, model="default-model"))
+        assert provider.model == "default-model"
+        assert await provider.models() == ("claude-sonnet-4.5", "gpt-5")
+        with pytest.raises(ProviderError, match="does not serve"):
+            await provider.select_model("missing-model")
+        assert provider.model == "default-model"
+        await provider.select_model("gpt-5")
+        assert provider.model == "gpt-5"
+        await provider.open_session("app", _context(), _TOOLS)
+        assert runtime.params("session.create")[0]["model"] == "gpt-5"
+        await provider.close()
+
+    asyncio.run(exercise())
+
+
+def test_invalid_model_listings_are_rejected(runtime: Runtime) -> None:
+    async def exercise() -> None:
+        runtime.served_models = [{"id": " ", "name": "blank", "capabilities": {}}]
+        provider = CopilotProvider(runtime.config)
+        with pytest.raises(ProviderError, match="invalid model listing"):
+            await provider.models()
         await provider.close()
 
     asyncio.run(exercise())

@@ -1192,11 +1192,11 @@ agent. Reading Copilot credits starts the runtime at dashboard startup.
 | `--knowledge-url URL` | pyGdbKnowledge HTTP(S) base URL; opts in to the three read-only knowledge tools. Requires `--llm`. |
 | `--knowledge-rd-token FILE` | Read a read-only pyGdbKnowledge Bearer token from a local UTF-8 file; requires `--knowledge-url`. Never put an admin token here. |
 | `--copilot-runtime PATH` | Copilot runtime executable; defaults to `$PYGDB_COPILOT_RUNTIME`. Relative paths are made absolute; nothing is downloaded. |
-| `--copilot-model MODEL` | Model requested from Copilot (default: the runtime's choice). |
+| `--copilot-model MODEL` | Default model requested from Copilot (default: the runtime's choice); `/use` switches it at runtime. |
 | `--copilot-token-env NAME` | Read a GitHub token from environment variable `NAME`. Without it, the `copilot login` account is used. |
 | `--copilot-allow-project-sources` | Explicitly allow `read`, `glob` and `grep` results from loaded projects to be disclosed to GitHub Copilot without another approval. Disabled by default; requires `--llm github-copilot`. |
 | `--openai-url URL` | Base URL of an OpenAI-compatible `/v1` API; defaults to `$PYGDB_OPENAI_URL`. |
-| `--openai-model MODEL` | Model served by the endpoint; defaults to `$PYGDB_OPENAI_MODEL`. |
+| `--openai-model MODEL` | Default model served by the endpoint; defaults to `$PYGDB_OPENAI_MODEL`. `/use` switches it at runtime. |
 | `--openai-key-env NAME` | Read an API key from environment variable `NAME`. Without it, access is anonymous. |
 | `--openai-timeout SECONDS` | Bound of each request and stream read (default `120`). |
 | `--opencode-url URL` | OpenCode V2 server URL; defaults to `$PYGDB_OPENCODE_URL`. |
@@ -1218,6 +1218,8 @@ Lines starting with `/` are handled locally and never sent to the model:
 | ------- | ------ |
 | *text* | Send a natural-language request. The first one opens a session. |
 | `/status` | Show provider readiness, authentication guidance (for example, run `copilot login`) and the session's context usage. |
+| `/list` | List the models served by the provider, marking the one used for new sessions. |
+| `/use MODEL` | Use a served model for the sessions opened afterwards; the launcher option stays the default until then. |
 | `/new` | Cancel any request, close the session and open one on a fresh target snapshot. |
 | `/compact` | Continue the idle session in a new one, seeded with a recollection of it. |
 | `/sessions` | List the 20 most recently journaled sessions. |
@@ -1225,6 +1227,16 @@ Lines starting with `/` are handled locally and never sent to the model:
 | `/cancel` | Interrupt the running request; started target operations are not rolled back. |
 | `/end` | Cancel any request and close the session. |
 | `/help` | List these commands. The dashboard `help` command lists them too. |
+
+`/list` and `/use` rely on an optional provider capability
+(`ModelCatalogue`): `CopilotProvider` queries the runtime's model list and
+`OpenAiProvider` queries the endpoint's `/v1/models`. `/use` rejects a model
+the server does not list, and the selection applies to the sessions opened
+afterwards (`/new`, `/compact`, `/resume` or the automatic continuation); the
+open session keeps its model. The OpenCode provider does not expose a
+catalogue — its model is selected on the OpenCode server or with
+`--opencode-model` — so both commands report that the capability is
+unsupported.
 
 ### Session opening
 

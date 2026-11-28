@@ -17,7 +17,7 @@ from pyGdbClient.llm.contracts import (
     ToolCall,
     ToolResult,
 )
-from pyGdbClient.llm.controller import ContextUsage, OpenedSession
+from pyGdbClient.llm.controller import ContextUsage, ModelListing, OpenedSession
 from pyGdbClient.llm.orchestrator import (
     AgentNotice,
     AgentPlan,
@@ -41,6 +41,7 @@ from pyGdbClient.llm.rendering import (
     describe_context,
     describe_credits,
     describe_credits_error,
+    describe_models,
     describe_session,
     describe_sessions,
     describe_status,
@@ -241,6 +242,22 @@ def test_sessions_are_listed_with_their_titles() -> None:
         "  a  2026-01-01T00:00:00Z  scripted",
         "  b  2026-01-02T00:00:00Z  scripted · continues a",
     ]
+
+
+def test_models_are_listed_with_the_current_selection_marked() -> None:
+    listing = ModelListing(("llama3.2:latest", "qwen\x1b[2J3"), "llama3.2:latest")
+    assert _plain(describe_models("openai", listing)) == [
+        "Models served by openai",
+        "  * llama3.2:latest",
+        "    qwen\ufffd[2J3",
+    ]
+
+
+def test_models_report_the_server_default_and_empty_catalogues() -> None:
+    lines = _plain(describe_models("opencode", ModelListing((), None)))
+    assert lines[0] == "Models served by opencode"
+    assert lines[1] == "  no model reported"
+    assert "/use MODEL" in lines[2]
 
 
 def test_credits_show_limited_quotas_first_with_used_and_remaining_percentages() -> None:

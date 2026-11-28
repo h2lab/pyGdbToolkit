@@ -317,6 +317,23 @@ dialog flags them as opaque commands that may modify flash or OTP. If the
 auditor rejects them, nothing is sent to the target; the agent is told that
 each call was rejected and can propose a read-only alternative.
 
+### Switch models during the audit
+
+`--openai-model` and `--copilot-model` only select the default model. During
+the audit, list the models served by the provider and switch without
+restarting the dashboard:
+
+```text
+/list
+/use llama3.2:latest
+```
+
+`/use` rejects a model the server does not list. The selection applies to the
+sessions opened afterwards: the next `/new`, `/compact`, `/resume` or
+automatic continuation uses it, while the open session keeps its model. The
+OpenCode provider selects its model on the OpenCode server; `/list` and
+`/use` report that the catalogue is unsupported there.
+
 ### Resume an investigation after a restart
 
 With `--llm-store`, close the dashboard, start it again, then:

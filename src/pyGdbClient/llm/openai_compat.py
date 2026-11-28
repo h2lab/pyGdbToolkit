@@ -87,6 +87,7 @@ class OpenAiProvider:
         """
         self._config = config
         self._transport = transport
+        self._model = config.model
         self._client: AsyncClient | None = None
         self._sessions: list[OpenAiLlmSession] = []
         self._lock = asyncio.Lock()
@@ -146,6 +147,64 @@ class OpenAiProvider:
             True, AuthenticationState.AUTHENTICATED, "OpenAI-compatible endpoint accepted the key."
         )
 
+    @property
+    def model(self) -> str:
+        """Return the model requested for new conversations."""
+        return self._model
+
+    async def models(self) -> tuple[str, ...]:
+        """Return the identifiers of the models served by the endpoint.
+
+        Raises
+        ------
+        ProviderError
+            When the endpoint is unreachable, rejects the request or returns
+            an invalid model list.
+        """
+        client = await self._connect()
+        try:
+            async with asyncio.timeout(self._config.request_timeout):
+                response = await client.get("models")
+        except Exception:
+            # Vendor errors can echo request details; report only neutral guidance.
+            raise ProviderError(
+                "OpenAI-compatible endpoint is unreachable; check --openai-url and the server."
+            ) from None
+        if response.status_code in (401, 403):
+            raise ProviderError(
+                f"OpenAI-compatible endpoint rejected the model listing. {_KEY_GUIDANCE}"
+            )
+        if response.status_code != 200:
+            raise ProviderError(f"OpenAI-compatible endpoint returned HTTP {response.status_code}.")
+        try:
+            document: object = response.json()
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            document = None
+        entries = document.get("data") if isinstance(document, dict) else None
+        if not isinstance(entries, list):
+            raise ProviderError("OpenAI-compatible endpoint returned an invalid model list.")
+        identifiers: set[str] = set()
+        for entry in entries:
+            identifier = entry.get("id") if isinstance(entry, dict) else None
+            if not isinstance(identifier, str) or not identifier.strip():
+                raise ProviderError("OpenAI-compatible endpoint returned an invalid model list.")
+            identifiers.add(identifier)
+        return tuple(sorted(identifiers))
+
+    async def select_model(self, model: str) -> None:
+        """Use a served model for conversations opened afterwards.
+
+        Raises
+        ------
+        ProviderError
+            When the endpoint does not serve ``model`` or cannot be queried.
+        """
+        if model not in await self.models():
+            raise ProviderError(
+                "The endpoint does not serve the requested model; list the served models first."
+            )
+        self._model = model
+
     async def open_session(
         self,
         session_id: str,
@@ -172,7 +231,12 @@ class OpenAiProvider:
             if self._closed:
                 raise ProviderError("OpenAI provider is closed")
             session = OpenAiLlmSession(
-                session_id, client, self._config, tools, agent_instructions(context, audit)
+                session_id,
+                client,
+                self._config,
+                tools,
+                agent_instructions(context, audit),
+                model=self._model,
             )
             self._sessions.append(session)
             return session
@@ -201,11 +265,13 @@ class OpenAiLlmSession:
         config: OpenAiConfig,
         tools: tuple[ToolDefinition, ...],
         instructions: str,
+        *,
+        model: str | None = None,
     ) -> None:
         """Seed the history with the system instructions and declared tool schemas."""
         self.session_id = session_id
         self._client = client
-        self._model = config.model
+        self._model = config.model if model is None else model
         self._timeout = config.request_timeout
         self._names = {tool.name for tool in tools}
         self._tools: list[JsonValue] = [

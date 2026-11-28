@@ -137,7 +137,11 @@ class CopilotProviderFactory:
             metavar="PATH",
             help="Copilot runtime executable (default: $PYGDB_COPILOT_RUNTIME); never downloaded",
         )
-        group.add_argument("--copilot-model", metavar="MODEL", help="Model requested from Copilot")
+        group.add_argument(
+            "--copilot-model",
+            metavar="MODEL",
+            help="Default model requested from Copilot; /use switches it in the dashboard",
+        )
         group.add_argument(
             "--copilot-token-env",
             metavar="NAME",
@@ -200,7 +204,10 @@ class OpenAiProviderFactory:
         group.add_argument(
             "--openai-model",
             metavar="MODEL",
-            help="Model served by the endpoint (default: $PYGDB_OPENAI_MODEL)",
+            help=(
+                "Default model served by the endpoint (default: $PYGDB_OPENAI_MODEL); "
+                "/use switches it in the dashboard"
+            ),
         )
         group.add_argument(
             "--openai-key-env",
